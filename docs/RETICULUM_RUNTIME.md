@@ -2,7 +2,7 @@
 
 ## What exists now
 
-- **Local Preview** remains enabled by default. Its session-only Settings switch hides or shows the sample networks, channels, messages, and request; that switch is not persisted. Preview content is never sent over RNS.
+- **Local Preview** remains enabled by default, and its on/off choice is persisted with chat state. Preview is isolated from live Reticulum state: it shows only sample/local preview data, hides live addresses and connection configuration, ignores live events, and disconnects the node and hub while active. Preview messages are never sent over RNS.
 - Android has an embedded node using reference `rns==1.5.7` and `lxmf==1.2.0` through Chaquopy 17 / Python 3.13.
 - Desktop runs the same Python bridge in a child process, installing those pinned packages into a Starling-private virtual environment on first explicit connection.
 - Android starts the node on demand from Settings in a dedicated process and foreground service. Android shows an ongoing notification while it is running.
@@ -12,9 +12,9 @@
 - Android config and identity files live under `noBackupFilesDir/reticulum`, to avoid copying identity material through Android backup/restore. Desktop state is stored in the user's Starling application-data directory.
 - A host-side smoke test against reference RNS 1.5.5 has verified both an outbound Starling TCP client connecting to a local RNS TCP server and the advanced shared-instance/RPC-key handshake. This validates the generated RNS config and Python bridge, not the Android service on a physical device.
 - The shared RRC 1.0 client uses an encrypted RNS Link to an `rrc.hub` destination, performs HELLO/WELCOME, joins configured channel names, and sends/receives room messages. It has been exercised against the reference `rrcd` hub.
-- LXMF direct delivery uses the reference router, persists the local Reticulum identity, announces a shareable delivery address, sends opportunistic messages, and routes verified first-time inbound messages to Requests. Two independent host runtimes and the desktop sidecar protocol have passed bidirectional delivery smoke tests.
+- LXMF direct delivery uses the reference router, persists the local Reticulum identity, announces a shareable delivery address, and sends opportunistic messages. Inbound messages are displayed only after the sender identity is resolved and its signature validates; unknown identities trigger a path request and verification retry before the message is withheld. Verified first-time senders go to Requests. Two independent host runtimes and the desktop sidecar protocol have passed bidirectional delivery smoke tests.
 
-The UI distinguishes node/interface state from RRC hub connection state. Use + on Networks to register an RRC hub destination and add the channel names Starling should join. Settings connects to one configured RRC hub at a time; its channels are joined by name. RRC has no room-enumeration command and does not retain history. Configured networks and channels are persisted with local chat state; preview mode remains session-only.
+The UI distinguishes node/interface state from RRC hub connection state. In live mode, use + on Networks to register an RRC hub destination and add the channel names Starling should join. Settings selects one preferred RRC hub at a time; its channels are joined by name. The Identity screen configures the global nickname used for LXMF and as the default RRC nickname, with optional per-hub overrides that apply on the next connection. RRC has no room-enumeration command and does not retain history. Live configured networks/channels, the preferred and last active hub, the public identity hash, global/per-hub nicknames, and TCP/RNode interface settings are persisted with local chat state. With Local preview off, a valid saved embedded-node configuration is started at app launch and the preferred hub is connected when the node is ready. Existing shared-instance mode remains manual because its RPC key is not retained in app preferences. Preview-created networks, contacts, conversations, and sample activity remain in-memory; the isolated preview on/off choice is persisted.
 
 ## Desktop RNode setup (initial serial support)
 
@@ -28,16 +28,17 @@ This first Starling adapter is desktop serial only. Direct Android USB/Bluetooth
 
 ## Important limitations
 
-- Android service startup, reconnect, notification behavior, and clean shutdown still need physical-device validation; no attached device has been tested.
+- Android service startup and saved-hub reconnect have been exercised on a Pixel. Further physical-device testing of service notifications, clean shutdown, and the latest LXMF signature/address changes is still needed; the latest build could not be installed while no device was attached.
 - Desktop RNode serial configuration has not yet been exercised with physical radio hardware. Starling does not discover serial ports or check whether the configured RF parameters are legal for the user's region; configure them to match the RNode network and local regulations.
 - iOS does not yet embed RNS or have a transport adapter.
 - The advanced shared-instance option currently assumes the external RNS instance uses the default local shared-instance ports. Custom ports are not exposed yet.
 - TCP authentication beyond IFAC, AutoInterface discovery, interface management, and detailed RNS status diagnostics are not exposed yet.
 - Direct RNode USB/Bluetooth support on Android and iOS is not implemented. The first Bluetooth extension should target a supported RNode, where Bluetooth is the phone-to-radio link and LoRa (or another configured radio) provides the mesh medium. Generic phone-to-phone BLE mesh is a separate, unvalidated interface project.
 - The RNS identity is app-private and excluded from Android backup, but explicit Android Keystore-backed encryption and migration/recovery UX have not been implemented. Do not treat this prototype as production identity storage.
-- App-level saved contacts, blocks, Requests decisions, configured networks/channels, and live room/direct-message history are stored locally and restored after process restart. Android stores this data under `noBackupFilesDir`; desktop uses the Starling application-data directory. Preview sample data and the preview on/off choice remain in-memory.
+- The Identity screen displays the public Reticulum identity hash and LXMF delivery address; it never displays the private key. Network status dots show the active RRC hub state and long-press/right-click opens detail.
+- App-level saved contacts, blocks, Requests decisions, configured networks/channels, TCP/RNode interface preferences, and live room/direct-message history are stored locally and restored after process restart. Android stores this data under `noBackupFilesDir`; desktop uses the Starling application-data directory. Preview sample data and preview-created local data remain in-memory; the preview mode choice is persisted. The shared-instance RPC key is not retained in app preferences.
 - The app-level chat state is currently plaintext in app-private storage; database encryption, retention controls, export, and recovery UX are not implemented.
-- IFAC passphrases and shared-instance RPC keys are written to the app-private RNS config as plaintext, protected by app-private directory/file permissions but not Keystore-encrypted. Do not reuse secrets from untrusted sources.
+- IFAC passphrases are retained in the app-private chat-state file (base64-encoded, not encrypted) and are also written to the app-private RNS config when the node starts. Shared-instance RPC keys are only written to the RNS config at runtime. These files rely on app-private directory permissions, not Keystore encryption. Do not reuse secrets from untrusted sources.
 - QR scanning, attachments, propagation-node configuration, and optional RRC history are not implemented. LXMF direct delivery requires a known Reticulum path; propagation routing is not enabled by default.
 - Review licenses and notices for all bundled native/Python dependencies before shipping release builds.
 

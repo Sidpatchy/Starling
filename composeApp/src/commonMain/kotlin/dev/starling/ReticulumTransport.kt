@@ -121,6 +121,7 @@ interface ReticulumNodeController {
     val supportsRNodeInterfaces: Boolean get() = false
     suspend fun start(config: ReticulumNodeConfig)
     suspend fun disconnect()
+    suspend fun refreshState() = Unit
 }
 
 class UnsupportedReticulumNodeController(reason: String) : ReticulumNodeController {
@@ -185,6 +186,7 @@ data class LxmfDirectMessage(
 )
 
 sealed interface ReticulumEvent {
+    data class LocalIdentityChanged(val identityHash: String) : ReticulumEvent
     data class LocalMemberChanged(val member: ChatMember) : ReticulumEvent
     data class RoomsChanged(val rooms: List<RrcRoom>) : ReticulumEvent
     data class RoomJoined(val roomId: String) : ReticulumEvent
@@ -218,6 +220,7 @@ interface ReticulumTransport {
     suspend fun leaveRoom(roomId: String)
     suspend fun sendRoomMessage(roomId: String, body: String, isAction: Boolean = false)
     suspend fun sendDirectMessage(address: String, body: String)
+    suspend fun setLocalDisplayName(displayName: String)
 }
 
 /** Factory boundary for platform-specific chat transports. */

@@ -82,8 +82,9 @@ class AndroidReticulumTransport(context: Context) : ReticulumTransport {
     }
 
     override suspend fun disconnect() {
+        val shouldTellService = _nodeReady.value || _state.value != ReticulumConnectionState.Disconnected
         _state.value = ReticulumConnectionState.Disconnected
-        sendCommand(ReticulumNodeService.ACTION_RRC_DISCONNECT)
+        if (shouldTellService) sendCommand(ReticulumNodeService.ACTION_RRC_DISCONNECT)
     }
 
     override suspend fun joinRoom(roomId: String) {
@@ -111,6 +112,14 @@ class AndroidReticulumTransport(context: Context) : ReticulumTransport {
             ReticulumNodeService.ACTION_LXMF_SEND,
             ReticulumNodeService.EXTRA_LXMF_ADDRESS to address,
             ReticulumNodeService.EXTRA_BODY to body,
+        )
+    }
+
+    override suspend fun setLocalDisplayName(displayName: String) {
+        if (!_nodeReady.value) return
+        sendCommand(
+            ReticulumNodeService.ACTION_LXMF_SET_NAME,
+            ReticulumNodeService.EXTRA_DISPLAY_NAME to displayName.take(32),
         )
     }
 

@@ -8,6 +8,12 @@ android {
     namespace = "dev.starling"
     compileSdk = 37
 
+    buildTypes {
+        getByName("debug") {
+            applicationIdSuffix = ".debug"
+        }
+    }
+
     defaultConfig {
         applicationId = "dev.starling"
         minSdk = 24

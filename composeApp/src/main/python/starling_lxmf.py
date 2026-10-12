@@ -15,6 +15,7 @@ _delivery_destination = None
 _data_dir = None
 _display_name = "Starling"
 _send_threads = set()
+_verification_threads = set()
 _shutdown = threading.Event()
 
 
@@ -61,6 +62,7 @@ def start(config_dir, display_name="Starling"):
         _shutdown.clear()
         _data_dir = config_dir
         _identity = _identity_for_config(config_dir)
+        _emit("identity", identity_hash=_identity.hash.hex())
         import starling_rns
 
         _router = starling_rns.construct_without_required_process_signals(lambda: LXMF.LXMRouter(
@@ -112,6 +114,13 @@ def local_address():
         return _delivery_destination.hash.hex()
 
 
+def identity_hash():
+    with _lock:
+        if _identity is None:
+            return ""
+        return _identity.hash.hex()
+
+
 def _peer_name(source_hash):
     try:
         import RNS
@@ -128,26 +137,96 @@ def _peer_name(source_hash):
 
 
 def _delivery_received(message):
+    import LXMF
+
     try:
-        if not message.signature_validated:
+        if message.signature_validated:
+            _deliver_verified_message(message)
+            return
+
+        if message.unverified_reason == LXMF.LXMessage.SOURCE_UNKNOWN:
+            _resolve_unknown_source_async(message.packed, message.source_hash)
+            return
+
+        if message.unverified_reason == LXMF.LXMessage.SIGNATURE_INVALID:
             _emit(
                 "error",
-                message="Dropped an LXMF message with an unverified sender signature.",
+                message="Dropped an LXMF message with an invalid sender signature.",
                 address=message.source_hash.hex(),
             )
             return
-        source_hash = message.source_hash.hex()
+
         _emit(
-            "direct_message",
-            message_id=message.hash.hex(),
-            address=source_hash,
-            sender_name=_peer_name(message.source_hash),
-            body=message.content_as_string() or "",
-            timestamp=int((message.timestamp or time.time()) * 1000),
-            is_mine=False,
+            "error",
+            message="Dropped an LXMF message whose sender identity could not be verified.",
+            address=message.source_hash.hex(),
         )
     except Exception as error:
-        _emit("error", message="Could not process the received LXMF message: " + str(error))
+        _emit("error", message="Could not validate an LXMF message: " + str(error))
+
+
+def _deliver_verified_message(message):
+    source_hash = message.source_hash.hex()
+    _emit(
+        "direct_message",
+        message_id=message.hash.hex(),
+        address=source_hash,
+        sender_name=_peer_name(message.source_hash),
+        body=message.content_as_string() or "",
+        timestamp=int((message.timestamp or time.time()) * 1000),
+        is_mine=False,
+    )
+
+
+def _resolve_unknown_source_async(packed_message, source_hash):
+    worker = threading.Thread(
+        target=_resolve_unknown_source,
+        args=(packed_message, source_hash),
+        name="starling-lxmf-verify-source",
+        daemon=True,
+    )
+    with _lock:
+        _verification_threads.add(worker)
+    worker.start()
+
+
+def _resolve_unknown_source(packed_message, source_hash):
+    import LXMF
+    import RNS
+
+    try:
+        RNS.Transport.request_path(source_hash)
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline and not _shutdown.is_set():
+            if RNS.Identity.recall(source_hash, _no_use=True) is not None:
+                verified_message = LXMF.LXMessage.unpack_from_bytes(packed_message)
+                if verified_message.signature_validated:
+                    _deliver_verified_message(verified_message)
+                    return
+                if verified_message.unverified_reason == LXMF.LXMessage.SIGNATURE_INVALID:
+                    _emit(
+                        "error",
+                        message="Dropped an LXMF message with an invalid sender signature after resolving its identity.",
+                        address=source_hash.hex(),
+                    )
+                    return
+            time.sleep(0.25)
+        if not _shutdown.is_set():
+            _emit(
+                "error",
+                message="Could not resolve the sender identity to verify this LXMF message; it was withheld.",
+                address=source_hash.hex(),
+            )
+    except Exception as error:
+        if not _shutdown.is_set():
+            _emit(
+                "error",
+                message="Could not verify this LXMF sender identity: " + str(error),
+                address=source_hash.hex(),
+            )
+    finally:
+        with _lock:
+            _verification_threads.discard(threading.current_thread())
 
 
 def _normalize_address(address):
@@ -258,7 +337,9 @@ def poll_event_lines(limit=100):
     lines = []
     for event in poll_events(limit):
         kind = event.get("kind")
-        if kind == "local_address":
+        if kind == "identity":
+            lines.append("IDENTITY\t" + _encode(event.get("identity_hash", "")))
+        elif kind == "local_address":
             lines.append("LOCAL_ADDRESS\t" + _encode(event.get("address", "")))
         elif kind == "direct_message":
             lines.append("DIRECT_MESSAGE\t{}\t{}\t{}\t{}\t{}\t{}".format(
@@ -287,16 +368,24 @@ def current_local_address_event_line():
     return "LOCAL_ADDRESS\t" + _encode(local_address())
 
 
+def current_identity_event_line():
+    return "IDENTITY\t" + _encode(identity_hash())
+
+
 def stop():
     global _router, _identity, _delivery_destination
     with _lock:
         _shutdown.set()
         router = _router
         send_threads = list(_send_threads)
+        verification_threads = list(_verification_threads)
         _router = None
         _identity = None
         _delivery_destination = None
     for worker in send_threads:
+        if worker is not threading.current_thread():
+            worker.join(timeout=0.5)
+    for worker in verification_threads:
         if worker is not threading.current_thread():
             worker.join(timeout=0.5)
     if router is not None:

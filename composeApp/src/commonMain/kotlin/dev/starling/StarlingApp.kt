@@ -1,6 +1,7 @@
 package dev.starling
 
 import androidx.compose.foundation.Canvas as ComposeCanvas
+import androidx.compose.foundation.Image
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -8,6 +9,7 @@ import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -19,7 +21,9 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
@@ -28,7 +32,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -58,6 +61,7 @@ import androidx.compose.material3.rememberDrawerState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -66,7 +70,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.staticCompositionLocalOf
@@ -76,25 +79,38 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.preferredFrameRate
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.ui.layout.FirstBaseline
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.isSecondaryPressed
 import androidx.compose.ui.input.pointer.pointerInput
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeoutOrNull
+import org.jetbrains.compose.resources.painterResource
+import dev.starling.generated.resources.Res
+import dev.starling.generated.resources.starling_dark
+import dev.starling.generated.resources.starling_light
 
 private data class StarlingPalette(
     val ink: Color,
@@ -164,11 +180,33 @@ fun StarlingApp(
     val localDeliveryAddress by remember(liveChatRepository) {
         liveChatRepository?.localDeliveryAddress ?: flowOf(null)
     }.collectAsState(initial = null)
+    val persistedNodeConfig by remember(liveChatRepository) {
+        liveChatRepository?.nodeConfig ?: flowOf<ReticulumNodeConfig?>(null)
+    }.collectAsState(initial = liveChatRepository?.nodeConfig?.value)
+    val preferredHubNetworkId by remember(liveChatRepository) {
+        liveChatRepository?.preferredHubNetworkId ?: flowOf(null)
+    }.collectAsState(initial = liveChatRepository?.preferredHubNetworkId?.value)
+    val globalNickname by remember(liveChatRepository) {
+        liveChatRepository?.globalNickname ?: flowOf("Starling")
+    }.collectAsState(initial = liveChatRepository?.globalNickname?.value ?: "Starling")
+    val localIdentityHash by remember(liveChatRepository) {
+        liveChatRepository?.localIdentityHash ?: flowOf(null)
+    }.collectAsState(initial = liveChatRepository?.localIdentityHash?.value)
+    val visibleConnectionState = if (previewMode) ReticulumConnectionState.Disconnected else reticulumConnectionState
+    val visibleConnectionError = if (previewMode) null else reticulumConnectionError
+    val visibleHubNetworkId = if (previewMode) null else activeHubNetworkId
+    val visibleDeliveryAddress = if (previewMode) null else localDeliveryAddress
     val scope = rememberCoroutineScope()
+    LaunchedEffect(previewMode, nodeController) {
+        if (previewMode) {
+            nodeController.disconnect()
+        }
+    }
     var showMembersPanel by rememberSaveable { mutableStateOf(true) }
     var showMembersDrawer by rememberSaveable { mutableStateOf(false) }
+    var showDesktopNavigation by rememberSaveable { mutableStateOf(true) }
     var showSettings by rememberSaveable { mutableStateOf(false) }
-    var showNetworkStatus by remember { mutableStateOf(false) }
+    var showIdentityPage by rememberSaveable { mutableStateOf(false) }
     var showContactRequests by rememberSaveable { mutableStateOf(false) }
     var showAddContact by rememberSaveable { mutableStateOf(false) }
     var showAddNetwork by rememberSaveable { mutableStateOf(false) }
@@ -176,7 +214,90 @@ fun StarlingApp(
     var selectedDirectMessageId by rememberSaveable { mutableStateOf<String?>(null) }
     var themePreference by rememberSaveable { mutableStateOf(ThemePreference.SYSTEM) }
     var bubbleStyle by rememberSaveable { mutableStateOf(false) }
+    var denseMessages by rememberSaveable { mutableStateOf(false) }
     var selectedMember by remember { mutableStateOf<ChatMember?>(null) }
+    var roomToManage by remember { mutableStateOf<ChatRoom?>(null) }
+    var networkToInspect by remember { mutableStateOf<ChatNetwork?>(null) }
+    var autoConnectAttempted by remember(liveChatRepository) { mutableStateOf(false) }
+    val changePreviewMode: (Boolean) -> Unit = { enabled ->
+        if (enabled) {
+            selectedDirectMessageId = null
+            selectedMember = null
+            showContactRequests = false
+            showIdentityPage = false
+            networkToInspect = null
+        }
+        repository.setPreviewMode(enabled)
+    }
+    LaunchedEffect(previewMode) {
+        if (previewMode) {
+            selectedDirectMessageId = null
+            selectedMember = null
+            showIdentityPage = false
+            networkToInspect = null
+        }
+    }
+    LaunchedEffect(nodeController, liveChatRepository) {
+        if (repository.previewMode.value || !nodeController.isSupported) return@LaunchedEffect
+        nodeController.refreshState()
+        val savedConfig = liveChatRepository?.nodeConfig?.value ?: return@LaunchedEffect
+        if (savedConfig.mode != ReticulumRuntimeMode.EMBEDDED || savedConfig.validationError() != null) return@LaunchedEffect
+
+        when (nodeController.state.value) {
+            ReticulumNodeState.Stopped -> nodeController.start(savedConfig)
+            is ReticulumNodeState.Starting, is ReticulumNodeState.PreparingRuntime -> {
+                val resolvedState = withTimeoutOrNull(30_000) {
+                    nodeController.state.first {
+                        it is ReticulumNodeState.Running || it is ReticulumNodeState.Stopped ||
+                            it is ReticulumNodeState.Failed || it is ReticulumNodeState.Unavailable
+                    }
+                }
+                if (resolvedState is ReticulumNodeState.Stopped && !repository.previewMode.value) {
+                    nodeController.start(savedConfig)
+                }
+            }
+            else -> Unit
+        }
+    }
+    LaunchedEffect(previewMode, networks, preferredHubNetworkId, liveChatRepository) {
+        if (previewMode || preferredHubNetworkId != null) return@LaunchedEffect
+        networks.firstOrNull { !it.isPreview && !it.hubDestination.isNullOrBlank() }?.let { network ->
+            liveChatRepository?.savePreferredHubNetworkId(network.id)
+        }
+    }
+    LaunchedEffect(previewMode, reticulumNodeState, networks, preferredHubNetworkId, liveChatRepository) {
+        if (previewMode || reticulumNodeState is ReticulumNodeState.Stopped ||
+            reticulumNodeState is ReticulumNodeState.Failed || reticulumNodeState is ReticulumNodeState.Unavailable
+        ) {
+            autoConnectAttempted = false
+            return@LaunchedEffect
+        }
+        if (reticulumNodeState !is ReticulumNodeState.Running || autoConnectAttempted) return@LaunchedEffect
+
+        val chat = liveChatRepository ?: return@LaunchedEffect
+        val network = networks.firstOrNull { it.id == preferredHubNetworkId && !it.hubDestination.isNullOrBlank() }
+            ?: networks.firstOrNull { !it.isPreview && !it.hubDestination.isNullOrBlank() }
+            ?: return@LaunchedEffect
+        delay(300)
+        if (repository.previewMode.value || nodeController.state.value !is ReticulumNodeState.Running) return@LaunchedEffect
+        autoConnectAttempted = true
+
+        val connection = chat.connectionState.value
+        val activeNetworkId = chat.activeHubNetworkId.value
+        val isAlreadyOnTarget = activeNetworkId == network.id && (
+            connection is ReticulumConnectionState.Connected ||
+                connection == ReticulumConnectionState.Starting ||
+                connection == ReticulumConnectionState.Connecting
+            )
+        if (!isAlreadyOnTarget) {
+            if (connection != ReticulumConnectionState.Disconnected) chat.disconnectFromHub()
+            runCatching {
+                chat.connectToHub(
+                    ReticulumConnectionConfig(network.hubDestination.orEmpty(), "Starling", network.id),
+                )
+            }
+        }
+    }
     val selectedDirectMessage = knownMembers.firstOrNull { it.id == selectedDirectMessageId }
     val directMessages by remember(selectedDirectMessageId) {
         selectedDirectMessageId?.let(repository::directMessages) ?: flowOf(emptyList())
@@ -215,14 +336,17 @@ fun StarlingApp(
     MaterialTheme(colorScheme = materialColors) {
         CompositionLocalProvider(LocalStarlingPalette provides palette) {
         Surface(modifier = Modifier.fillMaxSize(), color = Canvas) {
-            BoxWithConstraints(Modifier.fillMaxSize()) {
+            BoxWithConstraints(Modifier.fillMaxSize().safeDrawingPadding().imePadding()) {
                 val isWide = maxWidth >= 1000.dp
                 if (isWide) {
                     Row(Modifier.fillMaxSize()) {
-                        RoomSidebar(
+                        if (showDesktopNavigation) RoomSidebar(
                             networks = networks,
                             rooms = rooms,
                             previewMode = previewMode,
+                            nodeState = reticulumNodeState,
+                            rrcState = visibleConnectionState,
+                            activeHubNetworkId = visibleHubNetworkId,
                             contacts = knownMembers.filter { it.id in contactMemberIds },
                             requestsCount = contactRequests.size,
                             selectedRoomId = selectedRoom.id,
@@ -232,14 +356,24 @@ fun StarlingApp(
                                 selectedDirectMessageId = null
                                 showContactRequests = false
                                 showSettings = false
+                                showIdentityPage = false
                             },
-                            onContactSelected = { selectedDirectMessageId = it.id; showContactRequests = false; showSettings = false },
-                            onRequestsClick = { selectedDirectMessageId = null; showContactRequests = true; showSettings = false },
+                            onContactSelected = { selectedDirectMessageId = it.id; showContactRequests = false; showSettings = false; showIdentityPage = false },
+                            onRequestsClick = { selectedDirectMessageId = null; showContactRequests = true; showSettings = false; showIdentityPage = false },
                             onAddContact = { showAddContact = true },
                             onAddNetwork = { showAddNetwork = true },
                             onAddChannel = { addChannelToNetworkId = it },
-                            onSettingsClick = { showSettings = true },
-                            onStatusClick = { showNetworkStatus = true },
+                            onManageRoom = { roomToManage = it },
+                            onNetworkDetails = { networkToInspect = it },
+                            canHideNavigation = true,
+                            onHideNavigation = { showDesktopNavigation = false },
+                            onSettingsClick = { showSettings = true; showIdentityPage = false },
+                            onIdentityClick = {
+                                showIdentityPage = true
+                                showSettings = false
+                                showContactRequests = false
+                                selectedDirectMessageId = null
+                            },
                         )
                         if (showSettings) {
                             SettingsPage(
@@ -247,15 +381,24 @@ fun StarlingApp(
                                 onThemeChange = { themePreference = it },
                                 bubbleStyle = bubbleStyle,
                                 onBubbleStyleChange = { bubbleStyle = it },
+                                denseMessages = denseMessages,
+                                onDenseMessagesChange = { denseMessages = it },
                                 previewMode = previewMode,
-                                onPreviewModeChange = repository::setPreviewMode,
+                                onPreviewModeChange = changePreviewMode,
                                 networks = networks,
+                                nodeConfig = persistedNodeConfig,
+                                onNodeConfigChange = { config -> liveChatRepository?.saveNodeConfig(config) },
+                                globalNickname = globalNickname,
+                                preferredHubNetworkId = preferredHubNetworkId,
+                                onPreferredHubNetworkChange = { id -> liveChatRepository?.savePreferredHubNetworkId(id) },
                                 nodeState = reticulumNodeState,
                                 nodeSupported = nodeController.isSupported,
                                 supportsRNodeInterfaces = nodeController.supportsRNodeInterfaces,
-                                rrcState = reticulumConnectionState,
-                                rrcError = reticulumConnectionError,
-                                localDeliveryAddress = localDeliveryAddress,
+                                rrcState = visibleConnectionState,
+                                rrcError = visibleConnectionError,
+                                localDeliveryAddress = visibleDeliveryAddress,
+                                showNavigationButton = !showDesktopNavigation,
+                                onOpenNavigation = { showDesktopNavigation = true },
                                 onStartNode = { config -> scope.launch { nodeController.start(config) } },
                                 onDisconnectNode = {
                                     scope.launch {
@@ -273,19 +416,44 @@ fun StarlingApp(
                                 onAccept = { request -> repository.acceptContactRequest(request.id) },
                                 onIgnore = { request -> repository.ignoreContactRequest(request.id) },
                                 onBlock = { request -> repository.blockContactRequest(request.id) },
+                                showNavigationButton = !showDesktopNavigation,
+                                onOpenNavigation = { showDesktopNavigation = true },
+                            )
+                        } else if (showIdentityPage) {
+                            IdentityPage(
+                                previewMode = previewMode,
+                                nodeState = reticulumNodeState,
+                                rrcState = visibleConnectionState,
+                                identityHash = localIdentityHash,
+                                localDeliveryAddress = visibleDeliveryAddress,
+                                globalNickname = globalNickname,
+                                networks = networks,
+                                onGlobalNicknameChange = { liveChatRepository?.saveGlobalNickname(it) },
+                                onNetworkNicknameChange = { id, nickname -> repository.updateNetworkNickname(id, nickname) },
+                                showNavigationButton = !showDesktopNavigation,
+                                onOpenNavigation = { showDesktopNavigation = true },
+                                onManageNetwork = { showIdentityPage = false; showSettings = true },
                             )
                         } else if (selectedDirectMessage != null) {
                             DirectMessageContent(
                                 member = selectedDirectMessage,
                                 messages = directMessages,
                                 bubbleStyle = bubbleStyle,
-                                isLive = localDeliveryAddress != null,
-                                error = reticulumConnectionError,
+                                denseMessages = denseMessages,
+                                isLive = visibleDeliveryAddress != null,
+                                error = visibleConnectionError,
                                 onMemberClick = { selectedMember = selectedDirectMessage },
+                                showNavigationButton = !showDesktopNavigation,
+                                onOpenNavigation = { showDesktopNavigation = true },
                                 onSend = { text -> scope.launch { repository.sendDirectMessage(selectedDirectMessage.id, text) } },
                             )
                         } else if (rooms.isEmpty()) {
-                            EmptyNetworkContent(onAddNetwork = { showAddNetwork = true }, onSettings = { showSettings = true })
+                            Box(Modifier.weight(1f).fillMaxHeight()) {
+                                EmptyNetworkContent(onAddNetwork = { showAddNetwork = true }, onSettings = { showSettings = true })
+                                if (!showDesktopNavigation) {
+                                    NavigationToggle(Modifier.align(Alignment.TopStart)) { showDesktopNavigation = true }
+                                }
+                            }
                         } else {
                             ChatContent(
                                 modifier = Modifier.weight(1f).fillMaxHeight(),
@@ -295,15 +463,18 @@ fun StarlingApp(
                                 members = members,
                                 contactMemberIds = contactMemberIds,
                                 bubbleStyle = bubbleStyle,
+                                denseMessages = denseMessages,
                                 compact = false,
                                 membersVisible = showMembersPanel,
-                                isLive = reticulumConnectionState is ReticulumConnectionState.Connected && activeHubNetworkId == selectedRoom.networkId,
+                                isLive = visibleConnectionState is ReticulumConnectionState.Connected && visibleHubNetworkId == selectedRoom.networkId,
                                 onToggleMembers = { showMembersPanel = !showMembersPanel },
+                                showNavigationButton = !showDesktopNavigation,
+                                onOpenNavigation = { showDesktopNavigation = true },
                                 onMemberClick = { selectedMember = it },
                                 onSend = { text -> scope.launch { repository.send(selectedRoom.id, text) } },
                             )
                         }
-                        if (rooms.isNotEmpty() && showMembersPanel && !showSettings && !showContactRequests && selectedDirectMessage == null) {
+                        if (rooms.isNotEmpty() && showMembersPanel && !showSettings && !showContactRequests && !showIdentityPage && selectedDirectMessage == null) {
                             MembersPane(
                                 members = members,
                                 contactMemberIds = contactMemberIds,
@@ -321,6 +492,9 @@ fun StarlingApp(
                                     networks = networks,
                                     rooms = rooms,
                                     previewMode = previewMode,
+                                    nodeState = reticulumNodeState,
+                                    rrcState = visibleConnectionState,
+                                    activeHubNetworkId = visibleHubNetworkId,
                                     contacts = knownMembers.filter { it.id in contactMemberIds },
                                     requestsCount = contactRequests.size,
                                     selectedRoomId = selectedRoom.id,
@@ -330,18 +504,21 @@ fun StarlingApp(
                                         selectedDirectMessageId = null
                                         showContactRequests = false
                                         showSettings = false
+                                        showIdentityPage = false
                                         scope.launch { drawerState.close() }
                                     },
                                     onContactSelected = { member ->
                                         selectedDirectMessageId = member.id
                                         showContactRequests = false
                                         showSettings = false
+                                        showIdentityPage = false
                                         scope.launch { drawerState.close() }
                                     },
                                     onRequestsClick = {
                                         selectedDirectMessageId = null
                                         showContactRequests = true
                                         showSettings = false
+                                        showIdentityPage = false
                                         scope.launch { drawerState.close() }
                                     },
                                     onAddContact = { showAddContact = true },
@@ -350,13 +527,25 @@ fun StarlingApp(
                                         addChannelToNetworkId = it
                                         scope.launch { drawerState.close() }
                                     },
+                                    onManageRoom = {
+                                        roomToManage = it
+                                        scope.launch { drawerState.close() }
+                                    },
+                                    onNetworkDetails = {
+                                        networkToInspect = it
+                                        scope.launch { drawerState.close() }
+                                    },
                                     onSettingsClick = {
                                         showSettings = true
+                                        showIdentityPage = false
                                         showMembersDrawer = false
                                         scope.launch { drawerState.close() }
                                     },
-                                    onStatusClick = {
-                                        showNetworkStatus = true
+                                    onIdentityClick = {
+                                        showIdentityPage = true
+                                        showSettings = false
+                                        showContactRequests = false
+                                        selectedDirectMessageId = null
                                         scope.launch { drawerState.close() }
                                     },
                                 )
@@ -369,15 +558,22 @@ fun StarlingApp(
                                 onThemeChange = { themePreference = it },
                                 bubbleStyle = bubbleStyle,
                                 onBubbleStyleChange = { bubbleStyle = it },
+                                denseMessages = denseMessages,
+                                onDenseMessagesChange = { denseMessages = it },
                                 previewMode = previewMode,
-                                onPreviewModeChange = repository::setPreviewMode,
+                                onPreviewModeChange = changePreviewMode,
                                 networks = networks,
+                                nodeConfig = persistedNodeConfig,
+                                onNodeConfigChange = { config -> liveChatRepository?.saveNodeConfig(config) },
+                                globalNickname = globalNickname,
+                                preferredHubNetworkId = preferredHubNetworkId,
+                                onPreferredHubNetworkChange = { id -> liveChatRepository?.savePreferredHubNetworkId(id) },
                                 nodeState = reticulumNodeState,
                                 nodeSupported = nodeController.isSupported,
                                 supportsRNodeInterfaces = nodeController.supportsRNodeInterfaces,
-                                rrcState = reticulumConnectionState,
-                                rrcError = reticulumConnectionError,
-                                localDeliveryAddress = localDeliveryAddress,
+                                rrcState = visibleConnectionState,
+                                rrcError = visibleConnectionError,
+                                localDeliveryAddress = visibleDeliveryAddress,
                                 onStartNode = { config -> scope.launch { nodeController.start(config) } },
                                 onDisconnectNode = {
                                     scope.launch {
@@ -398,13 +594,29 @@ fun StarlingApp(
                                 compact = true,
                                 onOpenNavigation = { scope.launch { drawerState.open() } },
                             )
+                        } else if (showIdentityPage) {
+                            IdentityPage(
+                                previewMode = previewMode,
+                                nodeState = reticulumNodeState,
+                                rrcState = visibleConnectionState,
+                                identityHash = localIdentityHash,
+                                localDeliveryAddress = visibleDeliveryAddress,
+                                globalNickname = globalNickname,
+                                networks = networks,
+                                onGlobalNicknameChange = { liveChatRepository?.saveGlobalNickname(it) },
+                                onNetworkNicknameChange = { id, nickname -> repository.updateNetworkNickname(id, nickname) },
+                                compact = true,
+                                onOpenNavigation = { scope.launch { drawerState.open() } },
+                                onManageNetwork = { showIdentityPage = false; showSettings = true },
+                            )
                         } else if (selectedDirectMessage != null) {
                             DirectMessageContent(
                                 member = selectedDirectMessage,
                                 messages = directMessages,
                                 bubbleStyle = bubbleStyle,
-                                isLive = localDeliveryAddress != null,
-                                error = reticulumConnectionError,
+                                denseMessages = denseMessages,
+                                isLive = visibleDeliveryAddress != null,
+                                error = visibleConnectionError,
                                 compact = true,
                                 onOpenNavigation = { scope.launch { drawerState.open() } },
                                 onMemberClick = { selectedMember = selectedDirectMessage },
@@ -424,9 +636,10 @@ fun StarlingApp(
                                 members = members,
                                 contactMemberIds = contactMemberIds,
                                 bubbleStyle = bubbleStyle,
+                                denseMessages = denseMessages,
                                 compact = true,
                                 membersVisible = false,
-                                isLive = reticulumConnectionState is ReticulumConnectionState.Connected && activeHubNetworkId == selectedRoom.networkId,
+                                isLive = visibleConnectionState is ReticulumConnectionState.Connected && visibleHubNetworkId == selectedRoom.networkId,
                                 onToggleMembers = { showMembersDrawer = true },
                                 onOpenNavigation = { scope.launch { drawerState.open() } },
                                 onMemberClick = { selectedMember = it },
@@ -465,48 +678,35 @@ fun StarlingApp(
                                     }
                                 }
                             }
-                            if (!showMembersDrawer) {
-                                RightEdgeSwipeHandle(
-                                    modifier = Modifier.align(Alignment.CenterEnd),
-                                    onSwipe = { showMembersDrawer = true },
-                                )
-                            }
                         }
                     }
                 }
             }
 
-            if (showNetworkStatus) {
-                AlertDialog(
-                    onDismissRequest = { showNetworkStatus = false },
-                    title = { Text("Network status", color = Ink) },
-                    text = {
-                        Column {
-                    Text(if (previewMode) "Local preview is on" else "Local preview is off", color = Ink, fontWeight = FontWeight.SemiBold)
-                    Spacer(Modifier.height(6.dp))
-                            Text(
-                                when {
-                                    reticulumConnectionState is ReticulumConnectionState.Connected -> "Connected to an RRC hub."
-                                    reticulumNodeState is ReticulumNodeState.Running -> "Reticulum node is running; no RRC hub is connected."
-                                    else -> "Not connected to a Reticulum hub. Add a network to configure an RRC destination."
-                                },
-                                color = Muted,
-                            )
-                        }
-                    },
-                    confirmButton = {
-                        TextButton(onClick = { showNetworkStatus = false }) { Text("Close", color = Accent) }
-                    },
+            networkToInspect?.let { network ->
+                NetworkStatusDialog(
+                    network = network,
+                    previewMode = previewMode,
+                    nodeState = reticulumNodeState,
+                    rrcState = visibleConnectionState,
+                    activeHubNetworkId = visibleHubNetworkId,
+                    onDismiss = { networkToInspect = null },
                 )
             }
 
             if (showAddContact) {
                 AddContactDialog(
+                    previewMode = previewMode,
                     onAdd = { displayName, address ->
-                        val normalizedAddress = address.trim()
-                        val idAddress = normalizedAddress.removePrefix("lxmf://").removePrefix("LXMF://").lowercase()
-                        val id = "lxmf-$idAddress"
-                        repository.addContact(ChatMember(id, displayName.trim(), address = normalizedAddress))
+                        if (previewMode) {
+                            val slug = displayName.trim().lowercase().filter { it.isLetterOrDigit() || it == '-' }
+                                .ifBlank { "contact" }
+                            repository.addContact(ChatMember("preview-local-$slug", displayName.trim()))
+                        } else {
+                            val normalizedAddress = address.trim()
+                            val idAddress = normalizedAddress.removePrefix("lxmf://").removePrefix("LXMF://").lowercase()
+                            repository.addContact(ChatMember("lxmf-$idAddress", displayName.trim(), address = normalizedAddress))
+                        }
                         showAddContact = false
                     },
                     onDismiss = { showAddContact = false },
@@ -515,6 +715,7 @@ fun StarlingApp(
 
             if (showAddNetwork) {
                 AddNetworkDialog(
+                    previewMode = previewMode,
                     onAdd = { name, destination ->
                         runCatching { repository.addNetwork(name, destination) }
                             .onSuccess { showAddNetwork = false }
@@ -528,6 +729,7 @@ fun StarlingApp(
                 if (network != null) {
                     AddChannelDialog(
                         networkName = network.name,
+                        previewMode = previewMode,
                         onAdd = { name, topic ->
                             val room = repository.addRoom(networkId, name, topic)
                             selectedRoomId = room.id
@@ -541,9 +743,24 @@ fun StarlingApp(
                 }
             }
 
+            roomToManage?.let { room ->
+                ManageChannelDialog(
+                    room = room,
+                    networkName = networks.firstOrNull { it.id == room.networkId }?.name.orEmpty(),
+                    onRemoveFromApp = {
+                        if (selectedRoomId == room.id) {
+                            selectedRoomId = rooms.firstOrNull { it.id != room.id }?.id.orEmpty()
+                        }
+                        repository.removeRoom(room.id)
+                        roomToManage = null
+                    },
+                    onDismiss = { roomToManage = null },
+                )
+            }
+
             selectedMember?.let { member ->
                 MemberProfileDialog(
-                    member = member,
+                    member = if (previewMode) member.copy(address = null) else member,
                     sharedRooms = repository.sharedRooms(member.id),
                     isContact = member.id in contactMemberIds,
                     onToggleContact = { repository.toggleContact(member.id) },
@@ -556,42 +773,6 @@ fun StarlingApp(
 }
 
 @Composable
-private fun RightEdgeSwipeHandle(modifier: Modifier = Modifier, onSwipe: () -> Unit) {
-    val latestOnSwipe by rememberUpdatedState(onSwipe)
-    Box(
-        modifier = modifier
-            .width(28.dp)
-            .fillMaxHeight()
-            .pointerInput(Unit) {
-                var distance = 0f
-                var opened = false
-                detectHorizontalDragGestures(
-                    onDragStart = {
-                        distance = 0f
-                        opened = false
-                    },
-                    onHorizontalDrag = { change, dragAmount ->
-                        distance += dragAmount
-                        if (!opened && distance < -40.dp.toPx()) {
-                            latestOnSwipe()
-                            opened = true
-                            change.consume()
-                        }
-                    },
-                    onDragEnd = { distance = 0f },
-                    onDragCancel = { distance = 0f },
-                )
-            },
-        contentAlignment = Alignment.Center,
-    ) {
-        Box(
-            Modifier.width(4.dp).height(48.dp).clip(RoundedCornerShape(4.dp))
-                .background(Muted.copy(alpha = 0.35f)),
-        )
-    }
-}
-
-@Composable
 private fun ChatContent(
     modifier: Modifier = Modifier,
     room: ChatRoom,
@@ -600,10 +781,12 @@ private fun ChatContent(
     members: List<ChatMember>,
     contactMemberIds: Set<String>,
     bubbleStyle: Boolean,
+    denseMessages: Boolean,
     compact: Boolean,
     membersVisible: Boolean,
     isLive: Boolean = false,
     onToggleMembers: () -> Unit,
+    showNavigationButton: Boolean = false,
     onOpenNavigation: () -> Unit = {},
     onMemberClick: (ChatMember) -> Unit,
     onSend: (String) -> Unit,
@@ -613,6 +796,7 @@ private fun ChatContent(
             room = room,
             networks = networks,
             compact = compact,
+            showNavigationButton = showNavigationButton,
             onOpenNavigation = onOpenNavigation,
             memberCount = members.size,
             membersVisible = membersVisible,
@@ -626,13 +810,13 @@ private fun ChatContent(
         }
 
         LazyColumn(
-            modifier = Modifier.weight(1f).fillMaxWidth(),
+            modifier = Modifier.weight(1f).fillMaxWidth().preferredFrameRate(120f),
             state = listState,
             contentPadding = androidx.compose.foundation.layout.PaddingValues(
                 horizontal = if (compact) 12.dp else 20.dp,
                 vertical = 8.dp,
             ),
-            verticalArrangement = Arrangement.spacedBy(3.dp),
+            verticalArrangement = Arrangement.spacedBy(if (denseMessages) 0.dp else 3.dp),
         ) {
             item { DayDivider() }
             items(messages, key = { it.id }) { message ->
@@ -642,6 +826,7 @@ private fun ChatContent(
                     message = message,
                     member = author,
                     bubbleStyle = bubbleStyle,
+                    denseMessages = denseMessages,
                     onMemberClick = { author?.let(onMemberClick) },
                 )
             }
@@ -656,9 +841,11 @@ private fun DirectMessageContent(
     member: ChatMember,
     messages: List<ChatMessage>,
     bubbleStyle: Boolean,
+    denseMessages: Boolean,
     isLive: Boolean = false,
     error: String? = null,
     compact: Boolean = false,
+    showNavigationButton: Boolean = false,
     onOpenNavigation: () -> Unit = {},
     onMemberClick: () -> Unit,
     onSend: (String) -> Unit,
@@ -669,7 +856,7 @@ private fun DirectMessageContent(
                 .padding(horizontal = if (compact) 8.dp else 20.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            if (compact) {
+            if (compact || showNavigationButton) {
                 Box(
                     Modifier.size(42.dp).clip(RoundedCornerShape(10.dp)).clickable(onClick = onOpenNavigation),
                     contentAlignment = Alignment.Center,
@@ -707,13 +894,15 @@ private fun DirectMessageContent(
                 listState.animateScrollToItem(messages.size)
             }
             LazyColumn(
-                modifier = Modifier.weight(1f).fillMaxWidth(),
+                modifier = Modifier.weight(1f).fillMaxWidth().preferredFrameRate(120f),
                 state = listState,
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(
                     horizontal = if (compact) 12.dp else 20.dp,
                     vertical = 8.dp,
                 ),
-                verticalArrangement = Arrangement.spacedBy(if (bubbleStyle) 4.dp else 2.dp),
+                verticalArrangement = Arrangement.spacedBy(
+                    if (denseMessages) 0.dp else if (bubbleStyle) 4.dp else 2.dp,
+                ),
             ) {
                 item { DayDivider() }
                 items(messages, key = { it.id }) { message ->
@@ -721,6 +910,7 @@ private fun DirectMessageContent(
                         message = message,
                         member = if (!message.isMine && (message.authorId == member.id || message.author == member.id)) member else null,
                         bubbleStyle = bubbleStyle,
+                        denseMessages = denseMessages,
                         onMemberClick = onMemberClick,
                     )
                 }
@@ -737,6 +927,7 @@ private fun ContactRequestsPage(
     onIgnore: (ChatContactRequest) -> Unit,
     onBlock: (ChatContactRequest) -> Unit,
     compact: Boolean = false,
+    showNavigationButton: Boolean = false,
     onOpenNavigation: () -> Unit = {},
 ) {
     Column(Modifier.fillMaxSize().background(Canvas)) {
@@ -745,7 +936,7 @@ private fun ContactRequestsPage(
                 .padding(horizontal = if (compact) 8.dp else 24.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            if (compact) {
+            if (compact || showNavigationButton) {
                 Box(
                     Modifier.size(42.dp).clip(RoundedCornerShape(10.dp)).clickable(onClick = onOpenNavigation),
                     contentAlignment = Alignment.Center,
@@ -762,7 +953,7 @@ private fun ContactRequestsPage(
             }
         } else {
             LazyColumn(
-                modifier = Modifier.fillMaxWidth().weight(1f),
+                modifier = Modifier.fillMaxWidth().weight(1f).preferredFrameRate(120f),
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(24.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
@@ -782,7 +973,7 @@ private fun ContactRequestsPage(
                         }
                         Spacer(Modifier.height(14.dp))
                         Text(request.message, color = Ink, fontSize = 13.sp, lineHeight = 19.sp)
-                        request.sender.address?.let {
+                        request.sender.address?.takeUnless { request.isPreview }?.let {
                             Spacer(Modifier.height(7.dp))
                             Text("LXMF address: $it", color = Muted, fontSize = 10.sp)
                         }
@@ -801,6 +992,7 @@ private fun ContactRequestsPage(
 
 @Composable
 private fun AddContactDialog(
+    previewMode: Boolean,
     onAdd: (displayName: String, address: String) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -811,25 +1003,32 @@ private fun AddContactDialog(
         title = { Text("Add contact", color = Ink) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Add someone by their shareable LXMF address. Adding them saves the contact but doesn’t start a conversation.", color = Muted, fontSize = 12.sp)
+                Text(
+                    if (previewMode) "Add a demo-only contact. No LXMF address is needed and nothing is sent."
+                    else "Add someone by their shareable LXMF address. Adding them saves the contact but doesn’t start a conversation.",
+                    color = Muted,
+                    fontSize = 12.sp,
+                )
                 OutlinedTextField(
                     value = displayName,
                     onValueChange = { displayName = it },
                     label = { Text("Name") },
                     singleLine = true,
                 )
-                OutlinedTextField(
-                    value = address,
-                    onValueChange = { address = it },
-                    label = { Text("LXMF address") },
-                    singleLine = true,
-                )
-                Text("QR scanning isn’t available yet. Paste the 32-character delivery hash or an lxmf:// address.", color = Muted, fontSize = 10.sp)
+                if (!previewMode) {
+                    OutlinedTextField(
+                        value = address,
+                        onValueChange = { address = it },
+                        label = { Text("LXMF address") },
+                        singleLine = true,
+                    )
+                    Text("QR scanning isn’t available yet. Paste the 32-character delivery hash or an lxmf:// address.", color = Muted, fontSize = 10.sp)
+                }
             }
         },
         confirmButton = {
             TextButton(
-                enabled = displayName.isNotBlank() && address.isNotBlank(),
+                enabled = displayName.isNotBlank() && (previewMode || address.isNotBlank()),
                 onClick = { onAdd(displayName, address) },
             ) { Text("Add contact", color = Accent) }
         },
@@ -838,7 +1037,7 @@ private fun AddContactDialog(
 }
 
 @Composable
-private fun AddNetworkDialog(onAdd: (String, String) -> Unit, onDismiss: () -> Unit) {
+private fun AddNetworkDialog(previewMode: Boolean, onAdd: (String, String) -> Unit, onDismiss: () -> Unit) {
     var name by rememberSaveable { mutableStateOf("") }
     var destination by rememberSaveable { mutableStateOf("") }
     val validDestination = destination.length == 32 && destination.all { it.lowercaseChar() in "0123456789abcdef" }
@@ -847,22 +1046,42 @@ private fun AddNetworkDialog(onAdd: (String, String) -> Unit, onDismiss: () -> U
         title = { Text("Add network", color = Ink) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Connect this network to an RRC hub destination. Channels you add will be joined by name.", color = Muted, fontSize = 12.sp)
-                OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("Network name") }, singleLine = true)
-                OutlinedTextField(
-                    value = destination,
-                    onValueChange = { destination = it.filter { character -> character.lowercaseChar() in "0123456789abcdef" }.take(32) },
-                    label = { Text("RRC hub destination hash") },
-                    supportingText = { Text("32 hexadecimal characters", color = Muted) },
-                    singleLine = true,
+                Text(
+                    if (previewMode) "Create a local-only demo network. Nothing is connected or sent."
+                    else "Connect this network to an RRC hub destination. Channels you add will be joined by name.",
+                    color = Muted,
+                    fontSize = 12.sp,
                 )
+                OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("Network name") }, singleLine = true)
+                if (!previewMode) {
+                    OutlinedTextField(
+                        value = destination,
+                        onValueChange = { destination = it.filter { character -> character.lowercaseChar() in "0123456789abcdef" }.take(32) },
+                        label = { Text("RRC hub destination hash") },
+                        supportingText = { Text("32 hexadecimal characters", color = Muted) },
+                        singleLine = true,
+                    )
+                }
             }
         },
         confirmButton = {
-            TextButton(enabled = name.isNotBlank() && validDestination, onClick = { onAdd(name.trim(), destination.lowercase()) }) { Text("Add network", color = Accent) }
+            TextButton(
+                enabled = name.isNotBlank() && (previewMode || validDestination),
+                onClick = { onAdd(name.trim(), if (previewMode) "" else destination.lowercase()) },
+            ) { Text("Add network", color = Accent) }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel", color = Muted) } },
     )
+}
+
+@Composable
+private fun NavigationToggle(modifier: Modifier = Modifier, onClick: () -> Unit) {
+    Box(
+        modifier.size(42.dp).clip(RoundedCornerShape(10.dp)).clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text("☰", color = Accent, fontSize = 20.sp, fontWeight = FontWeight.Medium)
+    }
 }
 
 @Composable
@@ -897,6 +1116,7 @@ private fun EmptyNetworkContent(
 @Composable
 private fun AddChannelDialog(
     networkName: String,
+    previewMode: Boolean,
     onAdd: (name: String, topic: String) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -907,15 +1127,26 @@ private fun AddChannelDialog(
         title = { Text("Add channel", color = Ink) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("This adds a channel for $networkName. For a live network, Starling joins this name on its RRC hub.", color = Muted, fontSize = 12.sp)
-                OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("Channel name") }, singleLine = true)
+                Text(
+                    if (previewMode) "This adds a local-only channel to $networkName. Nothing is sent."
+                    else "This adds a channel for $networkName. Starling joins this name on its RRC hub.",
+                    color = Muted,
+                    fontSize = 12.sp,
+                )
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it.lowercase() },
+                    label = { Text("Channel name") },
+                    supportingText = { Text("Channel names are lowercase.", color = Muted) },
+                    singleLine = true,
+                )
                 OutlinedTextField(value = topic, onValueChange = { topic = it }, label = { Text("Topic (optional)") }, singleLine = true)
             }
         },
         confirmButton = {
             TextButton(
                 enabled = name.isNotBlank(),
-                onClick = { onAdd(name.trim().removePrefix("#"), topic) },
+                onClick = { onAdd(normalizeChannelName(name), topic) },
             ) { Text("Add channel", color = Accent) }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel", color = Muted) } },
@@ -923,10 +1154,271 @@ private fun AddChannelDialog(
 }
 
 @Composable
+private fun ManageChannelDialog(
+    room: ChatRoom,
+    networkName: String,
+    onRemoveFromApp: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Manage #${room.name}", color = Ink) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("${networkName} · #${room.name}", color = Muted, fontSize = 12.sp)
+                Text(
+                    "Channel permissions and operator modes aren’t exposed by the current RRC integration yet.",
+                    color = Muted,
+                    fontSize = 12.sp,
+                    lineHeight = 18.sp,
+                )
+                Text(
+                    "Removing the channel removes it from this app and leaves it on the hub if currently joined. It does not delete the channel for anyone else.",
+                    color = Muted,
+                    fontSize = 12.sp,
+                    lineHeight = 18.sp,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onRemoveFromApp) {
+                Text("Remove from app", color = Color(0xFFC44545))
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Done", color = Accent) } },
+    )
+}
+
+@Composable
+private fun IdentityPage(
+    previewMode: Boolean,
+    nodeState: ReticulumNodeState,
+    rrcState: ReticulumConnectionState,
+    identityHash: String?,
+    localDeliveryAddress: String?,
+    globalNickname: String,
+    networks: List<ChatNetwork>,
+    onGlobalNicknameChange: (String) -> Unit,
+    onNetworkNicknameChange: (String, String?) -> Unit,
+    compact: Boolean = false,
+    showNavigationButton: Boolean = false,
+    onOpenNavigation: () -> Unit = {},
+    onManageNetwork: () -> Unit,
+) {
+    var globalNicknameDraft by rememberSaveable { mutableStateOf(globalNickname) }
+    LaunchedEffect(globalNickname) { globalNicknameDraft = globalNickname }
+
+    Column(Modifier.fillMaxSize().background(Canvas)) {
+        Row(
+            modifier = Modifier.fillMaxWidth().height(68.dp).background(Paper)
+                .padding(horizontal = if (compact) 8.dp else 20.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (compact || showNavigationButton) {
+                NavigationToggle(onClick = onOpenNavigation)
+                Spacer(Modifier.width(6.dp))
+            }
+            Text("Identity", color = Ink, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+        }
+        Column(
+            modifier = Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState())
+                .preferredFrameRate(120f).padding(horizontal = 24.dp, vertical = 26.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            Text("DEVICE IDENTITY", color = Muted, fontSize = 10.sp, letterSpacing = 1.3.sp, fontWeight = FontWeight.Bold)
+            Column(
+                modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Paper)
+                    .border(1.dp, Line, RoundedCornerShape(14.dp)).padding(18.dp),
+                verticalArrangement = Arrangement.spacedBy(9.dp),
+            ) {
+                Text("Reticulum identity", color = Ink, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                if (previewMode) {
+                    Text(
+                        "Live identity details are hidden while isolated preview is active.",
+                        color = Muted,
+                        fontSize = 12.sp,
+                        lineHeight = 18.sp,
+                    )
+                } else {
+                    Text("IDENTITY HASH", color = Muted, fontSize = 9.sp, letterSpacing = 1.sp, fontWeight = FontWeight.Bold)
+                    if (identityHash.isNullOrBlank()) {
+                        Text("Start the Reticulum node to load this device’s identity.", color = Muted, fontSize = 12.sp)
+                    } else {
+                        SelectionContainer {
+                            Text(identityHash, color = Accent, fontSize = 13.sp, fontFamily = FontFamily.Monospace)
+                        }
+                        Text(
+                            "This public hash identifies your device. Its private key remains stored locally and is never displayed.",
+                            color = Muted,
+                            fontSize = 11.sp,
+                            lineHeight = 16.sp,
+                        )
+                    }
+                    Spacer(Modifier.height(4.dp))
+                    Text("LXMF DELIVERY ADDRESS", color = Muted, fontSize = 9.sp, letterSpacing = 1.sp, fontWeight = FontWeight.Bold)
+                    if (localDeliveryAddress.isNullOrBlank()) {
+                        Text("Available after the node and LXMF router start.", color = Muted, fontSize = 12.sp)
+                    } else {
+                        SelectionContainer {
+                            Text("lxmf://$localDeliveryAddress", color = Accent, fontSize = 13.sp, fontFamily = FontFamily.Monospace)
+                        }
+                    }
+                }
+            }
+
+            Text("NICKNAMES", color = Muted, fontSize = 10.sp, letterSpacing = 1.3.sp, fontWeight = FontWeight.Bold)
+            Column(
+                modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Paper)
+                    .border(1.dp, Line, RoundedCornerShape(14.dp)).padding(18.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Text("Global nickname", color = Ink, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                Text(
+                    "Used for your LXMF identity in direct messages and as the default nickname for RRC hubs.",
+                    color = Muted,
+                    fontSize = 12.sp,
+                    lineHeight = 18.sp,
+                )
+                OutlinedTextField(
+                    value = globalNicknameDraft,
+                    onValueChange = { globalNicknameDraft = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Global nickname") },
+                    singleLine = true,
+                )
+                Button(
+                    enabled = globalNicknameDraft != globalNickname,
+                    onClick = { onGlobalNicknameChange(normalizeStarlingNickname(globalNicknameDraft)) },
+                    colors = ButtonDefaults.buttonColors(containerColor = Accent),
+                ) {
+                    Text("Save global nickname")
+                }
+                if (previewMode) {
+                    Text(
+                        "This preference is saved locally and applied when Local preview is turned off. Live hub nicknames are hidden in preview.",
+                        color = Muted,
+                        fontSize = 11.sp,
+                        lineHeight = 16.sp,
+                    )
+                } else {
+                    val configuredHubs = networks.filterNot { it.isPreview }
+                    Text("RRC hub nicknames", color = Ink, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        "Set an override for a specific hub. Leave it blank to use the global nickname. Changes apply the next time you connect to that hub.",
+                        color = Muted,
+                        fontSize = 11.sp,
+                        lineHeight = 16.sp,
+                    )
+                    if (configuredHubs.isEmpty()) {
+                        Text("Add an RRC hub in Network settings to configure a hub-specific nickname.", color = Muted, fontSize = 11.sp)
+                    } else {
+                        configuredHubs.forEach { network ->
+                            HubNicknameEditor(
+                                network = network,
+                                globalNickname = globalNickname,
+                                onSave = { onNetworkNicknameChange(network.id, it) },
+                            )
+                        }
+                    }
+                }
+            }
+
+            Text("CONNECTION STATUS", color = Muted, fontSize = 10.sp, letterSpacing = 1.3.sp, fontWeight = FontWeight.Bold)
+            Column(
+                modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Paper)
+                    .border(1.dp, Line, RoundedCornerShape(14.dp)).padding(18.dp),
+                verticalArrangement = Arrangement.spacedBy(9.dp),
+            ) {
+                Text("Reticulum node", color = Ink, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                Text(if (previewMode) "Stopped in isolated preview" else reticulumNodeSummary(nodeState), color = Muted, fontSize = 12.sp, lineHeight = 18.sp)
+                Text("RRC hub", color = Ink, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                Text(if (previewMode) "Live hub status is hidden in preview" else rrcConnectionSummary(rrcState), color = Muted, fontSize = 12.sp, lineHeight = 18.sp)
+            }
+
+            Text(
+                "Node interfaces, hub selection, and local identity settings are managed in Network settings. The identity key is not exported or replaced from this screen.",
+                color = Muted,
+                fontSize = 12.sp,
+                lineHeight = 18.sp,
+            )
+            Button(onClick = onManageNetwork, colors = ButtonDefaults.buttonColors(containerColor = Accent)) {
+                Text("Network settings")
+            }
+        }
+    }
+}
+
+private fun reticulumNodeSummary(state: ReticulumNodeState): String = when (state) {
+    ReticulumNodeState.Stopped -> "Stopped."
+    is ReticulumNodeState.Starting -> "Starting the ${state.mode.name.lowercase().replace('_', ' ')} node…"
+    is ReticulumNodeState.PreparingRuntime -> state.detail
+    is ReticulumNodeState.Failed -> state.message
+    is ReticulumNodeState.Unavailable -> state.reason
+    is ReticulumNodeState.Running -> when {
+        state.sharedInstanceConnected -> "Attached to the existing local RNS shared instance."
+        else -> {
+            val online = state.onlineTcpPeerIds.size + state.onlineRNodePorts.size
+            val total = state.tcpPeers.size + state.rnodeInterfaces.size
+            if (total == 0) "Running without a configured interface."
+            else "$online of $total configured interfaces online."
+        }
+    }
+}
+
+private fun rrcConnectionSummary(state: ReticulumConnectionState): String = when (state) {
+    ReticulumConnectionState.Disconnected -> "Disconnected from an RRC hub."
+    ReticulumConnectionState.Starting -> "Preparing the RRC session…"
+    ReticulumConnectionState.Connecting -> "Connecting to the selected RRC hub…"
+    is ReticulumConnectionState.Connected -> "Connected${state.hubName?.takeIf(String::isNotBlank)?.let { " to $it" }.orEmpty()}."
+    is ReticulumConnectionState.Failed -> state.message
+}
+
+@Composable
+private fun HubNicknameEditor(
+    network: ChatNetwork,
+    globalNickname: String,
+    onSave: (String?) -> Unit,
+) {
+    var nicknameDraft by rememberSaveable(network.id) { mutableStateOf(network.rrcNickname.orEmpty()) }
+    LaunchedEffect(network.rrcNickname) { nicknameDraft = network.rrcNickname.orEmpty() }
+    val normalizedNickname = nicknameDraft.trim().takeIf(String::isNotEmpty)?.let(::normalizeStarlingNickname)
+
+    Column(
+        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(Canvas).padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(7.dp),
+    ) {
+        Text(network.name, color = Ink, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+        Text(
+            if (normalizedNickname == null) "Using global nickname · $globalNickname" else "Hub nickname · $normalizedNickname",
+            color = Muted,
+            fontSize = 10.sp,
+        )
+        OutlinedTextField(
+            value = nicknameDraft,
+            onValueChange = { nicknameDraft = it },
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("Hub-specific nickname") },
+            placeholder = { Text("$globalNickname (global)") },
+            singleLine = true,
+        )
+        Button(
+            enabled = normalizedNickname != network.rrcNickname,
+            onClick = { onSave(normalizedNickname) },
+            colors = ButtonDefaults.buttonColors(containerColor = Accent),
+        ) {
+            Text(if (normalizedNickname == null) "Use global nickname" else "Save hub nickname")
+        }
+    }
+}
+
+@Composable
 private fun RoomSidebar(
     networks: List<ChatNetwork>,
     rooms: List<ChatRoom>,
     previewMode: Boolean,
+    nodeState: ReticulumNodeState,
+    rrcState: ReticulumConnectionState,
+    activeHubNetworkId: String?,
     contacts: List<ChatMember>,
     requestsCount: Int,
     selectedRoomId: String,
@@ -937,14 +1429,41 @@ private fun RoomSidebar(
     onAddContact: () -> Unit,
     onAddNetwork: () -> Unit,
     onAddChannel: (String) -> Unit,
+    onManageRoom: (ChatRoom) -> Unit,
+    onNetworkDetails: (ChatNetwork) -> Unit,
+    canHideNavigation: Boolean = false,
+    onHideNavigation: () -> Unit = {},
     onSettingsClick: () -> Unit,
-    onStatusClick: () -> Unit,
+    onIdentityClick: () -> Unit,
 ) {
     var expandedNetworkIds by remember {
         mutableStateOf<Set<String>>(networks.map { it.id }.toSet())
     }
     LaunchedEffect(networks) {
         expandedNetworkIds = expandedNetworkIds + networks.map { it.id }
+    }
+    val (identityDetail, identityColor) = when {
+        previewMode -> "Live identity hidden in preview" to Muted
+        rrcState is ReticulumConnectionState.Connected ->
+            "Connected to ${rrcState.hubName?.takeIf(String::isNotBlank) ?: "RRC hub"}" to Color(0xFF48A868)
+        rrcState is ReticulumConnectionState.Failed -> "Hub connection failed" to Color(0xFFC44545)
+        rrcState is ReticulumConnectionState.Connecting || rrcState == ReticulumConnectionState.Starting ->
+            "Connecting to hub" to Color(0xFFE1A448)
+        nodeState is ReticulumNodeState.Running -> {
+            val totalInterfaces = nodeState.tcpPeers.size + nodeState.rnodeInterfaces.size
+            val onlineInterfaces = nodeState.onlineTcpPeerIds.size + nodeState.onlineRNodePorts.size
+            when {
+                nodeState.sharedInstanceConnected -> "Shared RNS instance connected" to Color(0xFF48A868)
+                totalInterfaces == 0 -> "Reticulum running without interfaces" to Muted
+                onlineInterfaces > 0 -> "$onlineInterfaces of $totalInterfaces interfaces online" to Color(0xFF48A868)
+                else -> "Waiting for an interface" to Color(0xFFE1A448)
+            }
+        }
+        nodeState is ReticulumNodeState.Starting || nodeState is ReticulumNodeState.PreparingRuntime ->
+            "Starting Reticulum" to Color(0xFFE1A448)
+        nodeState is ReticulumNodeState.Failed -> "Reticulum node failed" to Color(0xFFC44545)
+        nodeState is ReticulumNodeState.Unavailable -> "Reticulum unavailable" to Muted
+        else -> "Reticulum stopped" to Muted
     }
 
     Column(
@@ -962,139 +1481,159 @@ private fun RoomSidebar(
                 Modifier.size(34.dp).clip(RoundedCornerShape(11.dp)).background(PaleAccent),
                 contentAlignment = Alignment.Center,
             ) {
-                Text("✳", color = Accent, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                Image(
+                    painter = painterResource(
+                        if (LocalStarlingPalette.current == DarkPalette) Res.drawable.starling_dark else Res.drawable.starling_light,
+                    ),
+                    contentDescription = "Starling",
+                    modifier = Modifier.fillMaxSize().padding(2.dp),
+                    contentScale = ContentScale.Fit,
+                )
             }
             Spacer(Modifier.width(11.dp))
             Column {
                 Text("Starling", fontSize = 19.sp, fontWeight = FontWeight.Bold, color = Ink)
                 Text("RETICULUM CHAT", fontSize = 9.sp, letterSpacing = 1.5.sp, color = Muted)
             }
-        }
-
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(start = 22.dp, end = 10.dp, top = 20.dp, bottom = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                "NETWORKS",
-                modifier = Modifier.weight(1f),
-                color = Muted,
-                fontSize = 10.sp,
-                letterSpacing = 1.3.sp,
-                fontWeight = FontWeight.SemiBold,
-            )
-            IconButton(onClick = onAddNetwork) {
-                Icon(Icons.Filled.Add, contentDescription = "Add network", tint = Accent)
-            }
-        }
-        networks.forEach { network ->
-            NetworkRow(
-                network = network,
-                expanded = network.id in expandedNetworkIds,
-                onAddChannel = { onAddChannel(network.id) },
-                onClick = {
-                    expandedNetworkIds = if (network.id in expandedNetworkIds) {
-                        expandedNetworkIds - network.id
-                    } else {
-                        expandedNetworkIds + network.id
-                    }
-                },
-            )
-            if (network.id in expandedNetworkIds) {
-                val networkRooms = rooms.filter { it.networkId == network.id }
-                networkRooms.forEach { room ->
-                    RoomRow(
-                        room = room,
-                        selected = room.id == selectedRoomId,
-                        onClick = { onRoomSelected(room.id) },
-                    )
-                }
-                if (networkRooms.isEmpty()) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(start = 42.dp, end = 12.dp)
-                            .clip(RoundedCornerShape(8.dp)).clickable { onAddChannel(network.id) }
-                            .padding(vertical = 7.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text("+ Add a channel", color = Muted, fontSize = 11.sp)
-                    }
+            if (canHideNavigation) {
+                Spacer(Modifier.weight(1f))
+                IconButton(onClick = onHideNavigation) {
+                    Text("‹", color = Accent, fontSize = 25.sp)
                 }
             }
         }
 
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(start = 22.dp, end = 10.dp, top = 20.dp, bottom = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
+        Column(
+            modifier = Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState())
+                .preferredFrameRate(120f),
         ) {
-            Text(
-                "DIRECT MESSAGES",
-                modifier = Modifier.weight(1f),
-                color = Muted,
-                fontSize = 10.sp,
-                letterSpacing = 1.3.sp,
-                fontWeight = FontWeight.SemiBold,
-            )
-            IconButton(onClick = onAddContact) {
-                Icon(Icons.Filled.Add, contentDescription = "Add contact", tint = Accent)
-            }
-        }
-        contacts.forEach { member ->
             Row(
-                modifier = Modifier.fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 2.dp)
-                    .clip(RoundedCornerShape(9.dp))
-                    .background(if (member.id == selectedDirectMessageId) PaleAccent else Color.Transparent)
-                    .clickable { onContactSelected(member) }
-                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                modifier = Modifier.fillMaxWidth().padding(start = 22.dp, end = 10.dp, top = 20.dp, bottom = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                MemberAvatar(member, size = 25.dp)
-                Spacer(Modifier.width(9.dp))
-                Text(member.displayName, color = Ink, fontSize = 13.sp)
-            }
-        }
-        if (contacts.isEmpty()) {
-            Text(
-                "Add someone by LXMF address or QR.",
-                modifier = Modifier.padding(start = 22.dp, end = 16.dp, bottom = 8.dp),
-                color = Muted,
-                fontSize = 11.sp,
-            )
-        }
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(start = 22.dp, end = 16.dp, top = 8.dp, bottom = 6.dp)
-                .clip(RoundedCornerShape(8.dp)).clickable(onClick = onRequestsClick)
-                .padding(vertical = 7.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text("Message requests", modifier = Modifier.weight(1f), color = Ink, fontSize = 12.sp)
-            if (requestsCount > 0) {
                 Text(
-                    requestsCount.toString(),
-                    modifier = Modifier.clip(CircleShape).background(PaleAccent).padding(horizontal = 7.dp, vertical = 3.dp),
-                    color = Accent,
+                    "NETWORKS",
+                    modifier = Modifier.weight(1f),
+                    color = Muted,
                     fontSize = 10.sp,
-                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 1.3.sp,
+                    fontWeight = FontWeight.SemiBold,
                 )
+                IconButton(onClick = onAddNetwork) {
+                    Icon(Icons.Filled.Add, contentDescription = "Add network", tint = Accent)
+                }
+            }
+            networks.forEach { network ->
+                NetworkRow(
+                    network = network,
+                    expanded = network.id in expandedNetworkIds,
+                    connectionColor = networkConnectionColor(network, previewMode, activeHubNetworkId, rrcState, nodeState),
+                    onAddChannel = { onAddChannel(network.id) },
+                    onDetails = { onNetworkDetails(network) },
+                    onClick = {
+                        expandedNetworkIds = if (network.id in expandedNetworkIds) {
+                            expandedNetworkIds - network.id
+                        } else {
+                            expandedNetworkIds + network.id
+                        }
+                    },
+                )
+                if (network.id in expandedNetworkIds) {
+                    val networkRooms = rooms.filter { it.networkId == network.id }
+                    networkRooms.forEach { room ->
+                        RoomRow(
+                            room = room,
+                            selected = room.id == selectedRoomId,
+                            onClick = { onRoomSelected(room.id) },
+                            onManage = { onManageRoom(room) },
+                        )
+                    }
+                    if (networkRooms.isEmpty()) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(start = 42.dp, end = 12.dp)
+                                .clip(RoundedCornerShape(8.dp)).clickable { onAddChannel(network.id) }
+                                .padding(vertical = 7.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text("+ Add a channel", color = Muted, fontSize = 11.sp)
+                        }
+                    }
+                }
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(start = 22.dp, end = 10.dp, top = 20.dp, bottom = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    "DIRECT MESSAGES",
+                    modifier = Modifier.weight(1f),
+                    color = Muted,
+                    fontSize = 10.sp,
+                    letterSpacing = 1.3.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                IconButton(onClick = onAddContact) {
+                    Icon(Icons.Filled.Add, contentDescription = "Add contact", tint = Accent)
+                }
+            }
+            contacts.forEach { member ->
+                Row(
+                    modifier = Modifier.fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 2.dp)
+                        .clip(RoundedCornerShape(9.dp))
+                        .background(if (member.id == selectedDirectMessageId) PaleAccent else Color.Transparent)
+                        .clickable { onContactSelected(member) }
+                        .padding(horizontal = 10.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    MemberAvatar(member, size = 25.dp)
+                    Spacer(Modifier.width(9.dp))
+                    Text(member.displayName, color = Ink, fontSize = 13.sp)
+                }
+            }
+            if (contacts.isEmpty()) {
+                Text(
+                    "Add someone by LXMF address or QR.",
+                    modifier = Modifier.padding(start = 22.dp, end = 16.dp, bottom = 8.dp),
+                    color = Muted,
+                    fontSize = 11.sp,
+                )
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(start = 22.dp, end = 16.dp, top = 8.dp, bottom = 6.dp)
+                    .clip(RoundedCornerShape(8.dp)).clickable(onClick = onRequestsClick)
+                    .padding(vertical = 7.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("Message requests", modifier = Modifier.weight(1f), color = Ink, fontSize = 12.sp)
+                if (requestsCount > 0) {
+                    Text(
+                        requestsCount.toString(),
+                        modifier = Modifier.clip(CircleShape).background(PaleAccent).padding(horizontal = 7.dp, vertical = 3.dp),
+                        color = Accent,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
             }
         }
 
-        Spacer(Modifier.weight(1f))
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(
                 modifier = Modifier.weight(1f).clip(RoundedCornerShape(10.dp))
-                    .clickable(onClick = onStatusClick).padding(horizontal = 8.dp, vertical = 9.dp),
+                    .clickable(onClick = onIdentityClick).padding(horizontal = 8.dp, vertical = 9.dp),
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.size(8.dp).clip(CircleShape).background(Color(0xFFE1A448)))
+                    Box(Modifier.size(8.dp).clip(CircleShape).background(identityColor))
                     Spacer(Modifier.width(8.dp))
-                    Text(if (previewMode) "Preview enabled" else "Preview hidden", color = Ink, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                    Text("Identity", color = Ink, fontSize = 12.sp, fontWeight = FontWeight.Medium)
                 }
                 Text(
-                    if (previewMode) "Sample data stays local" else "Sample data hidden",
+                    identityDetail,
                     color = Muted,
                     fontSize = 11.sp,
                     modifier = Modifier.padding(start = 16.dp, top = 4.dp),
@@ -1176,38 +1715,52 @@ private fun SettingsPage(
     onThemeChange: (ThemePreference) -> Unit,
     bubbleStyle: Boolean,
     onBubbleStyleChange: (Boolean) -> Unit,
+    denseMessages: Boolean,
+    onDenseMessagesChange: (Boolean) -> Unit,
     previewMode: Boolean,
     onPreviewModeChange: (Boolean) -> Unit,
     networks: List<ChatNetwork>,
+    nodeConfig: ReticulumNodeConfig?,
+    onNodeConfigChange: (ReticulumNodeConfig) -> Unit,
+    globalNickname: String,
+    preferredHubNetworkId: String?,
+    onPreferredHubNetworkChange: (String?) -> Unit,
     nodeState: ReticulumNodeState,
     nodeSupported: Boolean,
     supportsRNodeInterfaces: Boolean,
     rrcState: ReticulumConnectionState,
     rrcError: String?,
     localDeliveryAddress: String?,
+    showNavigationButton: Boolean = false,
+    onOpenNavigation: () -> Unit = {},
     onStartNode: (ReticulumNodeConfig) -> Unit,
     onDisconnectNode: () -> Unit,
     onConnectHub: (ReticulumConnectionConfig) -> Unit,
     onDisconnectHub: () -> Unit,
     onBack: () -> Unit,
 ) {
-    var runtimeModeName by rememberSaveable { mutableStateOf(ReticulumRuntimeMode.EMBEDDED.name) }
+    var runtimeModeName by rememberSaveable {
+        mutableStateOf(nodeConfig?.mode?.name ?: ReticulumRuntimeMode.EMBEDDED.name)
+    }
     var tcpPeers by rememberSaveable(
         stateSaver = listSaver(
             save = { peers: List<ReticulumTcpPeer> ->
-                peers.flatMap { peer -> listOf(peer.host, peer.port.toString(), peer.ifacNetworkName.orEmpty()) }
+                peers.flatMap { peer ->
+                    listOf(peer.host, peer.port.toString(), peer.ifacNetworkName.orEmpty(), peer.ifacPassphrase.orEmpty())
+                }
             },
             restore = { saved: List<String> ->
-                saved.chunked(3).mapNotNull { fields ->
-                    if (fields.size < 3) null else ReticulumTcpPeer(
+                saved.chunked(4).mapNotNull { fields ->
+                    if (fields.size < 4) null else ReticulumTcpPeer(
                         host = fields[0],
                         port = fields[1].toIntOrNull() ?: 0,
                         ifacNetworkName = fields[2].ifBlank { null },
+                        ifacPassphrase = fields[3].ifBlank { null },
                     )
-                }.ifEmpty { listOf(ReticulumTcpPeer("", 4242)) }
+                }
             },
         ),
-    ) { mutableStateOf(listOf(ReticulumTcpPeer("", 4242))) }
+    ) { mutableStateOf(nodeConfig?.tcpPeers ?: listOf(ReticulumTcpPeer("", 4242))) }
     var rnodeInterfaces by rememberSaveable(
         stateSaver = listSaver(
             save = { radios: List<ReticulumRNodeInterface> ->
@@ -1235,13 +1788,19 @@ private fun SettingsPage(
                 }
             },
         ),
-    ) { mutableStateOf(emptyList<ReticulumRNodeInterface>()) }
+    ) { mutableStateOf(nodeConfig?.rnodeInterfaces.orEmpty()) }
     var existingRpcKey by remember { mutableStateOf("") }
-    var selectedHubNetworkId by rememberSaveable { mutableStateOf("") }
-    var displayName by rememberSaveable { mutableStateOf("Starling") }
+    var selectedHubNetworkId by rememberSaveable { mutableStateOf(preferredHubNetworkId.orEmpty()) }
     var connectionInputError by rememberSaveable { mutableStateOf<String?>(null) }
     val configuredNetworks = networks.filter { !it.isPreview && !it.hubDestination.isNullOrBlank() }
     val selectedHubNetwork = configuredNetworks.firstOrNull { it.id == selectedHubNetworkId } ?: configuredNetworks.firstOrNull()
+    val selectedRrcNickname = selectedHubNetwork?.rrcNickname?.takeIf(String::isNotBlank) ?: globalNickname
+    LaunchedEffect(preferredHubNetworkId, configuredNetworks) {
+        val selectedId = preferredHubNetworkId?.takeIf { id -> configuredNetworks.any { it.id == id } }
+            ?: configuredNetworks.firstOrNull()?.id.orEmpty()
+        if (selectedHubNetworkId != selectedId) selectedHubNetworkId = selectedId
+        if (preferredHubNetworkId == null && selectedId.isNotBlank()) onPreferredHubNetworkChange(selectedId)
+    }
     val runtimeMode = runCatching { ReticulumRuntimeMode.valueOf(runtimeModeName) }
         .getOrDefault(ReticulumRuntimeMode.EMBEDDED)
     val isRunning = nodeState is ReticulumNodeState.Running
@@ -1262,6 +1821,16 @@ private fun SettingsPage(
             else -> Unit
         }
     }
+    LaunchedEffect(runtimeModeName, tcpPeers, rnodeInterfaces) {
+        onNodeConfigChange(
+            ReticulumNodeConfig(
+                mode = runCatching { ReticulumRuntimeMode.valueOf(runtimeModeName) }
+                    .getOrDefault(ReticulumRuntimeMode.EMBEDDED),
+                tcpPeers = tcpPeers,
+                rnodeInterfaces = rnodeInterfaces,
+            ),
+        )
+    }
 
     Column(Modifier.fillMaxSize().background(Canvas)) {
         Row(
@@ -1277,10 +1846,15 @@ private fun SettingsPage(
             }
             Spacer(Modifier.width(10.dp))
             Text("Settings", color = Ink, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+            if (showNavigationButton) {
+                Spacer(Modifier.weight(1f))
+                NavigationToggle { onOpenNavigation() }
+            }
         }
 
         Column(
             modifier = Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState())
+                .preferredFrameRate(120f)
                 .padding(horizontal = 24.dp, vertical = 26.dp),
             verticalArrangement = Arrangement.spacedBy(18.dp),
         ) {
@@ -1309,6 +1883,14 @@ private fun SettingsPage(
                     }
                     Switch(checked = bubbleStyle, onCheckedChange = onBubbleStyleChange)
                 }
+                Spacer(Modifier.height(8.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Dense messages", color = Ink, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                        Text("Reduce vertical spacing in room and direct-message history.", color = Muted, fontSize = 11.sp)
+                    }
+                    Switch(checked = denseMessages, onCheckedChange = onDenseMessagesChange)
+                }
             }
             Text("NETWORK", color = Muted, fontSize = 10.sp, letterSpacing = 1.3.sp, fontWeight = FontWeight.Bold)
             Column(
@@ -1319,22 +1901,26 @@ private fun SettingsPage(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("Reticulum node", modifier = Modifier.weight(1f), color = Ink, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
                     Text(
-                        when (nodeState) {
-                            is ReticulumNodeState.Running -> if (nodeState.interfaceOnline) "CONNECTED" else "RETRYING"
-                            is ReticulumNodeState.Starting -> "STARTING"
-                            is ReticulumNodeState.PreparingRuntime -> "PREPARING"
-                            is ReticulumNodeState.Failed -> "ERROR"
-                            is ReticulumNodeState.Unavailable -> "UNAVAILABLE"
-                            ReticulumNodeState.Stopped -> "PREVIEW"
-                        },
-                        color = if (nodeState is ReticulumNodeState.Failed) Color(0xFFC44545) else Accent,
+                        if (previewMode) "ISOLATED PREVIEW" else when (nodeState) {
+                                is ReticulumNodeState.Running -> if (nodeState.interfaceOnline) "CONNECTED" else "RETRYING"
+                                is ReticulumNodeState.Starting -> "STARTING"
+                                is ReticulumNodeState.PreparingRuntime -> "PREPARING"
+                                is ReticulumNodeState.Failed -> "ERROR"
+                                is ReticulumNodeState.Unavailable -> "UNAVAILABLE"
+                                ReticulumNodeState.Stopped -> "DISCONNECTED"
+                            },
+                        color = if (!previewMode && nodeState is ReticulumNodeState.Failed) Color(0xFFC44545) else Accent,
                         fontSize = 9.sp,
                         fontWeight = FontWeight.Bold,
                         letterSpacing = 0.8.sp,
                     )
                 }
                 Text(
-                    "Local preview stays available without setup. Starting RNS manages the network node; RRC room traffic is a separate connection below.",
+                    if (previewMode) {
+                        "Preview mode is isolated. It shows sample data only and stops live Reticulum connections."
+                    } else {
+                        "Starting RNS manages the network node; RRC room traffic is a separate connection below."
+                    },
                     color = Muted,
                     fontSize = 12.sp,
                     lineHeight = 18.sp,
@@ -1343,11 +1929,35 @@ private fun SettingsPage(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text("Local preview", color = Ink, fontSize = 13.sp, fontWeight = FontWeight.Medium)
-                        Text("Show or hide sample networks, channels, and messages for this session.", color = Muted, fontSize = 11.sp)
+                        Text("Isolated sample data; live identity and connections are hidden.", color = Muted, fontSize = 11.sp)
                     }
-                    Switch(checked = previewMode, onCheckedChange = onPreviewModeChange)
+                    Switch(
+                        checked = previewMode,
+                        onCheckedChange = {
+                            connectionInputError = null
+                            onPreviewModeChange(it)
+                        },
+                    )
                 }
 
+                if (previewMode) {
+                    Text(
+                        "Live interfaces, shared-instance keys, and RRC/LXMF addresses are hidden while preview is on.",
+                        color = Muted,
+                        fontSize = 11.sp,
+                        lineHeight = 16.sp,
+                    )
+                } else {
+                    Text(
+                        if (runtimeMode == ReticulumRuntimeMode.EMBEDDED) {
+                            "Interface settings are saved and the node starts automatically in live mode on next launch."
+                        } else {
+                            "The shared-instance RPC key is session-only; re-enter it after restarting the app."
+                        },
+                        color = Muted,
+                        fontSize = 11.sp,
+                        lineHeight = 16.sp,
+                    )
                 RuntimeModeSelection(
                     selected = runtimeMode,
                     enabled = !isRunning && !isStarting && nodeSupported,
@@ -1642,7 +2252,17 @@ private fun SettingsPage(
                 ) {
                     Text(if (isRunning) "Disconnect node" else if (isStarting) "Starting…" else "Start node")
                 }
+                }
             }
+            if (previewMode) {
+                Text("MESSAGING", color = Muted, fontSize = 10.sp, letterSpacing = 1.3.sp, fontWeight = FontWeight.Bold)
+                Text(
+                    "Preview messages are simulated locally. RRC hub details and the LXMF delivery address are hidden.",
+                    color = Muted,
+                    fontSize = 12.sp,
+                    lineHeight = 18.sp,
+                )
+            } else {
             Text("MESSAGING", color = Muted, fontSize = 10.sp, letterSpacing = 1.3.sp, fontWeight = FontWeight.Bold)
             Column(
                 modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Paper)
@@ -1670,21 +2290,17 @@ private fun SettingsPage(
                     networks = configuredNetworks,
                     selectedNetwork = selectedHubNetwork,
                     enabled = rrcState !is ReticulumConnectionState.Connected && rrcState !is ReticulumConnectionState.Connecting,
-                    onSelected = { selectedHubNetworkId = it.id },
+                    onSelected = {
+                        selectedHubNetworkId = it.id
+                        onPreferredHubNetworkChange(it.id)
+                    },
                 )
                 if (selectedHubNetwork != null) {
                     Text("Destination · ${selectedHubNetwork.hubDestination}", color = Muted, fontSize = 10.sp)
                 } else {
                     Text("Add a network with an RRC hub destination using + in the Networks list.", color = Muted, fontSize = 11.sp)
                 }
-                OutlinedTextField(
-                    value = displayName,
-                    onValueChange = { displayName = it.take(32) },
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text("Display name") },
-                    singleLine = true,
-                    enabled = rrcState !is ReticulumConnectionState.Connected && rrcState !is ReticulumConnectionState.Connecting,
-                )
+                Text("Your nickname on this hub: $selectedRrcNickname", color = Muted, fontSize = 11.sp)
                 val rrcStatusText = when (val state = rrcState) {
                     ReticulumConnectionState.Disconnected -> "Room messages stay in local preview until an RRC hub welcomes this client."
                     ReticulumConnectionState.Starting -> "Preparing the RRC session…"
@@ -1697,11 +2313,11 @@ private fun SettingsPage(
                 val rrcBusy = rrcState is ReticulumConnectionState.Starting || rrcState is ReticulumConnectionState.Connecting
                 val rrcActive = rrcState is ReticulumConnectionState.Connected
                 Button(
-                    enabled = if (rrcActive || rrcBusy) true else nodeState is ReticulumNodeState.Running && selectedHubNetwork != null && displayName.isNotBlank(),
+                    enabled = if (rrcActive || rrcBusy) true else nodeState is ReticulumNodeState.Running && selectedHubNetwork != null,
                     onClick = {
                         if (rrcActive || rrcBusy) onDisconnectHub()
                         else selectedHubNetwork?.hubDestination?.let { destination ->
-                            onConnectHub(ReticulumConnectionConfig(destination, displayName.trim(), selectedHubNetwork.id))
+                            onConnectHub(ReticulumConnectionConfig(destination, selectedRrcNickname, selectedHubNetwork.id))
                         }
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = Accent),
@@ -1730,6 +2346,7 @@ private fun SettingsPage(
                     }
                 }
             }
+            }
         }
     }
 }
@@ -1751,7 +2368,92 @@ private fun SettingsCard(title: String, subtitle: String, description: String, s
 }
 
 @Composable
-private fun NetworkRow(network: ChatNetwork, expanded: Boolean, onAddChannel: () -> Unit, onClick: () -> Unit) {
+private fun NetworkStatusDialog(
+    network: ChatNetwork,
+    previewMode: Boolean,
+    nodeState: ReticulumNodeState,
+    rrcState: ReticulumConnectionState,
+    activeHubNetworkId: String?,
+    onDismiss: () -> Unit,
+) {
+    val isTargetNetwork = activeHubNetworkId == network.id
+    val hubStatus = when {
+        previewMode || network.isPreview -> "Sample network. Live hub status is hidden in preview."
+        !isTargetNetwork -> "Not connected. This hub is not the active connection."
+        rrcState is ReticulumConnectionState.Connected ->
+            "Connected${rrcState.hubName?.takeIf(String::isNotBlank)?.let { " to $it" }.orEmpty()}."
+        rrcState is ReticulumConnectionState.Starting || rrcState == ReticulumConnectionState.Connecting -> "Connecting to this hub…"
+        rrcState is ReticulumConnectionState.Failed -> rrcState.message
+        else -> "Disconnected from this hub."
+    }
+    val nodeStatus = when (val state = nodeState) {
+        is ReticulumNodeState.Running -> when {
+            state.sharedInstanceConnected -> "Attached to an existing shared instance."
+            else -> {
+                val online = state.onlineTcpPeerIds.size + state.onlineRNodePorts.size
+                val total = state.tcpPeers.size + state.rnodeInterfaces.size
+                if (total == 0) "Reticulum is running without configured interfaces."
+                else "$online of $total configured interfaces online."
+            }
+        }
+        is ReticulumNodeState.Starting -> "Reticulum is starting…"
+        is ReticulumNodeState.PreparingRuntime -> state.detail
+        is ReticulumNodeState.Failed -> state.message
+        is ReticulumNodeState.Unavailable -> state.reason
+        ReticulumNodeState.Stopped -> "Reticulum is stopped."
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("${network.name} status", color = Ink) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("Hub connection", color = Accent, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                Text(hubStatus, color = Ink, fontSize = 13.sp, lineHeight = 18.sp)
+                if (!previewMode) {
+                    network.hubDestination?.let { destination ->
+                        Text("RRC destination", color = Accent, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                        SelectionContainer {
+                            Text(destination, color = Muted, fontSize = 11.sp)
+                        }
+                    }
+                    Text("Reticulum node", color = Accent, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                    Text(nodeStatus, color = Muted, fontSize = 12.sp, lineHeight = 17.sp)
+                    Text("Long-press a hub on touch, or right-click it on desktop, to view this status.", color = Muted, fontSize = 10.sp)
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Close", color = Accent) } },
+    )
+}
+
+@Composable
+private fun networkConnectionColor(
+    network: ChatNetwork,
+    previewMode: Boolean,
+    activeHubNetworkId: String?,
+    rrcState: ReticulumConnectionState,
+    nodeState: ReticulumNodeState,
+): Color {
+    if (previewMode || network.isPreview || activeHubNetworkId != network.id) return Muted
+    return when {
+        rrcState is ReticulumConnectionState.Connected -> Color(0xFF48A868)
+        rrcState == ReticulumConnectionState.Starting || rrcState == ReticulumConnectionState.Connecting -> Color(0xFFE1A448)
+        rrcState is ReticulumConnectionState.Failed || nodeState is ReticulumNodeState.Failed -> Color(0xFFC44545)
+        nodeState is ReticulumNodeState.Starting || nodeState is ReticulumNodeState.PreparingRuntime -> Color(0xFFE1A448)
+        else -> Muted
+    }
+}
+
+@Composable
+private fun NetworkRow(
+    network: ChatNetwork,
+    expanded: Boolean,
+    connectionColor: Color,
+    onAddChannel: () -> Unit,
+    onDetails: () -> Unit,
+    onClick: () -> Unit,
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -1761,13 +2463,25 @@ private fun NetworkRow(network: ChatNetwork, expanded: Boolean, onAddChannel: ()
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Row(
-            modifier = Modifier.weight(1f).clip(RoundedCornerShape(8.dp)).clickable(onClick = onClick)
+            modifier = Modifier.weight(1f).clip(RoundedCornerShape(8.dp))
+                .pointerInput(onDetails) {
+                    awaitPointerEventScope {
+                        while (true) {
+                            val event = awaitPointerEvent(PointerEventPass.Initial)
+                            if (event.type == PointerEventType.Press && event.buttons.isSecondaryPressed) {
+                                event.changes.forEach { it.consume() }
+                                onDetails()
+                            }
+                        }
+                    }
+                }
+                .combinedClickable(onClick = onClick, onLongClick = onDetails)
                 .padding(vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(if (expanded) "⌄" else "›", color = Muted, fontSize = 15.sp)
             Spacer(Modifier.width(7.dp))
-            Box(Modifier.size(7.dp).clip(CircleShape).background(Color(0xFFE1A448)))
+            Box(Modifier.size(7.dp).clip(CircleShape).background(connectionColor))
             Spacer(Modifier.width(8.dp))
             Text(
                 network.name,
@@ -1784,27 +2498,35 @@ private fun NetworkRow(network: ChatNetwork, expanded: Boolean, onAddChannel: ()
 }
 
 @Composable
-private fun RoomRow(room: ChatRoom, selected: Boolean, onClick: () -> Unit) {
+private fun RoomRow(room: ChatRoom, selected: Boolean, onClick: () -> Unit, onManage: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 12.dp, vertical = 2.dp)
-            .clip(RoundedCornerShape(9.dp))
-            .background(if (selected) PaleAccent else Color.Transparent)
-            .clickable(onClick = onClick)
-            .padding(start = 31.dp, end = 12.dp, top = 10.dp, bottom = 10.dp),
+            .clip(RoundedCornerShape(9.dp)),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text("#", color = if (selected) Accent else Muted, fontSize = 17.sp)
-        Spacer(Modifier.width(10.dp))
-        Text(
-            room.name,
-            modifier = Modifier.weight(1f),
-            color = if (selected) Accent else Ink,
-            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-            fontSize = 14.sp,
-        )
-        if (selected) Text(room.members.toString(), color = Accent, fontSize = 11.sp)
+        Row(
+            modifier = Modifier.weight(1f).clip(RoundedCornerShape(9.dp))
+                .background(if (selected) PaleAccent else Color.Transparent)
+                .clickable(onClick = onClick)
+                .padding(start = 31.dp, end = 8.dp, top = 10.dp, bottom = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("#", color = if (selected) Accent else Muted, fontSize = 17.sp)
+            Spacer(Modifier.width(10.dp))
+            Text(
+                room.name,
+                modifier = Modifier.weight(1f),
+                color = if (selected) Accent else Ink,
+                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                fontSize = 14.sp,
+            )
+            if (selected) Text(room.members.toString(), color = Accent, fontSize = 11.sp)
+        }
+        IconButton(onClick = onManage, modifier = Modifier.size(30.dp)) {
+            Icon(Icons.Filled.MoreVert, contentDescription = "Manage #${room.name}", tint = Muted)
+        }
     }
 }
 
@@ -1813,6 +2535,7 @@ private fun ChatHeader(
     room: ChatRoom,
     networks: List<ChatNetwork>,
     compact: Boolean,
+    showNavigationButton: Boolean,
     memberCount: Int,
     membersVisible: Boolean,
     onToggleMembers: () -> Unit,
@@ -1823,7 +2546,7 @@ private fun ChatHeader(
             .padding(horizontal = if (compact) 10.dp else 22.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (compact) {
+        if (compact || showNavigationButton) {
             Box(
                 modifier = Modifier.size(42.dp).clip(RoundedCornerShape(10.dp))
                     .clickable(onClick = onOpenNavigation),
@@ -2076,6 +2799,7 @@ private fun MessageRow(
     message: ChatMessage,
     member: ChatMember?,
     bubbleStyle: Boolean,
+    denseMessages: Boolean,
     onMemberClick: () -> Unit,
 ) {
     val authorName = member?.displayName ?: message.author
@@ -2083,13 +2807,13 @@ private fun MessageRow(
     val authorColor = ircNickTextColor(authorName, darkTheme = palette == DarkPalette)
     if (bubbleStyle) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(vertical = 1.dp),
+            modifier = Modifier.fillMaxWidth().padding(vertical = if (denseMessages) 0.dp else 1.dp),
             horizontalArrangement = if (message.isMine) Arrangement.End else Arrangement.Start,
         ) {
             Column(
                 modifier = Modifier.widthIn(max = 560.dp).clip(RoundedCornerShape(15.dp))
                     .background(if (message.isMine) PaleAccent else Paper)
-                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                    .padding(horizontal = 10.dp, vertical = if (denseMessages) 4.dp else 6.dp),
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
@@ -2108,14 +2832,14 @@ private fun MessageRow(
                     text = markdown(message.text, palette),
                     color = Ink,
                     fontSize = 13.sp,
-                    lineHeight = 17.sp,
+                    lineHeight = if (denseMessages) 16.sp else 17.sp,
                     fontStyle = if (message.isAction) FontStyle.Italic else FontStyle.Normal,
                 )
             }
         }
     } else {
     Row(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 1.dp),
+        modifier = Modifier.fillMaxWidth().padding(vertical = if (denseMessages) 0.dp else 1.dp),
         verticalAlignment = Alignment.Top,
     ) {
         Text(message.time, modifier = Modifier.width(40.dp).padding(top = 1.dp), color = Muted, fontSize = 10.sp)
@@ -2135,7 +2859,7 @@ private fun MessageRow(
                 modifier = Modifier.weight(1f).alignBy(FirstBaseline),
                 color = Ink,
                 fontSize = 13.sp,
-                lineHeight = 17.sp,
+                lineHeight = if (denseMessages) 16.sp else 17.sp,
                 fontStyle = FontStyle.Italic,
             )
         } else {
@@ -2154,7 +2878,7 @@ private fun MessageRow(
                 modifier = Modifier.weight(1f).alignBy(FirstBaseline),
                 color = Ink,
                 fontSize = 13.sp,
-                lineHeight = 18.sp,
+                lineHeight = if (denseMessages) 16.sp else 18.sp,
             )
         }
     }

@@ -34,6 +34,10 @@ class ReticulumNodeService : Service() {
     private var rrcModule: com.chaquo.python.PyObject? = null
     private var lxmfModule: com.chaquo.python.PyObject? = null
     private var lastPublishedSelfEventLine: String? = null
+    private var lastNodeState = STATE_STOPPED
+    private var lastNodeMessage = ""
+    private var lastNodeShared = false
+    private var lastNodeTcpStatusJson = "[]"
     @Volatile private var stopping = false
 
     private val pollStatus = object : Runnable {
@@ -57,9 +61,19 @@ class ReticulumNodeService : Service() {
         when (intent?.action) {
             ACTION_STOP -> stopNode(startId)
             ACTION_START -> startNode(intent, startId)
+            ACTION_NODE_STATUS -> {
+                if (stopping || lastNodeState == STATE_STARTING) {
+                    publish(STATE_STARTING, message = lastNodeMessage)
+                } else if (pythonModule != null) {
+                    publishRuntimeStatus()
+                } else {
+                    publish(lastNodeState, lastNodeMessage, lastNodeShared, lastNodeTcpStatusJson)
+                    if (lastNodeState == STATE_STOPPED || lastNodeState == STATE_FAILED) stopSelf(startId)
+                }
+            }
             ACTION_RRC_CONNECT, ACTION_RRC_DISCONNECT, ACTION_RRC_JOIN, ACTION_RRC_PART, ACTION_RRC_SEND ->
                 handleRrcCommand(intent)
-            ACTION_LXMF_SEND -> handleLxmfCommand(intent)
+            ACTION_LXMF_SEND, ACTION_LXMF_SET_NAME -> handleLxmfCommand(intent)
             ACTION_RRC_STATUS -> publishRrcCurrentState()
             else -> stopSelf(startId)
         }
@@ -184,7 +198,6 @@ class ReticulumNodeService : Service() {
                 when (intent.action) {
                     ACTION_RRC_CONNECT -> {
                         val displayName = intent.getStringExtra(EXTRA_DISPLAY_NAME).orEmpty()
-                        lxmfModule?.callAttr("set_display_name", displayName)
                         module.callAttr("connect", intent.getStringExtra(EXTRA_HUB_DESTINATION).orEmpty(), displayName)
                     }
                     ACTION_RRC_DISCONNECT -> module.callAttr("disconnect")
@@ -213,11 +226,15 @@ class ReticulumNodeService : Service() {
         }
         rrcWorker.execute {
             try {
-                module.callAttr(
-                    "send_direct",
-                    intent.getStringExtra(EXTRA_LXMF_ADDRESS).orEmpty(),
-                    intent.getStringExtra(EXTRA_BODY).orEmpty(),
-                )
+                if (intent.action == ACTION_LXMF_SET_NAME) {
+                    module.callAttr("set_display_name", intent.getStringExtra(EXTRA_DISPLAY_NAME).orEmpty())
+                } else {
+                    module.callAttr(
+                        "send_direct",
+                        intent.getStringExtra(EXTRA_LXMF_ADDRESS).orEmpty(),
+                        intent.getStringExtra(EXTRA_BODY).orEmpty(),
+                    )
+                }
                 drainLxmfEvents()
             } catch (error: Exception) {
                 Log.w(TAG, "LXMF send failed", error)
@@ -254,6 +271,7 @@ class ReticulumNodeService : Service() {
                 }
             }
             lxmfModule?.callAttr("current_local_address_event_line")?.toString()?.let(::publishRrcEventLine)
+            lxmfModule?.callAttr("current_identity_event_line")?.toString()?.let(::publishRrcEventLine)
         } catch (error: Exception) {
             Log.w(TAG, "Could not read RRC connection state", error)
         }
@@ -283,6 +301,10 @@ class ReticulumNodeService : Service() {
         shared: Boolean = false,
         tcpStatusJson: String = "[]",
     ) {
+        lastNodeState = state
+        lastNodeMessage = message
+        lastNodeShared = shared
+        lastNodeTcpStatusJson = tcpStatusJson
         val intent = Intent(ACTION_STATE)
             .setPackage(packageName)
             .putExtra(EXTRA_STATE, state)
@@ -354,6 +376,7 @@ class ReticulumNodeService : Service() {
     companion object {
         const val ACTION_START = "dev.starling.action.START_RETICULUM"
         const val ACTION_STOP = "dev.starling.action.STOP_RETICULUM"
+        const val ACTION_NODE_STATUS = "dev.starling.action.NODE_STATUS"
         const val ACTION_STATE = "dev.starling.action.RETICULUM_STATE"
         const val ACTION_RRC_EVENT = "dev.starling.action.RRC_EVENT"
         const val ACTION_RRC_CONNECT = "dev.starling.action.RRC_CONNECT"
@@ -363,6 +386,7 @@ class ReticulumNodeService : Service() {
         const val ACTION_RRC_SEND = "dev.starling.action.RRC_SEND"
         const val ACTION_RRC_STATUS = "dev.starling.action.RRC_STATUS"
         const val ACTION_LXMF_SEND = "dev.starling.action.LXMF_SEND"
+        const val ACTION_LXMF_SET_NAME = "dev.starling.action.LXMF_SET_NAME"
         const val EXTRA_MODE = "mode"
         const val EXTRA_TCP_PEERS = "tcp_peers"
         const val EXTRA_TCP_STATUS = "tcp_status"

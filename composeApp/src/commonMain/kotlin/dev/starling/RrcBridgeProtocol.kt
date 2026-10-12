@@ -22,6 +22,11 @@ fun parseRrcBridgeEvent(line: String): ParsedRrcBridgeEvent? {
             ParsedRrcBridgeEvent(connectionState = state)
         }
         "LOCAL_ADDRESS" -> ParsedRrcBridgeEvent(localDeliveryAddress = fields.getOrNull(1)?.decodeBridgeBase64().orEmpty())
+        "IDENTITY" -> fields.getOrNull(1)?.decodeBridgeBase64().orEmpty().let { identityHash ->
+            if (identityHash.isBlank()) null else ParsedRrcBridgeEvent(
+                event = ReticulumEvent.LocalIdentityChanged(identityHash),
+            )
+        }
         "SELF" -> {
             val memberId = fields.getOrNull(1)?.decodeBridgeBase64().orEmpty()
             val displayName = fields.getOrNull(2)?.decodeBridgeBase64().orEmpty()

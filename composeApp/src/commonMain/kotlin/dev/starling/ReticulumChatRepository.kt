@@ -24,7 +24,7 @@ import kotlinx.coroutines.runBlocking
  * traffic through RRC and DMs through LXMF, and persists app-level chat state.
  */
 class ReticulumChatRepository(
-    private val preview: ChatRepository,
+    private val preview: LocalPreviewChatRepository,
     private val transport: ReticulumTransport,
     private val stateStore: ChatStateStore,
 ) : ChatRepository by preview {
@@ -34,56 +34,156 @@ class ReticulumChatRepository(
     private var persistenceJob: Job? = null
     private val joinedRoomNames = mutableSetOf<String>()
     private val restoredState = runCatching { stateStore.read()?.let(ChatStateCodec::decode) }.getOrNull()
+    private val restoredPreviewMode = restoredState?.previewMode ?: true
+    private val _nodeConfig = MutableStateFlow(restoredState?.nodeConfig)
+    val nodeConfig: StateFlow<ReticulumNodeConfig?> = _nodeConfig.asStateFlow()
+    private val _globalNickname = MutableStateFlow(normalizeStarlingNickname(restoredState?.globalNickname ?: "Starling"))
+    val globalNickname: StateFlow<String> = _globalNickname.asStateFlow()
+    private val _preferredHubNetworkId = MutableStateFlow(restoredState?.preferredHubNetworkId)
+    val preferredHubNetworkId: StateFlow<String?> = _preferredHubNetworkId.asStateFlow()
+    private val _localIdentityHash = MutableStateFlow(restoredState?.localIdentityHash)
+    val localIdentityHash: StateFlow<String?> = combine(
+        _localIdentityHash,
+        preview.previewMode,
+    ) { identityHash, previewEnabled -> if (previewEnabled) null else identityHash }
+        .stateIn(scope, SharingStarted.Eagerly, if (restoredPreviewMode) null else _localIdentityHash.value)
     private val liveMessages = MutableStateFlow(restoredState?.roomMessages.orEmpty())
     private val liveMembers = MutableStateFlow<Map<String, List<ChatMember>>>(emptyMap())
-    private val discoveredMembers = MutableStateFlow(restoredState?.members.orEmpty())
-    private val localMember = MutableStateFlow(restoredState?.members?.firstOrNull { it.isSelf })
+    private val discoveredMembers = MutableStateFlow(
+        restoredState?.members.orEmpty().filterNot { preview.isPreviewMember(it.id) },
+    )
+    private val localMember = MutableStateFlow(
+        restoredState?.members?.firstOrNull { it.isSelf && !preview.isPreviewMember(it.id) },
+    )
     private val liveDirectMessages = MutableStateFlow(restoredState?.directMessages.orEmpty())
-    private val _activeHubNetworkId = MutableStateFlow<String?>(null)
-    val activeHubNetworkId: StateFlow<String?> = _activeHubNetworkId.asStateFlow()
-    private val liveContactMemberIds = MutableStateFlow(restoredState?.contacts ?: preview.contactMemberIds.value)
-    private val liveBlockedMemberIds = MutableStateFlow(restoredState?.blockedMembers.orEmpty())
-    private val _contactRequests = MutableStateFlow(restoredState?.contactRequests ?: preview.contactRequests.value)
+    private val _activeHubNetworkId = MutableStateFlow(
+        restoredState?.activeHubNetworkId.takeUnless { restoredPreviewMode },
+    )
+    val activeHubNetworkId: StateFlow<String?> = combine(
+        _activeHubNetworkId,
+        preview.previewMode,
+    ) { networkId, previewEnabled -> if (previewEnabled) null else networkId }
+        .stateIn(scope, SharingStarted.Eagerly, null)
+    private val liveContactMemberIds = MutableStateFlow(
+        restoredState?.contacts.orEmpty().filterNot(preview::isPreviewMember).toSet(),
+    )
+    private val liveBlockedMemberIds = MutableStateFlow(
+        restoredState?.blockedMembers.orEmpty().filterNot(preview::isPreviewMember).toSet(),
+    )
+    private val _contactRequests = MutableStateFlow(
+        restoredState?.contactRequests.orEmpty().filterNot { it.isPreview || preview.isPreviewMember(it.sender.id) },
+    )
     private val messageByRequestId = mutableMapOf<String, LxmfDirectMessage>()
-    private var nextLocalMessageId = 0
     private val _lastError = MutableStateFlow<String?>(null)
-    val lastError: StateFlow<String?> = _lastError.asStateFlow()
-    val connectionState: StateFlow<ReticulumConnectionState> = transport.state
-    val localDeliveryAddress: StateFlow<String?> = transport.localDeliveryAddress
+    val lastError: StateFlow<String?> = combine(
+        _lastError,
+        preview.previewMode,
+    ) { error, previewEnabled -> if (previewEnabled) null else error }
+        .stateIn(scope, SharingStarted.Eagerly, null)
+    val connectionState: StateFlow<ReticulumConnectionState> = combine(
+        transport.state,
+        preview.previewMode,
+    ) { state, previewEnabled -> if (previewEnabled) ReticulumConnectionState.Disconnected else state }
+        .stateIn(
+            scope,
+            SharingStarted.Eagerly,
+            if (restoredPreviewMode) ReticulumConnectionState.Disconnected else transport.state.value,
+        )
+    val localDeliveryAddress: StateFlow<String?> = combine(
+        transport.localDeliveryAddress,
+        preview.previewMode,
+    ) { address, previewEnabled -> if (previewEnabled) null else address }
+        .stateIn(scope, SharingStarted.Eagerly, null)
 
     override val knownMembers: StateFlow<List<ChatMember>> = combine(
         preview.knownMembers,
         discoveredMembers,
         localMember,
-    ) { existing, discovered, self -> mergeMembers(mergeMembers(existing, discovered), listOfNotNull(self)) }
-        .stateIn(scope, SharingStarted.Eagerly, preview.knownMembers.value)
-    override val contactMemberIds: StateFlow<Set<String>> = liveContactMemberIds.asStateFlow()
-    override val blockedMemberIds: StateFlow<Set<String>> = liveBlockedMemberIds.asStateFlow()
+        preview.previewMode,
+    ) { previewMembers, discovered, self, previewEnabled ->
+        if (previewEnabled) previewMembers else mergeMembers(discovered, listOfNotNull(self))
+    }.stateIn(
+        scope,
+        SharingStarted.Eagerly,
+        if (restoredPreviewMode) preview.knownMembers.value else mergeMembers(discoveredMembers.value, listOfNotNull(localMember.value)),
+    )
+    override val contactMemberIds: StateFlow<Set<String>> = combine(
+        preview.contactMemberIds,
+        liveContactMemberIds,
+        preview.previewMode,
+    ) { previewContacts, liveContacts, previewEnabled -> if (previewEnabled) previewContacts else liveContacts }
+        .stateIn(
+            scope,
+            SharingStarted.Eagerly,
+            if (restoredPreviewMode) preview.contactMemberIds.value else liveContactMemberIds.value,
+        )
+    override val blockedMemberIds: StateFlow<Set<String>> = combine(
+        preview.blockedMemberIds,
+        liveBlockedMemberIds,
+        preview.previewMode,
+    ) { previewBlocked, liveBlocked, previewEnabled -> if (previewEnabled) previewBlocked else liveBlocked }
+        .stateIn(
+            scope,
+            SharingStarted.Eagerly,
+            if (restoredPreviewMode) preview.blockedMemberIds.value else liveBlockedMemberIds.value,
+        )
     override val contactRequests: StateFlow<List<ChatContactRequest>> = combine(
+        preview.contactRequests,
         _contactRequests,
         preview.previewMode,
-    ) { requests, previewEnabled -> if (previewEnabled) requests else requests.filterNot { it.isPreview } }
-        .stateIn(scope, SharingStarted.Eagerly, _contactRequests.value)
+    ) { previewRequests, liveRequests, previewEnabled ->
+        if (previewEnabled) previewRequests else liveRequests.filterNot { it.isPreview }
+    }.stateIn(
+        scope,
+        SharingStarted.Eagerly,
+        if (restoredPreviewMode) preview.contactRequests.value else _contactRequests.value.filterNot { it.isPreview },
+    )
 
     init {
+        preview.setPreviewMode(restoredPreviewMode)
         restoredState?.networks.orEmpty().forEach(preview::restoreNetwork)
         restoredState?.rooms.orEmpty().forEach(preview::restoreRoom)
-        persistenceJob = scope.launch(Dispatchers.IO) {
+        if (restoredPreviewMode && transport.state.value != ReticulumConnectionState.Disconnected) {
+            scope.launch { runCatching { transport.disconnect() } }
+        }
+        persistenceJob = scope.launch {
             for (ignored in persistenceRequests) persistCurrentState()
         }
         scope.launch {
-            transport.state.collect { state ->
+            connectionState.collect { state ->
                 if (state is ReticulumConnectionState.Connected) {
+                    if (_activeHubNetworkId.value == null) {
+                        _preferredHubNetworkId.value?.let { _activeHubNetworkId.value = it }
+                    }
                     joinConfiguredRooms()
                 } else if (state is ReticulumConnectionState.Disconnected || state is ReticulumConnectionState.Failed) {
-                    _activeHubNetworkId.value = null
                     joinMutex.withLock { joinedRoomNames.clear() }
                 }
             }
         }
         scope.launch {
+            combine(transport.nodeReady, _globalNickname, preview.previewMode) { nodeReady, nickname, previewEnabled ->
+                Triple(nodeReady, nickname, previewEnabled)
+            }.collect { (nodeReady, nickname, previewEnabled) ->
+                if (nodeReady && !previewEnabled) {
+                    runCatching { transport.setLocalDisplayName(nickname) }
+                        .onFailure { _lastError.value = it.message ?: "Could not update the LXMF identity nickname." }
+                }
+            }
+        }
+        scope.launch {
             transport.events.collect { event ->
+                if (preview.previewMode.value) return@collect
                 when (event) {
+                    is ReticulumEvent.LocalIdentityChanged -> {
+                        val identityHash = event.identityHash.trim().lowercase()
+                        if (identityHash.length == 32 && identityHash.all { it in "0123456789abcdef" } &&
+                            _localIdentityHash.value != identityHash
+                        ) {
+                            _localIdentityHash.value = identityHash
+                            persistState()
+                        }
+                    }
                     is ReticulumEvent.RoomMessageReceived -> receive(event.message)
                     is ReticulumEvent.DirectMessage -> receiveDirect(event.message)
                     is ReticulumEvent.LocalMemberChanged -> {
@@ -146,146 +246,187 @@ class ReticulumChatRepository(
     override fun messages(roomId: String): Flow<List<ChatMessage>> = combine(
         preview.messages(roomId),
         liveMessages,
-        transport.state,
+        connectionState,
         preview.previewMode,
         _activeHubNetworkId,
     ) { local, live, state, previewEnabled, activeNetworkId ->
         val liveHistory = live[roomId].orEmpty()
-        val room = preview.rooms.value.firstOrNull { it.id == roomId }
-        if ((state is ReticulumConnectionState.Connected && room?.networkId == activeNetworkId) || liveHistory.isNotEmpty()) {
-            liveHistory
-        } else if (previewEnabled) local else emptyList()
+        if (previewEnabled) local
+        else {
+            val room = preview.rooms.value.firstOrNull { it.id == roomId }
+            if ((state is ReticulumConnectionState.Connected && room?.networkId == activeNetworkId) || liveHistory.isNotEmpty()) {
+                liveHistory
+            } else emptyList()
+        }
     }
 
     override fun members(roomId: String): Flow<List<ChatMember>> = combine(
         preview.members(roomId),
         liveMembers,
-        transport.state,
+        connectionState,
         preview.previewMode,
         _activeHubNetworkId,
     ) { local, live, state, previewEnabled, activeNetworkId ->
         val roomMembers = live[roomId].orEmpty()
         val room = preview.rooms.value.firstOrNull { it.id == roomId }
-        if ((state is ReticulumConnectionState.Connected && room?.networkId == activeNetworkId) || roomMembers.isNotEmpty()) {
+        if (previewEnabled) local
+        else if ((state is ReticulumConnectionState.Connected && room?.networkId == activeNetworkId) || roomMembers.isNotEmpty()) {
             roomMembers
-        } else if (previewEnabled) local else emptyList()
+        } else emptyList()
     }
 
     override fun directMessages(memberId: String): Flow<List<ChatMessage>> = combine(
         preview.directMessages(memberId),
         liveDirectMessages,
-        transport.nodeReady,
         preview.previewMode,
-    ) { local, live, nodeReady, previewEnabled ->
+    ) { local, live, previewEnabled ->
         val liveHistory = live[memberId].orEmpty()
-        if (nodeReady || liveHistory.isNotEmpty()) liveHistory else if (previewEnabled) local else emptyList()
+        if (previewEnabled) local else liveHistory
     }
 
     override fun addRoom(networkId: String, name: String, topic: String): ChatRoom {
         val room = preview.addRoom(networkId, name, topic)
-        persistState()
-        scope.launch { joinRoomIfConnected(room) }
+        if (!preview.previewMode.value) {
+            persistState()
+            scope.launch { joinRoomIfConnected(room) }
+        }
         return room
     }
 
     override fun addNetwork(name: String, hubDestination: String): ChatNetwork =
-        preview.addNetwork(name, hubDestination).also { persistState() }
+        preview.addNetwork(name, hubDestination).also { if (!preview.previewMode.value) persistState() }
 
     override fun restoreNetwork(network: ChatNetwork) = preview.restoreNetwork(network)
 
     override fun restoreRoom(room: ChatRoom) = preview.restoreRoom(room)
 
-    override fun setPreviewMode(enabled: Boolean) = preview.setPreviewMode(enabled)
+    override fun updateNetworkNickname(networkId: String, nickname: String?) {
+        preview.updateNetworkNickname(networkId, nickname)
+        if (!preview.previewMode.value) persistState()
+    }
+
+    override fun removeRoom(roomId: String) {
+        val room = preview.rooms.value.firstOrNull { it.id == roomId } ?: return
+        preview.removeRoom(roomId)
+        if (preview.previewMode.value) return
+
+        liveMessages.value = liveMessages.value - roomId
+        liveMembers.value = liveMembers.value - roomId
+        persistState()
+        scope.launch {
+            joinMutex.withLock {
+                val joinedName = "${room.networkId}:${room.name.lowercase()}"
+                if (joinedName in joinedRoomNames) {
+                    runCatching { transport.leaveRoom(room.name) }
+                        .onFailure { _lastError.value = it.message ?: "Could not leave ${room.name}." }
+                    joinedRoomNames -= joinedName
+                }
+            }
+        }
+    }
+
+    override fun setPreviewMode(enabled: Boolean) {
+        if (preview.previewMode.value == enabled) return
+        preview.setPreviewMode(enabled)
+        if (enabled) {
+            _activeHubNetworkId.value = null
+            _lastError.value = null
+            scope.launch { runCatching { transport.disconnect() } }
+        }
+        persistState()
+    }
 
     override fun addContact(member: ChatMember) {
         if (member.isSelf || member.id.isBlank()) return
-        preview.addContact(member)
+        if (preview.previewMode.value) {
+            preview.addContact(member)
+            return
+        }
         discoveredMembers.value = mergeMembers(discoveredMembers.value, listOf(member))
         liveContactMemberIds.value = liveContactMemberIds.value + member.id
         persistState()
     }
 
     override fun toggleContact(memberId: String) {
+        if (preview.previewMode.value) {
+            preview.toggleContact(memberId)
+            return
+        }
         if (memberId in liveContactMemberIds.value) {
             liveContactMemberIds.value = liveContactMemberIds.value - memberId
         } else {
             if (knownMembers.value.firstOrNull { it.id == memberId }?.isSelf == true) return
             liveContactMemberIds.value = liveContactMemberIds.value + memberId
         }
-        preview.toggleContact(memberId)
         persistState()
     }
 
     override fun acceptContactRequest(requestId: String) {
-        val message = messageByRequestId.remove(requestId)
-        val request = _contactRequests.value.firstOrNull { it.id == requestId }
-        if (message == null || request == null) {
+        if (preview.previewMode.value) {
             preview.acceptContactRequest(requestId)
-            _contactRequests.value = _contactRequests.value.filterNot { it.id == requestId }
-            if (request != null) {
-                discoveredMembers.value = mergeMembers(discoveredMembers.value, listOf(request.sender))
-                liveContactMemberIds.value = liveContactMemberIds.value + request.sender.id
-                val acceptedMessage = ChatMessage(
-                    id = request.id,
-                    author = request.sender.displayName,
-                    text = request.message,
-                    time = request.time,
-                )
-                val current = liveDirectMessages.value[request.sender.id].orEmpty()
-                if (current.none { it.id == acceptedMessage.id }) {
-                    liveDirectMessages.value = liveDirectMessages.value + (request.sender.id to (current + acceptedMessage))
-                }
-            }
-            persistState()
             return
         }
+        val message = messageByRequestId.remove(requestId)
+        val request = _contactRequests.value.firstOrNull { it.id == requestId }
+        if (request == null) return
         _contactRequests.value = _contactRequests.value.filterNot { it.id == requestId }
         liveContactMemberIds.value = liveContactMemberIds.value + request.sender.id
-        receiveAcceptedDirect(request.sender, message)
+        if (message != null) receiveAcceptedDirect(request.sender, message)
+        else {
+            discoveredMembers.value = mergeMembers(discoveredMembers.value, listOf(request.sender))
+            val acceptedMessage = ChatMessage(
+                id = request.id,
+                author = request.sender.displayName,
+                text = request.message,
+                time = request.time,
+            )
+            val current = liveDirectMessages.value[request.sender.id].orEmpty()
+            if (current.none { it.id == acceptedMessage.id }) {
+                liveDirectMessages.value = liveDirectMessages.value + (request.sender.id to (current + acceptedMessage))
+            }
+        }
         persistState()
     }
 
     override fun ignoreContactRequest(requestId: String) {
-        if (_contactRequests.value.none { it.id == requestId }) {
+        if (preview.previewMode.value) {
             preview.ignoreContactRequest(requestId)
-            _contactRequests.value = _contactRequests.value.filterNot { it.id == requestId }
-            persistState()
             return
         }
+        if (_contactRequests.value.none { it.id == requestId }) return
         messageByRequestId.remove(requestId)
         _contactRequests.value = _contactRequests.value.filterNot { it.id == requestId }
-        preview.ignoreContactRequest(requestId)
         persistState()
     }
 
     override fun blockContactRequest(requestId: String) {
-        val request = _contactRequests.value.firstOrNull { it.id == requestId }
-        if (request == null) {
+        if (preview.previewMode.value) {
             preview.blockContactRequest(requestId)
-            _contactRequests.value = _contactRequests.value.filterNot { it.id == requestId }
-            persistState()
             return
         }
+        val request = _contactRequests.value.firstOrNull { it.id == requestId }
+        if (request == null) return
         messageByRequestId.remove(requestId)
         _contactRequests.value = _contactRequests.value.filterNot { it.id == requestId }
         liveBlockedMemberIds.value = liveBlockedMemberIds.value + request.sender.id
         liveContactMemberIds.value = liveContactMemberIds.value - request.sender.id
-        preview.blockContactRequest(requestId)
         persistState()
     }
 
     override suspend fun send(roomId: String, text: String) {
+        if (preview.previewMode.value) {
+            preview.send(roomId, text)
+            return
+        }
         val connection = transport.state.value
         if (connection !is ReticulumConnectionState.Connected) {
-            if (preview.previewMode.value) preview.send(roomId, text)
-            else _lastError.value = "Connect to this network's RRC hub before sending a message."
+            _lastError.value = "Connect to this network's RRC hub before sending a message."
             return
         }
         val room = preview.rooms.value.firstOrNull { it.id == roomId }
             ?: throw IllegalArgumentException("Unknown room")
         if (room.networkId != _activeHubNetworkId.value) {
-            if (preview.previewMode.value) preview.send(roomId, text)
-            else _lastError.value = "Connect to this room's RRC hub before sending a message."
+            _lastError.value = "Connect to this room's RRC hub before sending a message."
             return
         }
         val input = text.trim()
@@ -302,6 +443,10 @@ class ReticulumChatRepository(
     }
 
     override suspend fun sendDirectMessage(memberId: String, text: String) {
+        if (preview.previewMode.value) {
+            preview.sendDirectMessage(memberId, text)
+            return
+        }
         val input = text.trim()
         if (input.isBlank()) return
         val isAction = input.startsWith("/me ", ignoreCase = true)
@@ -311,24 +456,7 @@ class ReticulumChatRepository(
         val member = knownMembers.value.firstOrNull { it.id == memberId }
         val address = member?.address?.let(::normalizeLxmfAddress)
         if (!transport.nodeReady.value) {
-            if (!preview.previewMode.value) {
-                _lastError.value = "Start the Reticulum node before sending an LXMF message."
-                return
-            }
-            val now = text.trim()
-            val action = now.startsWith("/me ", ignoreCase = true)
-            val body = if (action) now.drop(4).trimStart() else now
-            val localMessage = ChatMessage(
-                id = "local-dm-${nextLocalMessageId++}",
-                author = "you",
-                text = body,
-                time = "now",
-                isMine = true,
-                isAction = action,
-            )
-            liveDirectMessages.value = liveDirectMessages.value +
-                (memberId to (liveDirectMessages.value[memberId].orEmpty() + localMessage))
-            persistState()
+            _lastError.value = "Start the Reticulum node before sending an LXMF message."
             return
         }
         if (transport.localDeliveryAddress.value == null) {
@@ -348,18 +476,19 @@ class ReticulumChatRepository(
     }
 
     suspend fun connectToHub(config: ReticulumConnectionConfig) {
+        check(!preview.previewMode.value) { "Turn off Local preview before connecting to an RRC hub." }
         _lastError.value = null
         val network = preview.networks.value.firstOrNull { it.id == config.networkId }
             ?: throw IllegalArgumentException("Select a configured RRC network first.")
         if (!network.hubDestination.equals(config.hubDestination, ignoreCase = true)) {
             throw IllegalArgumentException("The selected RRC network destination changed. Select it again.")
         }
-        _activeHubNetworkId.value = network.id
+        saveActiveHubNetworkId(network.id)
         transport.connect(config)
     }
 
     suspend fun disconnectFromHub() {
-        _activeHubNetworkId.value = null
+        saveActiveHubNetworkId(null)
         transport.disconnect()
     }
 
@@ -370,12 +499,43 @@ class ReticulumChatRepository(
         scope.cancel()
     }
 
+    /** Persist interface preferences, but keep the shared-instance RPC key session-only. */
+    fun saveNodeConfig(config: ReticulumNodeConfig) {
+        val storedConfig = config.copy(existingInstanceRpcKeyHex = null)
+        if (_nodeConfig.value == storedConfig) return
+        _nodeConfig.value = storedConfig
+        persistState()
+    }
+
+    fun saveGlobalNickname(value: String) {
+        val nickname = normalizeStarlingNickname(value)
+        if (_globalNickname.value == nickname) return
+        _globalNickname.value = nickname
+        persistState()
+    }
+
+    fun savePreferredHubNetworkId(networkId: String?) {
+        val normalized = networkId?.takeIf { id ->
+            preview.networks.value.any { it.id == id && !it.isPreview && !it.hubDestination.isNullOrBlank() }
+        }
+        if (_preferredHubNetworkId.value == normalized) return
+        _preferredHubNetworkId.value = normalized
+        persistState()
+    }
+
+    private fun saveActiveHubNetworkId(networkId: String?) {
+        if (_activeHubNetworkId.value == networkId) return
+        _activeHubNetworkId.value = networkId
+        persistState()
+    }
+
     private suspend fun joinConfiguredRooms() {
         val networkId = _activeHubNetworkId.value ?: return
         preview.rooms.value.filter { it.networkId == networkId }.forEach { joinRoomIfConnected(it) }
     }
 
     private suspend fun joinRoomIfConnected(room: ChatRoom) {
+        if (preview.previewMode.value) return
         if (transport.state.value !is ReticulumConnectionState.Connected) return
         val normalized = "${room.networkId}:${room.name.lowercase()}"
         if (room.networkId != _activeHubNetworkId.value) return
@@ -434,7 +594,7 @@ class ReticulumChatRepository(
             displayName = message.senderName.ifBlank { address.take(12) },
             address = address,
         )
-        if (member.id in liveBlockedMemberIds.value || member.id in preview.blockedMemberIds.value) return
+        if (member.id in liveBlockedMemberIds.value) return
         if (known == null && discoveredMembers.value.none { it.id == member.id }) {
             discoveredMembers.value = mergeMembers(discoveredMembers.value, listOf(member))
         }
@@ -508,9 +668,16 @@ class ReticulumChatRepository(
 
     private fun persistCurrentState() {
         val state = PersistedChatState(
-            networks = preview.networks.value.filter { !it.isPreview && !it.hubDestination.isNullOrBlank() },
-            rooms = preview.rooms.value.filter { room -> preview.networks.value.any { it.id == room.networkId && !it.isPreview } },
-            members = mergeMembers(preview.knownMembers.value, discoveredMembers.value),
+            previewMode = preview.previewMode.value,
+            nodeConfig = _nodeConfig.value,
+            preferredHubNetworkId = _preferredHubNetworkId.value,
+            localIdentityHash = _localIdentityHash.value,
+            globalNickname = _globalNickname.value,
+            networks = preview.persistedNetworks(),
+            rooms = preview.persistedRooms(),
+            activeHubNetworkId = _activeHubNetworkId.value,
+            members = mergeMembers(discoveredMembers.value, listOfNotNull(localMember.value))
+                .filterNot { preview.isPreviewMember(it.id) },
             contacts = liveContactMemberIds.value,
             blockedMembers = liveBlockedMemberIds.value,
             contactRequests = _contactRequests.value.filterNot { it.isPreview },

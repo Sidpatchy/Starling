@@ -110,6 +110,11 @@ class DesktopReticulumTransport(
         nodeController.sendBridgeCommand("LXMF_SEND\t${b64(address)}\t${b64(body)}")
     }
 
+    override suspend fun setLocalDisplayName(displayName: String) {
+        if (!nodeController.state.value.let { it is ReticulumNodeState.Running }) return
+        nodeController.sendBridgeCommand("LXMF_SET_NAME\t${b64(displayName)}")
+    }
+
     suspend fun close() {
         runCatching { disconnect() }
         scope.cancel()

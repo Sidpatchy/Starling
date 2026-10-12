@@ -20,6 +20,7 @@ data class ChatNetwork(
     val name: String,
     val hubDestination: String? = null,
     val isPreview: Boolean = false,
+    val rrcNickname: String? = null,
 )
 
 data class ChatMessage(
@@ -49,6 +50,8 @@ interface ChatRepository {
     fun addNetwork(name: String, hubDestination: String): ChatNetwork
     fun restoreNetwork(network: ChatNetwork)
     fun restoreRoom(room: ChatRoom)
+    fun removeRoom(roomId: String)
+    fun updateNetworkNickname(networkId: String, nickname: String?)
     fun setPreviewMode(enabled: Boolean)
     fun addRoom(networkId: String, name: String, topic: String): ChatRoom
     fun addContact(member: ChatMember)
@@ -158,11 +161,20 @@ class LocalPreviewChatRepository : ChatRepository {
         _rooms.value.filter { memberId in membersByRoom[it.id].orEmpty() }
 
     override fun addNetwork(name: String, hubDestination: String): ChatNetwork {
+        require(name.isNotBlank()) { "Enter a network name." }
+        if (_previewMode.value) {
+            val cleanName = name.trim()
+            allNetworks.value.firstOrNull { it.isPreview && it.name.equals(cleanName, ignoreCase = true) }?.let { return it }
+            val network = ChatNetwork("preview-local-${nextId++}", cleanName, isPreview = true)
+            allNetworks.value = allNetworks.value + network
+            refreshVisibleConfiguration()
+            return network
+        }
+
         val normalizedDestination = hubDestination.trim().lowercase()
         require(normalizedDestination.length == 32 && normalizedDestination.all { it in "0123456789abcdef" }) {
             "RRC hub destination must be a 32-character hexadecimal hash."
         }
-        require(name.isNotBlank()) { "Enter a network name." }
         val existing = allNetworks.value.firstOrNull { it.hubDestination == normalizedDestination }
         if (existing != null) return existing
         val network = ChatNetwork("rrc-$normalizedDestination", name.trim(), normalizedDestination)
@@ -182,10 +194,26 @@ class LocalPreviewChatRepository : ChatRepository {
     }
 
     override fun restoreRoom(room: ChatRoom) {
+        val normalizedRoom = room.copy(name = normalizeChannelName(room.name))
         if (allRooms.value.none { it.id == room.id }) {
-            allRooms.value = allRooms.value + room
+            allRooms.value = allRooms.value + normalizedRoom
             refreshVisibleConfiguration()
         }
+    }
+
+    override fun removeRoom(roomId: String) {
+        allRooms.value = allRooms.value.filterNot { it.id == roomId }
+        allMessagesByRoom.value = allMessagesByRoom.value - roomId
+        refreshVisibleConfiguration()
+    }
+
+    override fun updateNetworkNickname(networkId: String, nickname: String?) {
+        if (allNetworks.value.none { it.id == networkId }) return
+        val normalized = nickname?.let(::normalizeStarlingNickname)?.takeIf { it.isNotBlank() }
+        allNetworks.value = allNetworks.value.map { network ->
+            if (network.id == networkId) network.copy(rrcNickname = normalized) else network
+        }
+        refreshVisibleConfiguration()
     }
 
     override fun setPreviewMode(enabled: Boolean) {
@@ -197,13 +225,13 @@ class LocalPreviewChatRepository : ChatRepository {
 
     override fun addRoom(networkId: String, name: String, topic: String): ChatRoom {
         require(allNetworks.value.any { it.id == networkId }) { "Choose an existing network first." }
-        val cleanName = name.trim()
+        val cleanName = normalizeChannelName(name)
         require(cleanName.isNotBlank()) { "Enter a channel name." }
         val existing = allRooms.value.firstOrNull {
             it.networkId == networkId && it.name.equals(cleanName, ignoreCase = true)
         }
         if (existing != null) return existing
-        val room = ChatRoom("$networkId:room:${cleanName.lowercase()}", networkId, cleanName, topic.trim(), 0)
+        val room = ChatRoom("$networkId:room:$cleanName", networkId, cleanName, topic.trim(), 0)
         allRooms.value = allRooms.value + room
         refreshVisibleConfiguration()
         return room
@@ -296,22 +324,42 @@ class LocalPreviewChatRepository : ChatRepository {
     }
 
     private fun refreshVisibleConfiguration() {
-        val previewNetworkIds = allNetworks.value.filter { it.isPreview }.mapTo(mutableSetOf()) { it.id }
-        _networks.value = allNetworks.value.filter { _previewMode.value || !it.isPreview }
-        _rooms.value = allRooms.value.filter { _previewMode.value || it.networkId !in previewNetworkIds }
+        val visibleNetworks = allNetworks.value.filter { it.isPreview == _previewMode.value }
+        val visibleNetworkIds = visibleNetworks.mapTo(mutableSetOf()) { it.id }
+        _networks.value = visibleNetworks
+        _rooms.value = allRooms.value.filter { it.networkId in visibleNetworkIds }
         refreshVisibleMessages()
     }
 
     private fun refreshVisibleMessages() {
         val previewNetworkIds = allNetworks.value.filter { it.isPreview }.mapTo(mutableSetOf()) { it.id }
         val previewRoomIds = allRooms.value.filter { it.networkId in previewNetworkIds }.mapTo(mutableSetOf()) { it.id }
-        messagesByRoom.value = if (_previewMode.value) allMessagesByRoom.value
+        messagesByRoom.value = if (_previewMode.value) allMessagesByRoom.value.filterKeys { it in previewRoomIds }
             else allMessagesByRoom.value.filterKeys { it !in previewRoomIds }
     }
 
     private fun refreshVisibleRequests() {
-        _contactRequests.value = allContactRequests.value.filter { _previewMode.value || !it.isPreview }
+        _contactRequests.value = allContactRequests.value.filter { it.isPreview == _previewMode.value }
     }
+
+    internal fun persistedNetworks(): List<ChatNetwork> =
+        allNetworks.value.filter { !it.isPreview && !it.hubDestination.isNullOrBlank() }
+
+    internal fun persistedRooms(): List<ChatRoom> = allRooms.value.filter { room ->
+        allNetworks.value.any { it.id == room.networkId && !it.isPreview }
+    }
+
+    internal fun isPreviewMember(memberId: String): Boolean =
+        _knownMembers.value.any { it.id == memberId } || allContactRequests.value.any { it.isPreview && it.sender.id == memberId }
+}
+
+internal fun normalizeChannelName(name: String): String = name.trim().removePrefix("#").trim().lowercase()
+
+internal fun normalizeStarlingNickname(value: String): String {
+    var nickname = value.trim()
+    if (nickname.isEmpty()) return "Starling"
+    while (nickname.encodeToByteArray().size > 32) nickname = nickname.dropLast(1)
+    return nickname.ifBlank { "Starling" }
 }
 
 data class ChatMember(

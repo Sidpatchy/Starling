@@ -11,9 +11,10 @@
 
 - Desktop should feel like a traditional IRC client: networks with collapsible channels in a left sidebar and a member list pane on the right.
 - On mobile, expose the network/channel tree from a left-side slide-out drawer and the member list from a matching right-side drawer.
-- Keep a labeled connection-status entry at the bottom of the network/channel pane for quick status details, next to a separate gear entry for the full Settings page.
-- Keep a no-setup local preview mode for trying the UI; allow preview users to add local networks, channels, contacts, and sample DM activity without implying a live Reticulum connection.
+- Keep an Identity entry at the bottom of the network/channel pane for the local Reticulum identity, LXMF address, and connection status, next to a separate gear entry for Settings. Hub rows use green/amber/red status dots and support long-press/right-click detail views.
+- Keep a no-setup, isolated local preview mode for demonstrating the UI. Persist its on/off choice; while active, expose only sample/local demo data, hide live network and identity details, and disconnect live transports. Preview users can add local networks, channels, contacts, and sample DM activity without implying a live Reticulum connection.
 - In connected mode, prefer an app-managed embedded Reticulum node for the simplest setup and predictable lifecycle. Offer connection to an existing local RNS shared instance as an advanced alternative, not the default.
+- Restore a valid saved embedded-node configuration at app launch when Local preview is off, then reconnect to the saved preferred hub. Keep preview mode isolated and avoid silently persisting shared-instance RPC secrets.
 - Keep the default room timeline IRC/Discord-like and line-oriented rather than using iMessage-style chat bubbles; support IRC-style actions such as `/me` and basic inline Markdown (bold, italic, underline, strikethrough, and code). A bubble-based presentation can be an optional mode later.
 - Offer System, Light (One Light), and Dark (One Dark) color themes, plus an optional bubble-message presentation.
 - Use a violet/blue-violet accent rather than Meshtastic-like green; the Reticulum site itself uses a mostly neutral palette with blue links, not a strong green brand color.
@@ -22,7 +23,7 @@
 - The initial out-of-room add flow should accept a shareable LXMF address (including QR scan/share). Reticulum has no central username directory; any announced-peer browser is a separate, opt-in discovery feature, not global search.
 - Selecting a saved contact opens the shared IRC/Discord-style message timeline. Create/persist a conversation only when a message is sent or received, not merely when a contact is added.
 - First-time inbound DMs from unknown senders go to **Requests**, with accept/add-contact, ignore, and block actions. Accepting a request adds the sender as a contact.
-- On mobile, the member pane opens from the right-edge swipe as well as the person/count button.
+- On mobile, the member pane opens from the person/count button in the chat header.
 
 ## Protocol direction
 

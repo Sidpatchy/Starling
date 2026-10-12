@@ -7,6 +7,7 @@ interface ChatStateStore {
 }
 
 data class PersistedChatState(
+    val previewMode: Boolean = true,
     val networks: List<ChatNetwork> = emptyList(),
     val rooms: List<ChatRoom> = emptyList(),
     val members: List<ChatMember> = emptyList(),
@@ -15,17 +16,42 @@ data class PersistedChatState(
     val contactRequests: List<ChatContactRequest> = emptyList(),
     val roomMessages: Map<String, List<ChatMessage>> = emptyMap(),
     val directMessages: Map<String, List<ChatMessage>> = emptyMap(),
+    val nodeConfig: ReticulumNodeConfig? = null,
+    val preferredHubNetworkId: String? = null,
+    val activeHubNetworkId: String? = null,
+    val localIdentityHash: String? = null,
+    val globalNickname: String = "Starling",
 )
 
 /** Small versioned text codec to avoid platform-specific serialization APIs. */
 object ChatStateCodec {
-    private const val HEADER = "STARLING_CHAT_STATE_V3"
-    private val LEGACY_HEADERS = setOf("STARLING_CHAT_STATE_V1", "STARLING_CHAT_STATE_V2")
+    private const val HEADER = "STARLING_CHAT_STATE_V7"
+    private val LEGACY_HEADERS = setOf(
+        "STARLING_CHAT_STATE_V1", "STARLING_CHAT_STATE_V2", "STARLING_CHAT_STATE_V3", "STARLING_CHAT_STATE_V4",
+        "STARLING_CHAT_STATE_V5", "STARLING_CHAT_STATE_V6",
+    )
 
     fun encode(state: PersistedChatState): String = buildString {
         appendLine(HEADER)
+        appendRecord("P", state.previewMode.bit())
+        state.preferredHubNetworkId?.let { appendRecord("U", it) }
+        state.activeHubNetworkId?.let { appendRecord("L", it) }
+        state.localIdentityHash?.let { appendRecord("J", it) }
+        appendRecord("G", state.globalNickname)
+        state.nodeConfig?.let { config ->
+            appendRecord("V", config.mode.name)
+            config.tcpPeers.forEach { peer ->
+                appendRecord("T", peer.host, peer.port.toString(), peer.ifacNetworkName.orEmpty(), peer.ifacPassphrase.orEmpty())
+            }
+            config.rnodeInterfaces.forEach { radio ->
+                appendRecord(
+                    "I", radio.port, radio.frequencyHz.toString(), radio.bandwidthHz.toString(), radio.txPowerDbm.toString(),
+                    radio.spreadingFactor.toString(), radio.codingRate.toString(),
+                )
+            }
+        }
         state.networks.forEach { network ->
-            appendRecord("N", network.id, network.name, network.hubDestination.orEmpty())
+            appendRecord("N", network.id, network.name, network.hubDestination.orEmpty(), network.rrcNickname.orEmpty())
         }
         state.rooms.forEach { room ->
             appendRecord("H", room.id, room.networkId, room.name, room.topic, room.members.toString())
@@ -63,13 +89,52 @@ object ChatStateCodec {
         val requests = linkedMapOf<String, ChatContactRequest>()
         val rooms = linkedMapOf<String, MutableList<ChatMessage>>()
         val direct = linkedMapOf<String, MutableList<ChatMessage>>()
+        var nodeMode: ReticulumRuntimeMode? = null
+        val tcpPeers = mutableListOf<ReticulumTcpPeer>()
+        val rnodeInterfaces = mutableListOf<ReticulumRNodeInterface>()
+        var preferredHubNetworkId: String? = null
+        var activeHubNetworkId: String? = null
+        var localIdentityHash: String? = null
+        var globalNickname = "Starling"
+        var previewMode = true
 
         while (lines.hasNext()) {
             val fields = lines.next().split('\t')
             val decoded = fields.drop(1).map(::decodeField)
             when (fields.firstOrNull()) {
+                "P" -> previewMode = decoded.firstOrNull() == "1"
+                "U" -> preferredHubNetworkId = decoded.firstOrNull()?.ifBlank { null }
+                "L" -> activeHubNetworkId = decoded.firstOrNull()?.ifBlank { null }
+                "J" -> localIdentityHash = decoded.firstOrNull()?.ifBlank { null }
+                "G" -> globalNickname = decoded.firstOrNull()?.let(::normalizeStarlingNickname) ?: "Starling"
+                "V" -> nodeMode = decoded.firstOrNull()?.let { name ->
+                    runCatching { ReticulumRuntimeMode.valueOf(name) }.getOrNull()
+                }
+                "T" -> if (decoded.size >= 4) {
+                    tcpPeers += ReticulumTcpPeer(
+                        host = decoded[0],
+                        port = decoded[1].toIntOrNull() ?: 0,
+                        ifacNetworkName = decoded[2].ifBlank { null },
+                        ifacPassphrase = decoded[3].ifBlank { null },
+                    )
+                }
+                "I" -> if (decoded.size >= 6) {
+                    rnodeInterfaces += ReticulumRNodeInterface(
+                        port = decoded[0],
+                        frequencyHz = decoded[1].toLongOrNull() ?: 0L,
+                        bandwidthHz = decoded[2].toIntOrNull() ?: 0,
+                        txPowerDbm = decoded[3].toIntOrNull() ?: 0,
+                        spreadingFactor = decoded[4].toIntOrNull() ?: 0,
+                        codingRate = decoded[5].toIntOrNull() ?: 0,
+                    )
+                }
                 "N" -> if (decoded.size >= 3 && decoded[0].isNotBlank() && decoded[2].isNotBlank()) {
-                    val network = ChatNetwork(decoded[0], decoded[1], decoded[2])
+                    val network = ChatNetwork(
+                        id = decoded[0],
+                        name = decoded[1],
+                        hubDestination = decoded[2],
+                        rrcNickname = decoded.getOrNull(3)?.trim()?.takeIf(String::isNotEmpty)?.let(::normalizeStarlingNickname),
+                    )
                     networks[network.id] = network
                 }
                 "H" -> if (decoded.size >= 5 && decoded[0].isNotBlank() && decoded[1].isNotBlank()) {
@@ -109,6 +174,7 @@ object ChatStateCodec {
             }
         }
         return PersistedChatState(
+            previewMode = previewMode,
             networks = networks.values.toList(),
             rooms = configuredRooms.values.toList(),
             members = members.values.toList(),
@@ -117,6 +183,13 @@ object ChatStateCodec {
             contactRequests = requests.values.toList(),
             roomMessages = rooms,
             directMessages = direct,
+            nodeConfig = nodeMode?.let { mode ->
+                ReticulumNodeConfig(mode = mode, tcpPeers = tcpPeers, rnodeInterfaces = rnodeInterfaces)
+            },
+            preferredHubNetworkId = preferredHubNetworkId,
+            activeHubNetworkId = activeHubNetworkId,
+            localIdentityHash = localIdentityHash,
+            globalNickname = globalNickname,
         )
     }
 

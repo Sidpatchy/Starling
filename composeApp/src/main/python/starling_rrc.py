@@ -646,10 +646,11 @@ def _lxmf_address_for_identity(identity_hash):
 
         if isinstance(identity_hash, str):
             identity_hash = bytes.fromhex(identity_hash)
-        identity = RNS.Identity.recall(identity_hash, from_identity_hash=True)
-        if identity is None:
+        if len(identity_hash) != RNS.Identity.TRUNCATED_HASHLENGTH // 8:
             return ""
-        destination = RNS.Destination(identity, RNS.Destination.OUT, RNS.Destination.SINGLE, "lxmf", "delivery")
-        return destination.hash.hex()
+        # An LXMF delivery destination hash is deterministic from the public
+        # identity hash, so contacts don't need to have been separately
+        # announced to this node before their address can be offered.
+        return RNS.Destination.hash(identity_hash, "lxmf", "delivery").hex()
     except Exception:
         return ""

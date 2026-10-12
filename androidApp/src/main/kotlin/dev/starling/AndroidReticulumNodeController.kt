@@ -8,9 +8,11 @@ import android.os.Build
 import org.json.JSONArray
 import org.json.JSONObject
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.withTimeoutOrNull
 
 /** Starts and observes the isolated Android RNS service without blocking Compose. */
 class AndroidReticulumNodeController(context: Context) : ReticulumNodeController {
@@ -18,19 +20,35 @@ class AndroidReticulumNodeController(context: Context) : ReticulumNodeController
     private val _state = MutableStateFlow<ReticulumNodeState>(ReticulumNodeState.Stopped)
     override val state: StateFlow<ReticulumNodeState> = _state.asStateFlow()
     override val isSupported: Boolean = true
+    private var pendingStateQuery: CompletableDeferred<ReticulumNodeState>? = null
 
     private val receiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action != ReticulumNodeService.ACTION_STATE) return
-            _state.value = stateFromIntent(intent)
+            val state = stateFromIntent(intent)
+            _state.value = state
+            pendingStateQuery?.complete(state)
         }
     }
 
     init {
         val filter = IntentFilter(ReticulumNodeService.ACTION_STATE)
         ContextCompat.registerReceiver(appContext, receiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
-        // If Android recreated the Activity while the node service stayed up,
-        // its next periodic state broadcast restores the UI state.
+    }
+
+    override suspend fun refreshState() {
+        val response = CompletableDeferred<ReticulumNodeState>()
+        pendingStateQuery = response
+        try {
+            appContext.startService(Intent(appContext, ReticulumNodeService::class.java).apply {
+                action = ReticulumNodeService.ACTION_NODE_STATUS
+            })
+            withTimeoutOrNull(2_000) { response.await() }
+        } catch (_: Exception) {
+            // Keep the last known state; startup code can still make a guarded attempt.
+        } finally {
+            if (pendingStateQuery === response) pendingStateQuery = null
+        }
     }
 
     override suspend fun start(config: ReticulumNodeConfig) {

@@ -53,13 +53,11 @@ def read_commands():
     commands.put("EOF")
 
 
-def dispatch_rrc(command, rrc, lxmf=None):
+def dispatch_rrc(command, rrc):
     fields = command.split("\t")
     action = fields[0]
     if action == "RRC_CONNECT" and len(fields) == 3:
         display_name = decode(fields[2])
-        if lxmf is not None:
-            lxmf.set_display_name(display_name)
         rrc.connect(decode(fields[1]), display_name)
     elif action == "RRC_DISCONNECT":
         rrc.disconnect()
@@ -77,6 +75,8 @@ def dispatch_lxmf(command, lxmf):
     fields = command.split("\t")
     if fields[0] == "LXMF_SEND" and len(fields) == 3:
         lxmf.send_direct(decode(fields[1]), decode(fields[2]))
+    elif fields[0] == "LXMF_SET_NAME" and len(fields) == 2:
+        lxmf.set_display_name(decode(fields[1]))
     else:
         raise ValueError("Invalid LXMF command")
 
@@ -173,7 +173,7 @@ def main():
                 if command.startswith("LXMF_"):
                     dispatch_lxmf(command, starling_lxmf)
                 else:
-                    dispatch_rrc(command, starling_rrc, starling_lxmf)
+                    dispatch_rrc(command, starling_rrc)
             except Exception as error:
                 emit("EVENT\tERROR\t{}\t".format(encode(str(error) or error.__class__.__name__)))
 
