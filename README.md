@@ -55,7 +55,7 @@ Apple Silicon and Intel macOS DMGs. These packages run on published GitHub
 Releases or manual dispatch, not on every commit; release builds are attached
 to the release page. Mobile CI also attaches an unsigned APK and device IPA.
 The initial app version is `0.1.0-alpha.1` in `gradle.properties`; publish a
-matching `v0.1.0-alpha.1` release tag. MSI/DMG package metadata uses the numeric
+matching `0.1.0-alpha.1` release tag (a leading `v` is also accepted). MSI/DMG package metadata uses the numeric
 `0.1.0` base, while the downloadable asset names keep the prerelease suffix.
 The desktop packages are unsigned (the DMGs are not notarized). AppImage, MSI,
 and DMG include the JVM but need host Python 3.8+ for Reticulum; Flatpak bundles

@@ -29,8 +29,8 @@ jobs:
             echo "gradle.properties must define starlingVersion as semantic version X.Y.Z[-prerelease]." >&2
             exit 1
           fi
-          if [[ "$GITHUB_EVENT_NAME" == "release" && "$GITHUB_REF_NAME" != "v$app_version" ]]; then
-            echo "Release tag v$app_version must match starlingVersion=$app_version in gradle.properties." >&2
+          if [[ "$GITHUB_EVENT_NAME" == "release" && "$GITHUB_REF_NAME" != "$app_version" && "$GITHUB_REF_NAME" != "v$app_version" ]]; then
+            echo "Release tag must be $app_version (optionally prefixed with v) to match gradle.properties." >&2
             exit 1
           fi
           echo "app_version=$app_version" >> "$GITHUB_OUTPUT"
