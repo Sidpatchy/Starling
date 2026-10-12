@@ -9,8 +9,36 @@ permissions:
   contents: read
 
 jobs:
+  resolve-version:
+    name: Resolve release version
+    runs-on: ubuntu-latest
+    outputs:
+      app_version: ${{ steps.version.outputs.app_version }}
+      package_version: ${{ steps.version.outputs.package_version }}
+      android_code: ${{ github.run_number }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Validate and export version
+        id: version
+        shell: bash
+        run: |
+          app_version="$(sed -n 's/^starlingVersion=//p' gradle.properties | tail -n 1)"
+          if [[ ! "$app_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "gradle.properties must define starlingVersion as semantic version X.Y.Z[-prerelease]." >&2
+            exit 1
+          fi
+          if [[ "$GITHUB_EVENT_NAME" == "release" && "$GITHUB_REF_NAME" != "v$app_version" ]]; then
+            echo "Release tag v$app_version must match starlingVersion=$app_version in gradle.properties." >&2
+            exit 1
+          fi
+          echo "app_version=$app_version" >> "$GITHUB_OUTPUT"
+          echo "package_version=${app_version%%-*}" >> "$GITHUB_OUTPUT"
+
   android-apk:
     name: Unsigned Android APK
+    needs: resolve-version
     runs-on: ubuntu-latest
     steps:
       - name: Check out source
@@ -39,17 +67,25 @@ jobs:
         run: sdkmanager --install "platforms;android-37" "build-tools;37.0.0"
 
       - name: Build release APK
-        run: ./gradlew --no-daemon :androidApp:assembleRelease
+        run: ./gradlew --no-daemon "-PstarlingVersion=${{ needs.resolve-version.outputs.app_version }}" "-PstarlingVersionCode=${{ needs.resolve-version.outputs.android_code }}" :androidApp:assembleRelease
+
+      - name: Name APK with release version
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          cp androidApp/build/outputs/apk/release/androidApp-release-unsigned.apk \
+            "artifacts/Starling-${{ needs.resolve-version.outputs.app_version }}-android-unsigned.apk"
 
       - name: Upload unsigned APK
         uses: actions/upload-artifact@v7
         with:
           name: starling-android-unsigned-apk
-          path: androidApp/build/outputs/apk/release/*-unsigned.apk
+          path: artifacts/Starling-${{ needs.resolve-version.outputs.app_version }}-android-unsigned.apk
           if-no-files-found: error
 
   ios-ipa:
     name: Unsigned iOS IPA
+    needs: resolve-version
     runs-on: macos-latest
     steps:
       - name: Check out source
@@ -68,7 +104,7 @@ jobs:
         run: brew install xtool-org/tap/xtool
 
       - name: Build Compose iOS framework
-        run: ./gradlew --no-daemon :composeApp:assembleComposeAppDebugXCFramework
+        run: ./gradlew --no-daemon "-PstarlingVersion=${{ needs.resolve-version.outputs.app_version }}" :composeApp:assembleComposeAppDebugXCFramework
 
       - name: Build unsigned device IPA
         run: xtool dev build --configuration debug --ipa --triple arm64-apple-ios
@@ -82,19 +118,19 @@ jobs:
             exit 1
           fi
           mkdir -p artifacts
-          cp "$ipa_path" artifacts/Starling-unsigned.ipa
+          cp "$ipa_path" "artifacts/Starling-${{ needs.resolve-version.outputs.app_version }}-ios-unsigned.ipa"
 
       - name: Upload unsigned IPA
         uses: actions/upload-artifact@v7
         with:
           name: starling-ios-unsigned-ipa
-          path: artifacts/Starling-unsigned.ipa
+          path: artifacts/Starling-${{ needs.resolve-version.outputs.app_version }}-ios-unsigned.ipa
           if-no-files-found: error
 
   publish-release-assets:
     name: Attach mobile builds to release
     if: github.event_name == 'release'
-    needs: [android-apk, ios-ipa]
+    needs: [resolve-version, android-apk, ios-ipa]
     runs-on: ubuntu-latest
     permissions:
       contents: write

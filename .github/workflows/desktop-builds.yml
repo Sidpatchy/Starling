@@ -9,8 +9,35 @@ permissions:
   contents: read
 
 jobs:
+  resolve-version:
+    name: Resolve release version
+    runs-on: ubuntu-latest
+    outputs:
+      app_version: ${{ steps.version.outputs.app_version }}
+      package_version: ${{ steps.version.outputs.package_version }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Validate and export version
+        id: version
+        shell: bash
+        run: |
+          app_version="$(sed -n 's/^starlingVersion=//p' gradle.properties | tail -n 1)"
+          if [[ ! "$app_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "gradle.properties must define starlingVersion as semantic version X.Y.Z[-prerelease]." >&2
+            exit 1
+          fi
+          if [[ "$GITHUB_EVENT_NAME" == "release" && "$GITHUB_REF_NAME" != "v$app_version" ]]; then
+            echo "Release tag v$app_version must match starlingVersion=$app_version in gradle.properties." >&2
+            exit 1
+          fi
+          echo "app_version=$app_version" >> "$GITHUB_OUTPUT"
+          echo "package_version=${app_version%%-*}" >> "$GITHUB_OUTPUT"
+
   linux-packages:
     name: Linux AppImage and Flatpak input
+    needs: resolve-version
     runs-on: ubuntu-22.04
     steps:
       - name: Check out source
@@ -26,7 +53,7 @@ jobs:
         uses: gradle/actions/setup-gradle@v6
 
       - name: Build self-contained desktop image
-        run: ./gradlew --no-daemon :composeApp:createDistributable
+        run: ./gradlew --no-daemon "-PstarlingVersion=${{ needs.resolve-version.outputs.app_version }}" "-PstarlingPackageVersion=${{ needs.resolve-version.outputs.package_version }}" :composeApp:createDistributable
 
       - name: Install AppImage extraction dependency
         run: sudo apt-get update && sudo apt-get install --yes libfuse2
@@ -46,6 +73,8 @@ jobs:
 
       - name: Package AppImage
         run: packaging/linux/build-appimage.sh
+        env:
+          APP_VERSION: ${{ needs.resolve-version.outputs.app_version }}
 
       - name: Archive desktop image for Flatpak
         run: |
@@ -57,7 +86,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: starling-linux-appimage-x86_64
-          path: composeApp/build/appimage/artifacts/Starling-0.1.0-x86_64.AppImage
+          path: composeApp/build/appimage/artifacts/Starling-${{ needs.resolve-version.outputs.app_version }}-x86_64.AppImage
           if-no-files-found: error
 
       - name: Upload Flatpak input image
@@ -69,7 +98,7 @@ jobs:
 
   flatpak:
     name: Linux Flatpak
-    needs: linux-packages
+    needs: [resolve-version, linux-packages]
     runs-on: ubuntu-latest
     container:
       image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-48
@@ -94,12 +123,13 @@ jobs:
         uses: flatpak/flatpak-github-actions/flatpak-builder@v6
         with:
           manifest-path: packaging/flatpak/dev.starling.Starling.yml
-          bundle: Starling-0.1.0-x86_64.flatpak
+          bundle: Starling-${{ needs.resolve-version.outputs.app_version }}-x86_64.flatpak
           branch: stable
           artifact-name: starling-linux-flatpak-x86_64
 
   windows-msi:
     name: Windows MSI
+    needs: resolve-version
     runs-on: windows-latest
     steps:
       - name: Check out source
@@ -125,7 +155,7 @@ jobs:
           if ($null -ne $wix) { "$($wix.FullName)\bin" | Out-File -FilePath $env:GITHUB_PATH -Append }
 
       - name: Build unsigned Windows MSI
-        run: .\gradlew.bat --no-daemon :composeApp:packageReleaseMsi
+        run: .\gradlew.bat --no-daemon "-PstarlingVersion=${{ needs.resolve-version.outputs.app_version }}" "-PstarlingPackageVersion=${{ needs.resolve-version.outputs.package_version }}" :composeApp:packageReleaseMsi
 
       - name: Collect MSI
         shell: pwsh
@@ -134,17 +164,18 @@ jobs:
             Select-Object -First 1
           if ($null -eq $package) { throw 'Gradle did not produce an MSI.' }
           New-Item -ItemType Directory -Force artifacts | Out-Null
-          Copy-Item $package.FullName artifacts/Starling-0.1.0-windows-x64.msi
+          Copy-Item $package.FullName "artifacts/Starling-${{ needs.resolve-version.outputs.app_version }}-windows-x64.msi"
 
       - name: Upload MSI
         uses: actions/upload-artifact@v7
         with:
           name: starling-windows-msi-x64
-          path: artifacts/Starling-0.1.0-windows-x64.msi
+          path: artifacts/Starling-${{ needs.resolve-version.outputs.app_version }}-windows-x64.msi
           if-no-files-found: error
 
   macos-dmg:
     name: macOS DMG (${{ matrix.arch }})
+    needs: resolve-version
     strategy:
       fail-fast: false
       matrix:
@@ -168,7 +199,7 @@ jobs:
         uses: gradle/actions/setup-gradle@v6
 
       - name: Build unsigned macOS DMG
-        run: ./gradlew --no-daemon :composeApp:packageReleaseDmg
+        run: ./gradlew --no-daemon "-PstarlingVersion=${{ needs.resolve-version.outputs.app_version }}" "-PstarlingPackageVersion=${{ needs.resolve-version.outputs.package_version }}" :composeApp:packageReleaseDmg
 
       - name: Collect DMG
         run: |
@@ -178,19 +209,19 @@ jobs:
             exit 1
           fi
           mkdir -p artifacts
-          cp "$dmg_path" "artifacts/Starling-0.1.0-macos-${{ matrix.arch }}.dmg"
+          cp "$dmg_path" "artifacts/Starling-${{ needs.resolve-version.outputs.app_version }}-macos-${{ matrix.arch }}.dmg"
 
       - name: Upload DMG
         uses: actions/upload-artifact@v7
         with:
           name: starling-macos-dmg-${{ matrix.arch }}
-          path: artifacts/Starling-0.1.0-macos-${{ matrix.arch }}.dmg
+          path: artifacts/Starling-${{ needs.resolve-version.outputs.app_version }}-macos-${{ matrix.arch }}.dmg
           if-no-files-found: error
 
   publish-release-assets:
     name: Attach desktop builds to release
     if: github.event_name == 'release'
-    needs: [linux-packages, flatpak, windows-msi, macos-dmg]
+    needs: [resolve-version, linux-packages, flatpak, windows-msi, macos-dmg]
     runs-on: ubuntu-latest
     permissions:
       contents: write
