@@ -61,10 +61,19 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
         with:
-          packages: platform-tools
+          packages: |
+            platform-tools
+            platforms;android-37
+            build-tools;37.0.0
 
-      - name: Install Android API 37 SDK packages
-        run: sdkmanager --install "platforms;android-37" "build-tools;37.0.0"
+      - name: Accept Android SDK licenses
+        shell: bash
+        run: |
+          if [ -n "${ANDROID_SDK_ROOT:-}" ]; then
+            yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --licenses || true
+          else
+            yes | sdkmanager --licenses || true
+          fi
 
       - name: Build release APK
         run: ./gradlew --no-daemon "-PstarlingVersion=${{ needs.resolve-version.outputs.app_version }}" "-PstarlingVersionCode=${{ needs.resolve-version.outputs.android_code }}" :androidApp:assembleRelease
