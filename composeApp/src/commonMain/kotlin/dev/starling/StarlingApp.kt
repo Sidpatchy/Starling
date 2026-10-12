@@ -2145,7 +2145,7 @@ private fun MessageRow(
                     .clickable(enabled = member != null && !member.isSelf, onClick = onMemberClick)
                     .alignBy(FirstBaseline),
                 color = authorColor,
-                fontSize = 12.sp,
+                fontSize = 13.sp,
                 fontWeight = FontWeight.SemiBold,
             )
                 Spacer(Modifier.width(5.dp))
