@@ -1,0 +1,39 @@
+app-id: dev.starling.Starling
+runtime: org.freedesktop.Platform
+runtime-version: '25.08'
+sdk: org.freedesktop.Sdk
+command: starling
+finish-args:
+  - --share=network
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  - --device=all
+modules:
+  - name: starling
+    buildsystem: simple
+    build-options:
+      build-args:
+        - --share=network
+    build-commands:
+      - python3 -m pip install --disable-pip-version-check --no-warn-script-location --target=/app/lib/starling-python rns==1.5.7 lxmf==1.2.0
+      - install -d /app/opt/starling
+      - cp -a Starling/. /app/opt/starling/
+      - install -Dm755 starling.sh /app/bin/starling
+      - install -Dm644 dev.starling.Starling.desktop /app/share/applications/dev.starling.Starling.desktop
+      - install -Dm644 dev.starling.Starling.metainfo.xml /app/share/metainfo/dev.starling.Starling.metainfo.xml
+      - install -Dm644 starling.png /app/share/icons/hicolor/512x512/apps/dev.starling.Starling.png
+    sources:
+      - type: dir
+        path: ../../composeApp/build/compose/binaries/main/app/Starling
+        dest: Starling
+      - type: file
+        path: starling.sh
+      - type: file
+        path: dev.starling.Starling.desktop
+      - type: file
+        path: dev.starling.Starling.metainfo.xml
+      - type: file
+        path: ../../assets/branding/starling-light-512.png
+        dest-filename: starling.png

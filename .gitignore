@@ -6,6 +6,7 @@ local.properties
 out/
 .build/
 .bsp/
+.flatpak-builder/
 xtool/
 __pycache__/
 *.py[cod]

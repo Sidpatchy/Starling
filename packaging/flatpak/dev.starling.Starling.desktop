@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Starling
+Comment=Chat over Reticulum
+Exec=starling
+Icon=dev.starling.Starling
+Terminal=false
+Categories=Network;InstantMessaging;
+StartupWMClass=Starling

@@ -102,25 +102,34 @@ class DesktopReticulumNodeController : ReticulumNodeController {
         val logFile = dataDirectory.resolve("starling-rns.log").toFile()
         _state.value = ReticulumNodeState.PreparingRuntime("Looking for a Python 3 interpreter…")
         val basePython = findPython(logFile)
+        val packagedPython = System.getenv("STARLING_PYTHON_PACKAGED") == "1"
         val venvDirectory = dataDirectory.resolve("python-env")
         val venvPython = venvPythonPath(venvDirectory)
+        val runtimePython: List<String>
 
-        if (!Files.isRegularFile(venvPython)) {
-            _state.value = ReticulumNodeState.PreparingRuntime("Creating Starling’s private Python environment…")
-            runChecked(basePython + listOf("-m", "venv", venvDirectory.toString()), logFile, "Could not create a private Python environment")
-        }
+        if (packagedPython) {
+            runtimePython = basePython
+            if (!hasPinnedRuntime(runtimePython, logFile)) {
+                throw IllegalStateException("The packaged Python runtime is missing RNS 1.5.7 or LXMF 1.2.0.")
+            }
+        } else {
+            if (!Files.isRegularFile(venvPython)) {
+                _state.value = ReticulumNodeState.PreparingRuntime("Creating Starling’s private Python environment…")
+                runChecked(basePython + listOf("-m", "venv", venvDirectory.toString()), logFile, "Could not create a private Python environment")
+            }
 
-        if (!hasPinnedRuntime(venvPython, logFile)) {
-            _state.value = ReticulumNodeState.PreparingRuntime("Installing reference RNS and LXMF in Starling’s private environment (first run only)…")
-            runChecked(
-                listOf(
-                    venvPython.toString(), "-m", "pip", "install", "--disable-pip-version-check",
-                    "--no-input", "rns==1.5.7", "lxmf==1.2.0",
-                ),
-                logFile,
-                "Could not install RNS 1.5.7 and LXMF 1.2.0. Check the Starling log and your internet connection",
-                timeoutSeconds = 600,
-            )
+            runtimePython = listOf(venvPython.toString())
+            if (!hasPinnedRuntime(runtimePython, logFile)) {
+                _state.value = ReticulumNodeState.PreparingRuntime("Installing reference RNS and LXMF in Starling’s private Python environment (first run only)…")
+                runChecked(
+                    runtimePython + listOf(
+                        "-m", "pip", "install", "--disable-pip-version-check", "--no-input", "rns==1.5.7", "lxmf==1.2.0",
+                    ),
+                    logFile,
+                    "Could not install RNS 1.5.7 and LXMF 1.2.0. Check the Starling log and your internet connection",
+                    timeoutSeconds = 600,
+                )
+            }
         }
 
         val bridgeDirectory = dataDirectory.resolve("python-bridge")
@@ -132,8 +141,10 @@ class DesktopReticulumNodeController : ReticulumNodeController {
 
         _state.value = ReticulumNodeState.Starting(config.mode)
         val child = ProcessBuilder(
-            venvPython.toString(), "-u", bridgeDirectory.resolve("starling_rns_service.py").toString(),
-            dataDirectory.resolve("reticulum").toString(),
+            runtimePython + listOf(
+                "-u", bridgeDirectory.resolve("starling_rns_service.py").toString(),
+                dataDirectory.resolve("reticulum").toString(),
+            ),
         ).redirectError(ProcessBuilder.Redirect.appendTo(logFile)).start()
         val writer = child.outputStream.bufferedWriter(Charsets.UTF_8)
         val reader = child.inputStream.bufferedReader(Charsets.UTF_8)
@@ -312,11 +323,13 @@ class DesktopReticulumNodeController : ReticulumNodeController {
         }
     }
 
-    private fun hasPinnedRuntime(python: Path, logFile: File): Boolean {
+    private fun hasPinnedRuntime(python: List<String>, logFile: File): Boolean {
         val check = try {
             ProcessBuilder(
-                python.toString(), "-c",
-                "import importlib.metadata as m; import RNS, LXMF; assert m.version('rns') == '1.5.7' and m.version('lxmf') == '1.2.0'",
+                python + listOf(
+                    "-c",
+                    "import importlib.metadata as m; import RNS, LXMF; assert m.version('rns') == '1.5.7' and m.version('lxmf') == '1.2.0'",
+                ),
             ).redirectErrorStream(true).redirectOutput(ProcessBuilder.Redirect.appendTo(logFile)).start()
         } catch (_: Exception) {
             return false

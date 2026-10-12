@@ -77,12 +77,22 @@ compose.desktop {
         mainClass = "dev.starling.MainKt"
 
         nativeDistributions {
-            targetFormats(TargetFormat.Deb, TargetFormat.Rpm)
+            targetFormats(TargetFormat.Deb, TargetFormat.Rpm, TargetFormat.Msi, TargetFormat.Dmg)
             packageName = "Starling"
             packageVersion = "0.1.0"
 
             linux {
                 iconFile.set(project.file("../assets/branding/starling-light-preview.png"))
+            }
+
+            windows {
+                iconFile.set(project.file("../assets/branding/starling.ico"))
+                upgradeUuid = "db0d573c-06b1-4e8a-9e18-2021a8c9ef71"
+            }
+
+            macOS {
+                bundleID = "dev.starling.desktop"
+                iconFile.set(project.file("../assets/branding/starling.icns"))
             }
         }
     }

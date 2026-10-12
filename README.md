@@ -1,14 +1,15 @@
 # Starling
 
 Starling is a focused chat client for Reticulum, built with Kotlin Multiplatform
-and Compose Multiplatform. Android and Linux desktop share the initial UI.
+and Compose Multiplatform. Android and desktop share the same UI.
 
 The app keeps an isolated local preview as its no-setup mode. Its on/off choice
 is saved, and preview hides live network settings and communications data.
 Android and desktop can
 start an embedded RNS node over multiple user-configured TCP peers at once or
 attach to an existing local RNS shared instance in advanced mode. Desktop can
-also attach RNode firmware radios over serial. Each embedded TCP connection can
+also attach RNode firmware radios over serial on Linux, Windows, and macOS.
+Each embedded TCP connection can
 have its own optional IFAC network name and passphrase. Live rooms use RRC and
 direct messages use the reference LXMF router. RRC rooms are joined by channel
 name; RRC does not provide room discovery or history. See
@@ -48,3 +49,15 @@ To build the Android debug APK (requires an Android SDK):
 ```sh
 ./gradlew :androidApp:assembleDebug
 ```
+
+Desktop CI builds Linux AppImage and Flatpak bundles, a Windows MSI, and
+Apple Silicon and Intel macOS DMGs. These packages run on published GitHub
+Releases or manual dispatch, not on every commit; release builds are attached
+to the release page. Mobile CI also attaches an unsigned APK and device IPA.
+The desktop packages are unsigned (the DMGs are not notarized). AppImage, MSI,
+and DMG include the JVM but need host Python 3.8+ for Reticulum; Flatpak bundles
+its Python/RNS dependencies and requests device access for optional serial
+RNode radios. Example serial
+ports are `COM3` on Windows, `/dev/cu.usbserial*` on macOS, and
+`/dev/ttyUSB*` or `/dev/ttyACM*` on Linux. USB serial drivers and OS device
+permissions are still required.

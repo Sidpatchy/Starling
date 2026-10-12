@@ -2061,7 +2061,7 @@ private fun SettingsPage(
                                         connectionInputError = null
                                     },
                                     modifier = Modifier.fillMaxWidth(),
-                                    label = { Text("Serial port (e.g. /dev/ttyUSB0)") },
+                                    label = { Text("Serial port (e.g. COM3, /dev/cu.* or /dev/ttyUSB0)") },
                                     singleLine = true,
                                     enabled = !isRunning && !isStarting,
                                 )

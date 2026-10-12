@@ -4,7 +4,7 @@
 
 - **Local Preview** remains enabled by default, and its on/off choice is persisted with chat state. Preview is isolated from live Reticulum state: it shows only sample/local preview data, hides live addresses and connection configuration, ignores live events, and disconnects the node and hub while active. Preview messages are never sent over RNS.
 - Android has an embedded node using reference `rns==1.5.7` and `lxmf==1.2.0` through Chaquopy 17 / Python 3.13.
-- Desktop runs the same Python bridge in a child process, installing those pinned packages into a Starling-private virtual environment on first explicit connection.
+- Desktop runs the same Python bridge in a child process, installing those pinned packages into a Starling-private virtual environment on first explicit connection. Windows and macOS use this same host-Python flow; Flatpak ships the Python/RNS dependencies inside its app bundle.
 - Android starts the node on demand from Settings in a dedicated process and foreground service. Android shows an ongoing notification while it is running.
 - Embedded mode configures multiple outbound `TCPClientInterface` instances from the TCP peer list. Each connection can have its own optional IFAC network name and passphrase; both must match that peer's interface settings. RNS transport-node routing is explicitly disabled; Starling is a client, not a gateway.
 - Desktop can configure one or more reference `RNodeInterface` instances over serial ports (for example `/dev/ttyUSB0`), including the radio frequency, bandwidth, transmit power, spreading factor, and coding rate. RNS configures the radio when the node starts; the RNode must already have compatible RNode firmware installed. The first implementation is desktop serial only; Android USB/Bluetooth and direct BLE support are not wired into Starling yet.
@@ -19,10 +19,10 @@ The UI distinguishes node/interface state from RRC hub connection state. In live
 ## Desktop RNode setup (initial serial support)
 
 1. Use a supported LoRa board and flash it with RNode firmware using the upstream `rnodeconf --autoinstall` workflow. Starling does not flash or update radio firmware.
-2. Connect the RNode to the desktop over USB serial and note its serial device path (for example, `/dev/ttyUSB0`).
+2. Connect the RNode over USB serial and note its port (`/dev/ttyUSB0` or `/dev/ttyACM0` on Linux, `COM3` on Windows, or `/dev/cu.usbserial*` on macOS).
 3. In Settings, add an RNode serial interface and enter its serial path and radio parameters in Hz/dBm.
 
-The radio parameters must match the RNode network and comply with local spectrum and transmit-power rules. RNode firmware replaces the board's Meshtastic firmware; it does not make a Meshtastic radio transparently speak Reticulum. Use a spare or otherwise appropriate device if you need to keep your existing Meshtastic node online.
+The radio parameters must match the RNode network and comply with local spectrum and transmit-power rules. RNode firmware replaces the board's Meshtastic firmware; it does not make a Meshtastic radio transparently speak Reticulum. Use a spare or otherwise appropriate device if you need to keep your existing Meshtastic node online. Windows and macOS use the same RNS/PySerial interface; the OS serial driver and device permissions are still required. Flatpak grants device access so serial radios can work inside its sandbox.
 
 This first Starling adapter is desktop serial only. Direct Android USB/Bluetooth and direct BLE support are not included yet. As with other Starling embedded interfaces, transport-node routing remains disabled, so Starling does not relay traffic for other nodes.
 
@@ -51,6 +51,13 @@ ANDROID_HOME="$HOME/Android/Sdk" ./gradlew :androidApp:assembleDebug
 ```
 
 The runtime experiment requires Android API 24 or newer and currently packages `arm64-v8a` and `x86_64`. The generated config is intentionally minimal; no transport routing is enabled.
+
+Desktop CI packages the self-contained JVM image as an x86_64 AppImage,
+Flatpak, and Windows MSI, plus Apple Silicon and Intel macOS DMGs. The AppImage, MSI,
+and DMG require host Python 3.8+ for live Reticulum. Flatpak bundles the Python
+runtime dependencies. Windows serial names look like `COM3`; macOS ports are
+typically `/dev/cu.*`. These desktop packages have not yet been tested against
+physical Windows/macOS systems or RNode hardware.
 
 ## Existing shared instance setup
 

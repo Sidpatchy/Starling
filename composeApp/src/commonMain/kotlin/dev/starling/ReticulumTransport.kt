@@ -41,7 +41,7 @@ data class ReticulumRNodeInterface(
     val id: String get() = port.trim().lowercase()
 
     fun validationError(): String? = when {
-        port.isBlank() -> "Enter the RNode serial port, such as /dev/ttyUSB0."
+        port.isBlank() -> "Enter the RNode serial port, such as COM3, /dev/cu.usbserial, or /dev/ttyUSB0."
         port.any { it.code < 32 || it.code == 127 } -> "The RNode serial port cannot contain control characters."
         frequencyHz !in 137_000_000L..3_000_000_000L -> "RNode frequency must be between 137 MHz and 3 GHz."
         bandwidthHz !in 7_800..1_625_000 -> "RNode bandwidth must be between 7.8 kHz and 1.625 MHz."
