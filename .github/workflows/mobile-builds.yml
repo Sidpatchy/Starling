@@ -1,8 +1,8 @@
 name: Build mobile artifacts
 
 on:
-  push:
-  pull_request:
+  release:
+    types: [published]
   workflow_dispatch:
 
 permissions:
@@ -88,3 +88,29 @@ jobs:
           name: starling-ios-unsigned-ipa
           path: artifacts/Starling-unsigned.ipa
           if-no-files-found: error
+
+  publish-release-assets:
+    name: Attach mobile builds to release
+    if: github.event_name == 'release'
+    needs: [android-apk, ios-ipa]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download unsigned APK
+        uses: actions/download-artifact@v4
+        with:
+          name: starling-android-unsigned-apk
+          path: release-assets
+
+      - name: Download unsigned IPA
+        uses: actions/download-artifact@v4
+        with:
+          name: starling-ios-unsigned-ipa
+          path: release-assets
+
+      - name: Attach builds to GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release upload "$GITHUB_REF_NAME" release-assets/* --clobber
