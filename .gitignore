@@ -4,5 +4,8 @@ local.properties
 .idea/
 *.iml
 out/
+.build/
+.bsp/
+xtool/
 __pycache__/
 *.py[cod]

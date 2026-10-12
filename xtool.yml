@@ -1,0 +1,4 @@
+version: 1
+bundleID: dev.starling.ios
+infoPath: iosApp/Info.plist
+iconPath: iosApp/Resources/StarlingAppIcon.png

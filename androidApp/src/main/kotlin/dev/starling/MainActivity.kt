@@ -2,7 +2,11 @@ package dev.starling
 
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.core.view.WindowCompat
 import android.os.Bundle
+import android.hardware.display.DisplayManager
+import android.view.Display
+import android.os.Build
 
 class MainActivity : ComponentActivity() {
     private var nodeController: AndroidReticulumNodeController? = null
@@ -11,6 +15,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        requestHighRefreshRate()
         val controller = AndroidReticulumNodeController(applicationContext)
         val reticulumTransport = AndroidReticulumTransport(applicationContext)
         val chat = ReticulumChatRepository(
@@ -30,6 +36,11 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        requestHighRefreshRate()
+    }
+
     override fun onDestroy() {
         nodeController?.dispose()
         transport?.dispose()
@@ -38,5 +49,20 @@ class MainActivity : ComponentActivity() {
         transport = null
         chatRepository = null
         super.onDestroy()
+    }
+
+    private fun requestHighRefreshRate() {
+        val highestSupportedRate = getSystemService(DisplayManager::class.java)
+            .getDisplay(Display.DEFAULT_DISPLAY)
+            ?.supportedModes
+            ?.maxOfOrNull { it.refreshRate }
+        if (highestSupportedRate != null && highestSupportedRate > 60f) {
+            window.attributes = window.attributes.apply {
+                preferredRefreshRate = highestSupportedRate
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
+                window.decorView.setRequestedFrameRate(highestSupportedRate)
+            }
+        }
     }
 }

@@ -1,4 +1,5 @@
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
+import org.jetbrains.kotlin.gradle.plugin.mpp.apple.XCFramework
 import org.gradle.language.jvm.tasks.ProcessResources
 
 plugins {
@@ -11,6 +12,15 @@ plugins {
 kotlin {
     jvm("desktop")
 
+    val xcf = XCFramework()
+    listOf(iosArm64(), iosSimulatorArm64()).forEach { target ->
+        target.binaries.framework {
+            baseName = "ComposeApp"
+            isStatic = true
+            xcf.add(this)
+        }
+    }
+
     android {
         namespace = "dev.starling.shared"
         compileSdk = 37
@@ -18,22 +28,48 @@ kotlin {
         androidResources {
             enable = true
         }
+        withHostTest {}
     }
 
     sourceSets {
+        val commonMain = getByName("commonMain")
+        val commonTest = getByName("commonTest")
+        val iosMain = create("iosMain") {
+            dependsOn(commonMain)
+        }
+        getByName("iosArm64Main").dependsOn(iosMain)
+        getByName("iosSimulatorArm64Main").dependsOn(iosMain)
+
         commonMain.dependencies {
             implementation(libs.compose.runtime)
             implementation(libs.compose.foundation)
             implementation(libs.compose.material3)
             implementation(libs.compose.material.icons.extended)
             implementation(libs.compose.ui)
+            implementation(libs.compose.resources)
             implementation(libs.kotlinx.coroutines.core)
         }
+
+        commonTest.dependencies {
+            implementation(kotlin("test"))
+        }
+
+        val iosTest = create("iosTest") {
+            dependsOn(commonTest)
+        }
+        getByName("iosArm64Test").dependsOn(iosTest)
+        getByName("iosSimulatorArm64Test").dependsOn(iosTest)
 
         getByName("desktopMain").dependencies {
             implementation(compose.desktop.currentOs)
         }
+
     }
+}
+
+compose.resources {
+    publicResClass = true
+    packageOfResClass = "dev.starling.generated.resources"
 }
 
 compose.desktop {
@@ -44,6 +80,10 @@ compose.desktop {
             targetFormats(TargetFormat.Deb, TargetFormat.Rpm)
             packageName = "Starling"
             packageVersion = "0.1.0"
+
+            linux {
+                iconFile.set(project.file("../assets/branding/starling-light-preview.png"))
+            }
         }
     }
 }
