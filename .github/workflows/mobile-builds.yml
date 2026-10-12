@@ -1,0 +1,90 @@
+name: Build mobile artifacts
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  android-apk:
+    name: Unsigned Android APK
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android API 37 SDK packages
+        run: sdkmanager --install "platforms;android-37" "build-tools;37.0.0"
+
+      - name: Build release APK
+        run: ./gradlew --no-daemon :androidApp:assembleRelease
+
+      - name: Upload unsigned APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: starling-android-unsigned-apk
+          path: androidApp/build/outputs/apk/release/*-unsigned.apk
+          if-no-files-found: error
+
+  ios-ipa:
+    name: Unsigned iOS IPA
+    runs-on: macos-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Install xtool
+        run: brew install xtool-org/tap/xtool
+
+      - name: Build Compose iOS framework
+        run: ./gradlew --no-daemon :composeApp:assembleComposeAppDebugXCFramework
+
+      - name: Build unsigned device IPA
+        run: xtool dev build --configuration debug --ipa --triple arm64-apple-ios
+
+      - name: Collect IPA
+        shell: bash
+        run: |
+          ipa_path="$(find . -type f -name '*.ipa' -not -path './.git/*' -print -quit)"
+          if [[ -z "$ipa_path" ]]; then
+            echo "xtool did not produce an IPA" >&2
+            exit 1
+          fi
+          mkdir -p artifacts
+          cp "$ipa_path" artifacts/Starling-unsigned.ipa
+
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: starling-ios-unsigned-ipa
+          path: artifacts/Starling-unsigned.ipa
+          if-no-files-found: error
