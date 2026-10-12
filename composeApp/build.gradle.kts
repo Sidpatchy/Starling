@@ -9,6 +9,11 @@ plugins {
     alias(libs.plugins.compose.compiler)
 }
 
+val starlingVersion = providers.gradleProperty("starlingVersion").get()
+val starlingPackageVersion = providers.gradleProperty("starlingPackageVersion")
+    .orElse(starlingVersion.substringBefore('-'))
+    .get()
+
 kotlin {
     jvm("desktop")
 
@@ -79,7 +84,9 @@ compose.desktop {
         nativeDistributions {
             targetFormats(TargetFormat.Deb, TargetFormat.Rpm, TargetFormat.Msi, TargetFormat.Dmg)
             packageName = "Starling"
-            packageVersion = "0.1.0"
+            // Native installers use a numeric version; keep prerelease labels in
+            // the release name/version while using its numeric base here.
+            packageVersion = starlingPackageVersion
 
             linux {
                 iconFile.set(project.file("../assets/branding/starling-light-preview.png"))

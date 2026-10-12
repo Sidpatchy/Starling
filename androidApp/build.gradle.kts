@@ -18,8 +18,8 @@ android {
         applicationId = "dev.starling"
         minSdk = 24
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = providers.gradleProperty("starlingVersionCode").get().toInt()
+        versionName = providers.gradleProperty("starlingVersion").get()
         ndk {
             abiFilters += listOf("arm64-v8a", "x86_64")
         }
