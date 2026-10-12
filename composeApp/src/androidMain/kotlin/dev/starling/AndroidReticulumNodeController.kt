@@ -1,0 +1,132 @@
+package dev.starling
+
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.os.Build
+import org.json.JSONArray
+import org.json.JSONObject
+import androidx.core.content.ContextCompat
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+
+/** Starts and observes the isolated Android RNS service without blocking Compose. */
+class AndroidReticulumNodeController(context: Context) : ReticulumNodeController {
+    private val appContext = context.applicationContext
+    private val _state = MutableStateFlow<ReticulumNodeState>(ReticulumNodeState.Stopped)
+    override val state: StateFlow<ReticulumNodeState> = _state.asStateFlow()
+    override val isSupported: Boolean = true
+
+    private val receiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action != ReticulumNodeService.ACTION_STATE) return
+            _state.value = stateFromIntent(intent)
+        }
+    }
+
+    init {
+        val filter = IntentFilter(ReticulumNodeService.ACTION_STATE)
+        ContextCompat.registerReceiver(appContext, receiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
+        // If Android recreated the Activity while the node service stayed up,
+        // its next periodic state broadcast restores the UI state.
+    }
+
+    override suspend fun start(config: ReticulumNodeConfig) {
+        when (config.mode) {
+            ReticulumRuntimeMode.EMBEDDED -> Unit
+            ReticulumRuntimeMode.EXISTING_SHARED_INSTANCE -> Unit
+        }
+
+        if (config.mode == ReticulumRuntimeMode.EXISTING_SHARED_INSTANCE) {
+            val key = config.existingInstanceRpcKeyHex.orEmpty()
+            if (key.length < 32 || key.length % 2 != 0 || key.any { it.digitToIntOrNull(16) == null }) {
+                _state.value = ReticulumNodeState.Failed(
+                    "Enter the existing local RNS instance's RPC key as at least 32 hexadecimal characters.",
+                )
+                return
+            }
+        }
+
+        config.ifacValidationError()?.let {
+            _state.value = ReticulumNodeState.Failed(it)
+            return
+        }
+
+        _state.value = ReticulumNodeState.Starting(config.mode)
+        val peersJson = JSONArray()
+        config.tcpPeers.forEach { peer ->
+            peersJson.put(
+                JSONObject()
+                    .put("host", peer.host.trim())
+                    .put("port", peer.port)
+                    .put("ifac_network_name", peer.ifacNetworkName.orEmpty())
+                    .put("ifac_passphrase", peer.ifacPassphrase.orEmpty()),
+            )
+        }
+        val intent = Intent(appContext, ReticulumNodeService::class.java).apply {
+            action = ReticulumNodeService.ACTION_START
+            putExtra(ReticulumNodeService.EXTRA_MODE, config.mode.name)
+            putExtra(ReticulumNodeService.EXTRA_TCP_PEERS, peersJson.toString())
+            putExtra(ReticulumNodeService.EXTRA_RPC_KEY, config.existingInstanceRpcKeyHex.orEmpty())
+        }
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) appContext.startForegroundService(intent)
+            else appContext.startService(intent)
+        } catch (error: Exception) {
+            _state.value = ReticulumNodeState.Failed(error.message ?: "Could not start the Reticulum service.")
+        }
+    }
+
+    override suspend fun disconnect() {
+        val intent = Intent(appContext, ReticulumNodeService::class.java).apply {
+            action = ReticulumNodeService.ACTION_STOP
+        }
+        try {
+            appContext.startService(intent)
+        } catch (_: Exception) {
+            _state.value = ReticulumNodeState.Stopped
+        }
+    }
+
+    fun dispose() {
+        try {
+            appContext.unregisterReceiver(receiver)
+        } catch (_: IllegalArgumentException) {
+            // Already unregistered.
+        }
+    }
+
+    private fun stateFromIntent(intent: Intent): ReticulumNodeState {
+        val mode = runCatching {
+            ReticulumRuntimeMode.valueOf(intent.getStringExtra(ReticulumNodeService.EXTRA_MODE).orEmpty())
+        }.getOrNull() ?: ReticulumRuntimeMode.EMBEDDED
+        return when (intent.getStringExtra(ReticulumNodeService.EXTRA_STATE)) {
+            ReticulumNodeService.STATE_STARTING -> ReticulumNodeState.Starting(mode)
+            ReticulumNodeService.STATE_RUNNING -> {
+                val tcpPeers = mutableListOf<ReticulumTcpPeer>()
+                val onlineIds = mutableSetOf<String>()
+                val peers = runCatching {
+                    JSONArray(intent.getStringExtra(ReticulumNodeService.EXTRA_TCP_STATUS).orEmpty())
+                }.getOrElse { JSONArray() }
+                for (index in 0 until peers.length()) {
+                    val peer = peers.optJSONObject(index) ?: continue
+                    val tcpPeer = ReticulumTcpPeer(peer.optString("host"), peer.optInt("port"))
+                    tcpPeers += tcpPeer
+                    if (peer.optBoolean("online")) onlineIds += tcpPeer.id
+                }
+                ReticulumNodeState.Running(
+                    mode = mode,
+                    tcpPeers = tcpPeers,
+                    onlineTcpPeerIds = onlineIds,
+                    sharedInstanceConnected = intent.getBooleanExtra(ReticulumNodeService.EXTRA_SHARED, false),
+                )
+            }
+            ReticulumNodeService.STATE_FAILED -> ReticulumNodeState.Failed(
+                intent.getStringExtra(ReticulumNodeService.EXTRA_MESSAGE) ?: "Reticulum failed to start.",
+            )
+            else -> ReticulumNodeState.Stopped
+        }
+    }
+}
