@@ -1,7 +1,7 @@
 # Starling
 
 Starling is a focused chat client for Reticulum, built with Kotlin Multiplatform
-and Compose Multiplatform. Android and desktop share the same UI.
+and Compose Multiplatform. Android, desktop, and iOS share the same UI.
 
 The app keeps an isolated local preview as its no-setup mode. Its on/off choice
 is saved, and preview hides live network settings and communications data.
@@ -24,8 +24,9 @@ channels are local-only. Live LXMF unknown senders go to Requests; the
 local delivery address is shown in Identity and Settings for sharing. The Identity
 screen lets you set a global LXMF nickname and per-hub RRC nickname overrides.
 Contacts, requests, and configured networks/channels and live message history are stored locally; QR
-scanning is not implemented yet. An iOS SwiftUI/xtool host shim is available; it
-uses local preview only until an iOS Reticulum adapter is implemented. See
+scanning is not implemented yet. A minimal SwiftUI/xtool host embeds the shared
+Compose UI on iOS. iOS currently uses local preview only until a native
+Reticulum adapter is implemented. See
 [`iosApp/README.md`](iosApp/README.md) for the current build flow and host limits.
 
 Android bundles the reference `rns==1.5.7` and `lxmf==1.2.0` Python packages using Chaquopy;

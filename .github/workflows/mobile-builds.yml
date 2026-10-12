@@ -103,6 +103,9 @@ jobs:
       - name: Build Compose iOS framework
         run: ./gradlew --no-daemon "-PstarlingVersion=${{ needs.resolve-version.outputs.app_version }}" :composeApp:assembleComposeAppDebugXCFramework
 
+      - name: Verify shared Compose framework
+        run: test -f composeApp/build/XCFrameworks/debug/ComposeApp.xcframework/Info.plist
+
       - name: Build unsigned device IPA
         run: xtool dev build --configuration debug --ipa --triple arm64-apple-ios
 

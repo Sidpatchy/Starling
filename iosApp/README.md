@@ -1,10 +1,9 @@
-# iOS shim
+# iOS host
 
-The SwiftUI host is packaged with `xtool` and embeds the shared Compose screen
-whenever the Kotlin XCFramework is present. On Linux, SwiftPM can build the
-standalone host shim, but Kotlin/Native cannot link final Apple binaries; it
-only compiles iOS source sets to klibs there. The fallback screen says when the
-shared framework has not been generated yet.
+The iOS application uses the shared Compose UI, hosted by a minimal SwiftUI app
+entry point. It requires the Compose XCFramework and deliberately has no
+separate SwiftUI fallback UI. Kotlin/Native can compile iOS source sets to
+klibs on Linux, but the final Apple framework and IPA must be built on macOS.
 
 On macOS with Xcode installed, build and host the shared UI with:
 
@@ -13,7 +12,7 @@ On macOS with Xcode installed, build and host the shared UI with:
 xtool dev build --triple arm64-apple-ios-simulator
 ```
 
-The package detects `composeApp/build/XCFrameworks/debug/ComposeApp.xcframework`
-and switches from the fallback screen to `MainViewController()` in `iosMain`.
-The current iOS shim uses local preview data only; a native Reticulum node and
-transport are not implemented on iOS yet.
+The Swift package links `composeApp/build/XCFrameworks/debug/ComposeApp.xcframework`
+and hosts `MainViewController()` from `iosMain`. The same Compose UI is used on
+Android, desktop, and iOS. iOS currently uses local preview data only; a native
+Reticulum node and transport are not implemented on iOS yet.
