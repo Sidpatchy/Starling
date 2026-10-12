@@ -55,9 +55,10 @@ Desktop CI builds Linux AppImage and Flatpak bundles, a Windows MSI, and
 Apple Silicon and Intel macOS DMGs. These packages run on published GitHub
 Releases or manual dispatch, not on every commit; release builds are attached
 to the release page. Mobile CI also attaches an unsigned APK and device IPA.
-The current app version is `0.1.0-alpha.2` in `gradle.properties`; publish a
-matching `0.1.0-alpha.2` release tag (a leading `v` is also accepted). MSI/DMG package metadata uses the numeric
-`0.1.0` base, while the downloadable asset names keep the prerelease suffix.
+Published releases use their tag as the app version (with an optional leading
+`v`); manual builds from a branch use the `starlingVersion` default in
+`gradle.properties`. MSI/DMG package metadata uses the numeric version base,
+while downloadable asset names retain the full prerelease tag.
 The desktop packages are unsigned (the DMGs are not notarized). AppImage, MSI,
 and DMG include the JVM but need host Python 3.8+ for Reticulum; Flatpak bundles
 its Python/RNS dependencies and requests device access for optional serial
