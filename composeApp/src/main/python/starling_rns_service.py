@@ -34,11 +34,16 @@ def status_line(module):
         "{},{},{}".format(encode(peer.get("host", "")), peer.get("port", 0), 1 if peer.get("online") else 0)
         for peer in value.get("tcp_interfaces", [])
     )
-    return "STATUS\tRUNNING\t{}\t{}\t{}\t{}".format(
+    rnode_status = ";".join(
+        "{},{}".format(encode(radio.get("port", "")), 1 if radio.get("online") else 0)
+        for radio in value.get("rnode_interfaces", [])
+    )
+    return "STATUS\tRUNNING\t{}\t{}\t{}\t{}\t{}".format(
         value.get("mode", "embedded"),
         encode(peer_status),
         len(value.get("tcp_interfaces", [])),
         1 if value.get("shared_instance_connected") else 0,
+        encode(rnode_status),
     )
 
 
@@ -88,31 +93,44 @@ def main():
     sys.stderr = log_file
 
     start = sys.stdin.readline().strip().split("\t")
-    if len(start) < 5 or start[0] != "START":
+    if len(start) < 6 or start[0] != "START":
         emit("ERROR\t" + encode("Invalid start request."))
         return 2
 
     mode = start[1]
     rpc_key_hex = decode(start[2])
-    if start[3] != "3":
+    if start[3] != "4":
         emit("ERROR\t" + encode("Unsupported desktop bridge protocol version."))
         return 2
     try:
         peer_count = int(start[4])
+        rnode_count = int(start[5])
     except ValueError:
-        emit("ERROR\t" + encode("Invalid TCP peer count."))
+        emit("ERROR\t" + encode("Invalid interface count."))
         return 2
-    if peer_count < 0 or len(start) != 5 + peer_count * 4:
-        emit("ERROR\t" + encode("TCP peer data is incomplete."))
+    if peer_count < 0 or rnode_count < 0 or len(start) != 6 + peer_count * 4 + rnode_count * 6:
+        emit("ERROR\t" + encode("Interface configuration data is incomplete."))
         return 2
     tcp_peers = []
     for index in range(peer_count):
-        offset = 5 + index * 4
+        offset = 6 + index * 4
         tcp_peers.append({
             "host": decode(start[offset]),
             "port": int(start[offset + 1]),
             "ifac_network_name": decode(start[offset + 2]),
             "ifac_passphrase": decode(start[offset + 3]),
+        })
+    rnode_interfaces = []
+    rnode_offset = 6 + peer_count * 4
+    for index in range(rnode_count):
+        offset = rnode_offset + index * 6
+        rnode_interfaces.append({
+            "port": decode(start[offset]),
+            "frequency_hz": int(start[offset + 1]),
+            "bandwidth_hz": int(start[offset + 2]),
+            "tx_power_dbm": int(start[offset + 3]),
+            "spreading_factor": int(start[offset + 4]),
+            "coding_rate": int(start[offset + 5]),
         })
 
     try:
@@ -120,7 +138,7 @@ def main():
         import starling_rrc
         import starling_lxmf
         config_mode = "embedded" if mode == "EMBEDDED" else "existing_shared_instance"
-        starling_rns.start_node(data_dir, config_mode, tcp_peers, rpc_key_hex)
+        starling_rns.start_node(data_dir, config_mode, tcp_peers, rpc_key_hex, rnode_interfaces)
         lxmf_start_error = None
         try:
             starling_lxmf.start(data_dir)

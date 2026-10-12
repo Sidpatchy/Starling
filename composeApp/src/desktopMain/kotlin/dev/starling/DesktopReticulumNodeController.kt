@@ -29,6 +29,7 @@ class DesktopReticulumNodeController : ReticulumNodeController {
     private val _state = MutableStateFlow<ReticulumNodeState>(ReticulumNodeState.Stopped)
     override val state: StateFlow<ReticulumNodeState> = _state.asStateFlow()
     override val isSupported: Boolean = true
+    override val supportsRNodeInterfaces: Boolean = true
 
     private val operations = Mutex()
     private val commandMutex = Mutex()
@@ -45,7 +46,7 @@ class DesktopReticulumNodeController : ReticulumNodeController {
             _state.value = ReticulumNodeState.Failed("Enter the existing local RNS instance's RPC key as at least 32 hexadecimal characters.")
             return@withLock
         }
-        config.ifacValidationError()?.let {
+        config.validationError()?.let {
             _state.value = ReticulumNodeState.Failed(it)
             return@withLock
         }
@@ -114,10 +115,10 @@ class DesktopReticulumNodeController : ReticulumNodeController {
             runChecked(
                 listOf(
                     venvPython.toString(), "-m", "pip", "install", "--disable-pip-version-check",
-                    "--no-input", "rns==1.5.5", "lxmf==1.2.0",
+                    "--no-input", "rns==1.5.7", "lxmf==1.2.0",
                 ),
                 logFile,
-                "Could not install RNS 1.5.5 and LXMF 1.2.0. Check the Starling log and your internet connection",
+                "Could not install RNS 1.5.7 and LXMF 1.2.0. Check the Starling log and your internet connection",
                 timeoutSeconds = 600,
             )
         }
@@ -213,11 +214,21 @@ class DesktopReticulumNodeController : ReticulumNodeController {
                         if (statusFields.getOrNull(2) == "1") "${host.lowercase()}:$port" else null
                     }
                     .toSet()
+                val onlineRNodePorts = fields.getOrNull(6)?.let(::decodeBase64).orEmpty()
+                    .split(';')
+                    .mapNotNull { radioStatus ->
+                        val statusFields = radioStatus.split(',')
+                        val port = statusFields.getOrNull(0)?.let(::decodeBase64).orEmpty()
+                        port.takeIf { it.isNotBlank() && statusFields.getOrNull(1) == "1" }?.lowercase()
+                    }
+                    .toSet()
                 _state.value = ReticulumNodeState.Running(
                     mode = mode,
                     tcpPeers = requestedConfig.tcpPeers,
                     onlineTcpPeerIds = onlineIds,
                     sharedInstanceConnected = fields.getOrNull(5) == "1",
+                    rnodeInterfaces = requestedConfig.rnodeInterfaces,
+                    onlineRNodePorts = onlineRNodePorts,
                 )
                 return true
             }
@@ -230,12 +241,27 @@ class DesktopReticulumNodeController : ReticulumNodeController {
     }
 
     private fun startCommand(config: ReticulumNodeConfig): String {
-        val fields = mutableListOf("START", config.mode.name, encodeBase64(config.existingInstanceRpcKeyHex.orEmpty()), "3", config.tcpPeers.size.toString())
+        val fields = mutableListOf(
+            "START",
+            config.mode.name,
+            encodeBase64(config.existingInstanceRpcKeyHex.orEmpty()),
+            "4",
+            config.tcpPeers.size.toString(),
+            config.rnodeInterfaces.size.toString(),
+        )
         config.tcpPeers.forEach { peer ->
             fields += encodeBase64(peer.host.trim())
             fields += peer.port.toString()
             fields += encodeBase64(peer.ifacNetworkName.orEmpty())
             fields += encodeBase64(peer.ifacPassphrase.orEmpty())
+        }
+        config.rnodeInterfaces.forEach { radio ->
+            fields += encodeBase64(radio.port.trim())
+            fields += radio.frequencyHz.toString()
+            fields += radio.bandwidthHz.toString()
+            fields += radio.txPowerDbm.toString()
+            fields += radio.spreadingFactor.toString()
+            fields += radio.codingRate.toString()
         }
         return fields.joinToString("\t")
     }
@@ -290,7 +316,7 @@ class DesktopReticulumNodeController : ReticulumNodeController {
         val check = try {
             ProcessBuilder(
                 python.toString(), "-c",
-                "import importlib.metadata as m; import RNS, LXMF; assert m.version('rns') == '1.5.5' and m.version('lxmf') == '1.2.0'",
+                "import importlib.metadata as m; import RNS, LXMF; assert m.version('rns') == '1.5.7' and m.version('lxmf') == '1.2.0'",
             ).redirectErrorStream(true).redirectOutput(ProcessBuilder.Redirect.appendTo(logFile)).start()
         } catch (_: Exception) {
             return false

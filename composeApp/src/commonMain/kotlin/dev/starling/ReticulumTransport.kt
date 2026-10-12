@@ -29,17 +29,41 @@ data class ReticulumTcpPeer(
     }
 }
 
+/** A host-controlled RNode radio attached to Starling over a serial port. */
+data class ReticulumRNodeInterface(
+    val port: String,
+    val frequencyHz: Long,
+    val bandwidthHz: Int,
+    val txPowerDbm: Int,
+    val spreadingFactor: Int,
+    val codingRate: Int,
+) {
+    val id: String get() = port.trim().lowercase()
+
+    fun validationError(): String? = when {
+        port.isBlank() -> "Enter the RNode serial port, such as /dev/ttyUSB0."
+        port.any { it.code < 32 || it.code == 127 } -> "The RNode serial port cannot contain control characters."
+        frequencyHz !in 137_000_000L..3_000_000_000L -> "RNode frequency must be between 137 MHz and 3 GHz."
+        bandwidthHz !in 7_800..1_625_000 -> "RNode bandwidth must be between 7.8 kHz and 1.625 MHz."
+        txPowerDbm !in 0..37 -> "RNode transmit power must be between 0 and 37 dBm."
+        spreadingFactor !in 5..12 -> "RNode spreading factor must be between 5 and 12."
+        codingRate !in 5..8 -> "RNode coding rate must be between 5 and 8."
+        else -> null
+    }
+}
+
 data class ReticulumNodeConfig(
     val mode: ReticulumRuntimeMode = ReticulumRuntimeMode.EMBEDDED,
     val tcpPeers: List<ReticulumTcpPeer> = emptyList(),
+    val rnodeInterfaces: List<ReticulumRNodeInterface> = emptyList(),
     val existingInstanceRpcKeyHex: String? = null,
 ) {
-    fun ifacValidationError(): String? {
-        if (mode != ReticulumRuntimeMode.EMBEDDED && tcpPeers.isNotEmpty()) {
-            return "IFAC can only be configured for Starling's embedded TCP interface."
+    fun validationError(): String? {
+        if (mode != ReticulumRuntimeMode.EMBEDDED && (tcpPeers.isNotEmpty() || rnodeInterfaces.isNotEmpty())) {
+            return "Interfaces can only be configured for Starling's embedded node."
         }
-        if (mode == ReticulumRuntimeMode.EMBEDDED && tcpPeers.isEmpty()) {
-            return "Add at least one TCP peer before starting the embedded node."
+        if (mode == ReticulumRuntimeMode.EMBEDDED && tcpPeers.isEmpty() && rnodeInterfaces.isEmpty()) {
+            return "Add a TCP peer or an RNode interface before starting the embedded node."
         }
         val invalidPeer = tcpPeers.firstOrNull { it.validationError() != null }
         if (invalidPeer != null) return invalidPeer.validationError()
@@ -59,6 +83,11 @@ data class ReticulumNodeConfig(
                 return "For each peer, enter both IFAC values or leave both blank."
             }
         }
+        val invalidRNode = rnodeInterfaces.firstOrNull { it.validationError() != null }
+        if (invalidRNode != null) return invalidRNode.validationError()
+        if (rnodeInterfaces.map { it.id }.distinct().size != rnodeInterfaces.size) {
+            return "Each RNode interface must use a unique serial port."
+        }
         return null
     }
 }
@@ -73,8 +102,12 @@ sealed interface ReticulumNodeState {
         val tcpPeers: List<ReticulumTcpPeer>,
         val onlineTcpPeerIds: Set<String>,
         val sharedInstanceConnected: Boolean = false,
+        val rnodeInterfaces: List<ReticulumRNodeInterface> = emptyList(),
+        val onlineRNodePorts: Set<String> = emptySet(),
     ) : ReticulumNodeState {
         val tcpInterfaceOnline: Boolean get() = onlineTcpPeerIds.isNotEmpty()
+        val rnodeInterfaceOnline: Boolean get() = onlineRNodePorts.isNotEmpty()
+        val interfaceOnline: Boolean get() = tcpInterfaceOnline || rnodeInterfaceOnline || sharedInstanceConnected
     }
     data class Failed(val message: String) : ReticulumNodeState
     data class Unavailable(val reason: String) : ReticulumNodeState
@@ -84,6 +117,8 @@ sealed interface ReticulumNodeState {
 interface ReticulumNodeController {
     val state: StateFlow<ReticulumNodeState>
     val isSupported: Boolean
+    /** RNode USB/serial support is currently implemented by the desktop runtime only. */
+    val supportsRNodeInterfaces: Boolean get() = false
     suspend fun start(config: ReticulumNodeConfig)
     suspend fun disconnect()
 }

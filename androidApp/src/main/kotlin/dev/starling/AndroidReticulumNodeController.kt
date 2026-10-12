@@ -34,6 +34,13 @@ class AndroidReticulumNodeController(context: Context) : ReticulumNodeController
     }
 
     override suspend fun start(config: ReticulumNodeConfig) {
+        if (config.rnodeInterfaces.isNotEmpty()) {
+            _state.value = ReticulumNodeState.Failed(
+                "Direct RNode USB/Bluetooth access is not available in Starling's Android runtime yet. Use an RNS TCP gateway for now.",
+            )
+            return
+        }
+
         when (config.mode) {
             ReticulumRuntimeMode.EMBEDDED -> Unit
             ReticulumRuntimeMode.EXISTING_SHARED_INSTANCE -> Unit
@@ -49,7 +56,7 @@ class AndroidReticulumNodeController(context: Context) : ReticulumNodeController
             }
         }
 
-        config.ifacValidationError()?.let {
+        config.validationError()?.let {
             _state.value = ReticulumNodeState.Failed(it)
             return
         }

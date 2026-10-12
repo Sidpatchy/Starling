@@ -6,8 +6,9 @@ and Compose Multiplatform. Android and Linux desktop share the initial UI.
 The app keeps an interactive local preview as its no-setup mode, with a
 session-only switch to hide or show its sample content. Android and desktop can
 start an embedded RNS node over multiple user-configured TCP peers at once or
-attach to an existing local RNS shared instance in advanced mode. Each embedded
-TCP connection can have its own optional IFAC network name and passphrase. Live rooms use RRC and
+attach to an existing local RNS shared instance in advanced mode. Desktop can
+also attach RNode firmware radios over serial. Each embedded TCP connection can
+have its own optional IFAC network name and passphrase. Live rooms use RRC and
 direct messages use the reference LXMF router. RRC rooms are joined by channel
 name; RRC does not provide room discovery or history. See
 [`docs/RETICULUM_RUNTIME.md`](docs/RETICULUM_RUNTIME.md) for scope and limitations.
@@ -20,7 +21,7 @@ local delivery address is shown in Settings for sharing. Contacts, requests, and
 configured networks/channels and live message history are stored locally; QR
 scanning is not implemented yet. iOS has no runtime adapter.
 
-Android bundles the reference `rns` and `lxmf` Python packages using Chaquopy;
+Android bundles the reference `rns==1.5.7` and `lxmf==1.2.0` Python packages using Chaquopy;
 desktop installs the pinned packages in a Starling-private Python environment on
 first explicit connection. Their licenses are included in `licenses/`.
 
@@ -30,7 +31,7 @@ their respective licenses.
 
 ## Run
 
-Use JDK 21 for the Gradle build.
+Use JDK 25 for the Gradle build. Android builds also require an Android SDK and Python 3.13 on the build host for Chaquopy.
 
 ```sh
 ./gradlew :composeApp:run
@@ -39,5 +40,5 @@ Use JDK 21 for the Gradle build.
 To build the Android debug APK (requires an Android SDK):
 
 ```sh
-./gradlew :composeApp:assembleDebug
+./gradlew :androidApp:assembleDebug
 ```

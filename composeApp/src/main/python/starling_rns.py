@@ -12,6 +12,7 @@ import signal
 _reticulum = None
 _mode = None
 _tcp_peers = []
+_rnode_interfaces = []
 _rpc_key_hex = None
 
 
@@ -37,7 +38,7 @@ def construct_without_required_process_signals(factory):
         signal.signal = original_signal
 
 
-def _write_config(config_dir, mode, tcp_peers, rpc_key_hex):
+def _write_config(config_dir, mode, tcp_peers, rnode_interfaces, rpc_key_hex):
     os.makedirs(config_dir, exist_ok=True)
     config_path = os.path.join(config_dir, "config")
 
@@ -78,6 +79,17 @@ def _write_config(config_dir, mode, tcp_peers, rpc_key_hex):
                 interface["networkname"] = peer["ifac_network_name"]
                 interface["passphrase"] = peer["ifac_passphrase"]
             interfaces["Starling TCP " + str(index)] = interface
+        for index, radio in enumerate(rnode_interfaces, start=1):
+            interfaces["Starling RNode " + str(index)] = {
+                "type": "RNodeInterface",
+                "enabled": "yes",
+                "port": radio["port"],
+                "frequency": str(radio["frequency_hz"]),
+                "bandwidth": str(radio["bandwidth_hz"]),
+                "txpower": str(radio["tx_power_dbm"]),
+                "spreadingfactor": str(radio["spreading_factor"]),
+                "codingrate": str(radio["coding_rate"]),
+            }
         config["interfaces"] = interfaces
 
     config.write()
@@ -88,8 +100,8 @@ def _write_config(config_dir, mode, tcp_peers, rpc_key_hex):
         pass
 
 
-def start_node(config_dir, mode, tcp_peers="[]", rpc_key_hex=""):
-    global _reticulum, _mode, _tcp_peers, _rpc_key_hex
+def start_node(config_dir, mode, tcp_peers="[]", rpc_key_hex="", rnode_interfaces="[]"):
+    global _reticulum, _mode, _tcp_peers, _rnode_interfaces, _rpc_key_hex
     import RNS
 
     if mode not in ("embedded", "existing_shared_instance"):
@@ -121,20 +133,59 @@ def start_node(config_dir, mode, tcp_peers="[]", rpc_key_hex=""):
             "ifac_network_name": network_name,
             "ifac_passphrase": passphrase,
         })
+    if isinstance(rnode_interfaces, str):
+        rnode_interfaces = json.loads(rnode_interfaces)
+    if not isinstance(rnode_interfaces, list):
+        raise ValueError("RNode interfaces must be a list")
+    normalized_rnodes = []
+    for radio in rnode_interfaces:
+        if not isinstance(radio, dict):
+            raise ValueError("Invalid RNode interface configuration")
+        port = str(radio.get("port", "")).strip()
+        if not port or any(ord(character) < 32 or ord(character) == 127 for character in port):
+            raise ValueError("RNode serial port must be a non-empty path without control characters")
+        frequency_hz = int(radio.get("frequency_hz", 0))
+        bandwidth_hz = int(radio.get("bandwidth_hz", 0))
+        tx_power_dbm = int(radio.get("tx_power_dbm", -1))
+        spreading_factor = int(radio.get("spreading_factor", 0))
+        coding_rate = int(radio.get("coding_rate", 0))
+        if not 137_000_000 <= frequency_hz <= 3_000_000_000:
+            raise ValueError("RNode frequency must be between 137 MHz and 3 GHz")
+        if not 7_800 <= bandwidth_hz <= 1_625_000:
+            raise ValueError("RNode bandwidth must be between 7.8 kHz and 1.625 MHz")
+        if not 0 <= tx_power_dbm <= 37:
+            raise ValueError("RNode transmit power must be between 0 and 37 dBm")
+        if not 5 <= spreading_factor <= 12:
+            raise ValueError("RNode spreading factor must be between 5 and 12")
+        if not 5 <= coding_rate <= 8:
+            raise ValueError("RNode coding rate must be between 5 and 8")
+        normalized_rnodes.append({
+            "port": port,
+            "frequency_hz": frequency_hz,
+            "bandwidth_hz": bandwidth_hz,
+            "tx_power_dbm": tx_power_dbm,
+            "spreading_factor": spreading_factor,
+            "coding_rate": coding_rate,
+        })
     endpoints = [(peer["host"].lower(), peer["port"]) for peer in normalized_peers]
     if len(set(endpoints)) != len(endpoints):
         raise ValueError("Each TCP peer must use a unique host and port")
-    if mode == "embedded" and not normalized_peers:
-        raise ValueError("Add at least one TCP peer before starting the embedded node")
-    if mode == "existing_shared_instance" and normalized_peers:
-        raise ValueError("TCP peers are only supported in embedded mode")
+    rnode_ports = [radio["port"].lower() for radio in normalized_rnodes]
+    if len(set(rnode_ports)) != len(rnode_ports):
+        raise ValueError("Each RNode interface must use a unique serial port")
+    if mode == "embedded" and not normalized_peers and not normalized_rnodes:
+        raise ValueError("Add a TCP peer or an RNode interface before starting the embedded node")
+    if mode == "existing_shared_instance" and (normalized_peers or normalized_rnodes):
+        raise ValueError("Interfaces can only be configured for Starling's embedded node")
     if mode == "existing_shared_instance":
         normalized_peers = []
+        normalized_rnodes = []
 
     if _reticulum is not None:
         if (
             _mode != mode
             or _tcp_peers != normalized_peers
+            or _rnode_interfaces != normalized_rnodes
             or _rpc_key_hex != (rpc_key_hex or None)
         ):
             raise RuntimeError("The running RNS node has a different configuration. Disconnect it before changing modes or peers.")
@@ -146,7 +197,7 @@ def start_node(config_dir, mode, tcp_peers="[]", rpc_key_hex=""):
     except OSError:
         pass
     os.umask(0o077)
-    _write_config(config_dir, mode, normalized_peers, rpc_key_hex)
+    _write_config(config_dir, mode, normalized_peers, normalized_rnodes, rpc_key_hex)
     _reticulum = construct_without_required_process_signals(lambda: RNS.Reticulum(
         configdir=config_dir,
         loglevel=RNS.LOG_NOTICE,
@@ -154,6 +205,7 @@ def start_node(config_dir, mode, tcp_peers="[]", rpc_key_hex=""):
     ))
     _mode = mode
     _tcp_peers = normalized_peers
+    _rnode_interfaces = normalized_rnodes
     _rpc_key_hex = rpc_key_hex or None
     return status()
 
@@ -163,10 +215,12 @@ def status():
         return json.dumps({"running": False})
 
     tcp_interfaces = []
+    rnode_interfaces = []
     if _mode == "embedded":
         try:
             import RNS
             configured = {"Starling TCP " + str(index): peer for index, peer in enumerate(_tcp_peers, start=1)}
+            configured_rnodes = {"Starling RNode " + str(index): radio for index, radio in enumerate(_rnode_interfaces, start=1)}
             for interface in RNS.Transport.interfaces:
                 peer = configured.get(interface.name)
                 if peer is not None:
@@ -175,27 +229,39 @@ def status():
                         "port": peer["port"],
                         "online": bool(getattr(interface, "online", False)),
                     })
+                radio = configured_rnodes.get(interface.name)
+                if radio is not None:
+                    rnode_interfaces.append({
+                        "port": radio["port"],
+                        "online": bool(getattr(interface, "online", False)),
+                    })
         except Exception:
             tcp_interfaces = [
                 {"host": peer["host"], "port": peer["port"], "online": False}
                 for peer in _tcp_peers
+            ]
+            rnode_interfaces = [
+                {"port": radio["port"], "online": False}
+                for radio in _rnode_interfaces
             ]
 
     return json.dumps({
         "running": True,
         "mode": _mode,
         "tcp_interfaces": tcp_interfaces,
+        "rnode_interfaces": rnode_interfaces,
         "shared_instance_connected": bool(getattr(_reticulum, "is_connected_to_shared_instance", False)),
     })
 
 
 def stop_node():
-    global _reticulum, _mode, _tcp_peers, _rpc_key_hex
+    global _reticulum, _mode, _tcp_peers, _rnode_interfaces, _rpc_key_hex
     if _reticulum is not None:
         import RNS
         RNS.Reticulum.exit_handler()
     _reticulum = None
     _mode = None
     _tcp_peers = []
+    _rnode_interfaces = []
     _rpc_key_hex = None
     return True

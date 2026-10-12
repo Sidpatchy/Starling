@@ -252,6 +252,7 @@ fun StarlingApp(
                                 networks = networks,
                                 nodeState = reticulumNodeState,
                                 nodeSupported = nodeController.isSupported,
+                                supportsRNodeInterfaces = nodeController.supportsRNodeInterfaces,
                                 rrcState = reticulumConnectionState,
                                 rrcError = reticulumConnectionError,
                                 localDeliveryAddress = localDeliveryAddress,
@@ -373,6 +374,7 @@ fun StarlingApp(
                                 networks = networks,
                                 nodeState = reticulumNodeState,
                                 nodeSupported = nodeController.isSupported,
+                                supportsRNodeInterfaces = nodeController.supportsRNodeInterfaces,
                                 rrcState = reticulumConnectionState,
                                 rrcError = reticulumConnectionError,
                                 localDeliveryAddress = localDeliveryAddress,
@@ -1179,6 +1181,7 @@ private fun SettingsPage(
     networks: List<ChatNetwork>,
     nodeState: ReticulumNodeState,
     nodeSupported: Boolean,
+    supportsRNodeInterfaces: Boolean,
     rrcState: ReticulumConnectionState,
     rrcError: String?,
     localDeliveryAddress: String?,
@@ -1205,6 +1208,34 @@ private fun SettingsPage(
             },
         ),
     ) { mutableStateOf(listOf(ReticulumTcpPeer("", 4242))) }
+    var rnodeInterfaces by rememberSaveable(
+        stateSaver = listSaver(
+            save = { radios: List<ReticulumRNodeInterface> ->
+                radios.flatMap { radio ->
+                    listOf(
+                        radio.port,
+                        radio.frequencyHz.toString(),
+                        radio.bandwidthHz.toString(),
+                        radio.txPowerDbm.toString(),
+                        radio.spreadingFactor.toString(),
+                        radio.codingRate.toString(),
+                    )
+                }
+            },
+            restore = { saved: List<String> ->
+                saved.chunked(6).mapNotNull { fields ->
+                    if (fields.size != 6) null else ReticulumRNodeInterface(
+                        port = fields[0],
+                        frequencyHz = fields[1].toLongOrNull() ?: 0L,
+                        bandwidthHz = fields[2].toIntOrNull() ?: 0,
+                        txPowerDbm = fields[3].toIntOrNull() ?: -1,
+                        spreadingFactor = fields[4].toIntOrNull() ?: 0,
+                        codingRate = fields[5].toIntOrNull() ?: 0,
+                    )
+                }
+            },
+        ),
+    ) { mutableStateOf(emptyList<ReticulumRNodeInterface>()) }
     var existingRpcKey by remember { mutableStateOf("") }
     var selectedHubNetworkId by rememberSaveable { mutableStateOf("") }
     var displayName by rememberSaveable { mutableStateOf("Starling") }
@@ -1221,6 +1252,9 @@ private fun SettingsPage(
                 runtimeModeName = state.mode.name
                 if (tcpPeers.all { it.host.isBlank() } && state.tcpPeers.isNotEmpty()) {
                     tcpPeers = state.tcpPeers
+                }
+                if (rnodeInterfaces.isEmpty() && state.rnodeInterfaces.isNotEmpty()) {
+                    rnodeInterfaces = state.rnodeInterfaces
                 }
             }
             is ReticulumNodeState.Starting -> runtimeModeName = state.mode.name
@@ -1286,7 +1320,7 @@ private fun SettingsPage(
                     Text("Reticulum node", modifier = Modifier.weight(1f), color = Ink, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
                     Text(
                         when (nodeState) {
-                            is ReticulumNodeState.Running -> if (nodeState.tcpInterfaceOnline || nodeState.sharedInstanceConnected) "CONNECTED" else "RETRYING"
+                            is ReticulumNodeState.Running -> if (nodeState.interfaceOnline) "CONNECTED" else "RETRYING"
                             is ReticulumNodeState.Starting -> "STARTING"
                             is ReticulumNodeState.PreparingRuntime -> "PREPARING"
                             is ReticulumNodeState.Failed -> "ERROR"
@@ -1321,7 +1355,15 @@ private fun SettingsPage(
                 )
 
                 if (runtimeMode == ReticulumRuntimeMode.EMBEDDED) {
-                    Text("Manage outbound TCP client interfaces. Starling stays a client; Reticulum transport routing remains disabled.", color = Muted, fontSize = 11.sp)
+                    Text(
+                        if (supportsRNodeInterfaces) {
+                            "Configure TCP peers and/or an RNode serial radio. Starling stays a client; Reticulum transport routing remains disabled."
+                        } else {
+                            "Manage outbound TCP client interfaces. Starling stays a client; Reticulum transport routing remains disabled."
+                        },
+                        color = Muted,
+                        fontSize = 11.sp,
+                    )
                     tcpPeers.forEachIndexed { index, peer ->
                         Column(
                             modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(Canvas)
@@ -1330,7 +1372,7 @@ private fun SettingsPage(
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text("TCP connection ${index + 1}", modifier = Modifier.weight(1f), color = Ink, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                                if (tcpPeers.size > 1 && !isRunning && !isStarting) {
+                                if ((tcpPeers.size > 1 || rnodeInterfaces.isNotEmpty()) && !isRunning && !isStarting) {
                                     TextButton(onClick = { tcpPeers = tcpPeers.filterIndexed { i, _ -> i != index }; connectionInputError = null }) {
                                         Text("Remove", color = Color(0xFFC44545))
                                     }
@@ -1382,6 +1424,146 @@ private fun SettingsPage(
                             Text("+ Add TCP connection", color = Accent)
                         }
                     }
+                    if (supportsRNodeInterfaces) {
+                        rnodeInterfaces.forEachIndexed { index, radio ->
+                            Column(
+                                modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(Canvas)
+                                    .border(1.dp, Line, RoundedCornerShape(10.dp)).padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(7.dp),
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text("RNode radio ${index + 1}", modifier = Modifier.weight(1f), color = Ink, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                                    if (!isRunning && !isStarting) {
+                                        TextButton(onClick = {
+                                            rnodeInterfaces = rnodeInterfaces.filterIndexed { radioIndex, _ -> radioIndex != index }
+                                            connectionInputError = null
+                                        }) {
+                                            Text("Remove", color = Color(0xFFC44545))
+                                        }
+                                    }
+                                }
+                                OutlinedTextField(
+                                    value = radio.port,
+                                    onValueChange = { value ->
+                                        rnodeInterfaces = rnodeInterfaces.mapIndexed { radioIndex, old ->
+                                            if (radioIndex == index) old.copy(port = value) else old
+                                        }
+                                        connectionInputError = null
+                                    },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    label = { Text("Serial port (e.g. /dev/ttyUSB0)") },
+                                    singleLine = true,
+                                    enabled = !isRunning && !isStarting,
+                                )
+                                OutlinedTextField(
+                                    value = radio.frequencyHz.takeIf { it > 0 }?.toString().orEmpty(),
+                                    onValueChange = { value ->
+                                        if (value.all(Char::isDigit)) {
+                                            rnodeInterfaces = rnodeInterfaces.mapIndexed { radioIndex, old ->
+                                                if (radioIndex == index) old.copy(frequencyHz = value.toLongOrNull() ?: 0L) else old
+                                            }
+                                            connectionInputError = null
+                                        }
+                                    },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    label = { Text("Radio frequency (Hz)") },
+                                    singleLine = true,
+                                    enabled = !isRunning && !isStarting,
+                                )
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    OutlinedTextField(
+                                        value = radio.bandwidthHz.toString(),
+                                        onValueChange = { value ->
+                                            if (value.all(Char::isDigit)) {
+                                                rnodeInterfaces = rnodeInterfaces.mapIndexed { radioIndex, old ->
+                                                    if (radioIndex == index) old.copy(bandwidthHz = value.toIntOrNull() ?: 0) else old
+                                                }
+                                                connectionInputError = null
+                                            }
+                                        },
+                                        modifier = Modifier.weight(1f),
+                                        label = { Text("Bandwidth (Hz)") },
+                                        singleLine = true,
+                                        enabled = !isRunning && !isStarting,
+                                    )
+                                    OutlinedTextField(
+                                        value = radio.txPowerDbm.toString(),
+                                        onValueChange = { value ->
+                                            if (value.all(Char::isDigit)) {
+                                                rnodeInterfaces = rnodeInterfaces.mapIndexed { radioIndex, old ->
+                                                    if (radioIndex == index) old.copy(txPowerDbm = value.toIntOrNull() ?: 0) else old
+                                                }
+                                                connectionInputError = null
+                                            }
+                                        },
+                                        modifier = Modifier.weight(1f),
+                                        label = { Text("TX power (dBm)") },
+                                        singleLine = true,
+                                        enabled = !isRunning && !isStarting,
+                                    )
+                                }
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    OutlinedTextField(
+                                        value = radio.spreadingFactor.toString(),
+                                        onValueChange = { value ->
+                                            if (value.all(Char::isDigit)) {
+                                                rnodeInterfaces = rnodeInterfaces.mapIndexed { radioIndex, old ->
+                                                    if (radioIndex == index) old.copy(spreadingFactor = value.toIntOrNull() ?: 0) else old
+                                                }
+                                                connectionInputError = null
+                                            }
+                                        },
+                                        modifier = Modifier.weight(1f),
+                                        label = { Text("Spreading factor") },
+                                        singleLine = true,
+                                        enabled = !isRunning && !isStarting,
+                                    )
+                                    OutlinedTextField(
+                                        value = radio.codingRate.toString(),
+                                        onValueChange = { value ->
+                                            if (value.all(Char::isDigit)) {
+                                                rnodeInterfaces = rnodeInterfaces.mapIndexed { radioIndex, old ->
+                                                    if (radioIndex == index) old.copy(codingRate = value.toIntOrNull() ?: 0) else old
+                                                }
+                                                connectionInputError = null
+                                            }
+                                        },
+                                        modifier = Modifier.weight(1f),
+                                        label = { Text("Coding rate (5–8)") },
+                                        singleLine = true,
+                                        enabled = !isRunning && !isStarting,
+                                    )
+                                }
+                                radio.validationError()?.let { validationError ->
+                                    Text(validationError, color = Color(0xFFC44545), fontSize = 10.sp)
+                                }
+                            }
+                        }
+                        Text(
+                            "Set frequency, bandwidth, power, and spreading factor to match your RNode network and local radio rules. These settings control the radio itself.",
+                            color = Muted,
+                            fontSize = 10.sp,
+                            lineHeight = 14.sp,
+                        )
+                        if (!isRunning && !isStarting) {
+                            TextButton(onClick = {
+                                if (tcpPeers.size == 1 && tcpPeers.single().host.isBlank()) {
+                                    tcpPeers = emptyList()
+                                }
+                                rnodeInterfaces = rnodeInterfaces + ReticulumRNodeInterface(
+                                    port = "",
+                                    frequencyHz = 0L,
+                                    bandwidthHz = 125_000,
+                                    txPowerDbm = 0,
+                                    spreadingFactor = 7,
+                                    codingRate = 5,
+                                )
+                                connectionInputError = null
+                            }) {
+                                Text("+ Add RNode serial interface", color = Accent)
+                            }
+                        }
+                    }
                 } else {
                     Text(
                         "Advanced: attach to an RNS shared instance already running on this device. Its RPC key must match; default ports are 37428/37429.",
@@ -1403,9 +1585,14 @@ private fun SettingsPage(
                 val stateMessage = when (val state = nodeState) {
                     is ReticulumNodeState.Running -> when {
                         state.sharedInstanceConnected -> "Using the existing local Reticulum shared instance."
+                        state.rnodeInterfaces.isNotEmpty() && state.tcpPeers.isNotEmpty() ->
+                            "${state.onlineTcpPeerIds.size} of ${state.tcpPeers.size} TCP connections online; " +
+                                "${state.onlineRNodePorts.size} of ${state.rnodeInterfaces.size} RNode radios online."
+                        state.rnodeInterfaces.isNotEmpty() -> "${state.onlineRNodePorts.size} of ${state.rnodeInterfaces.size} RNode radios online. " +
+                            state.rnodeInterfaces.joinToString { radio -> "${radio.port} ${if (radio.id in state.onlineRNodePorts) "(online)" else "(retrying)"}" }
                         state.tcpPeers.isNotEmpty() -> "${state.onlineTcpPeerIds.size} of ${state.tcpPeers.size} TCP connections online. " +
                             state.tcpPeers.joinToString { peer -> "${peer.host}:${peer.port} ${if (peer.id in state.onlineTcpPeerIds) "(online)" else "(retrying)"}" }
-                        else -> "RNS node is running without a TCP peer."
+                        else -> "RNS node is running without a configured interface."
                     }
                     is ReticulumNodeState.Starting -> "Starting the Reticulum node…"
                     is ReticulumNodeState.PreparingRuntime -> state.detail
@@ -1418,7 +1605,9 @@ private fun SettingsPage(
 
                 Button(
                     enabled = nodeSupported && !isStarting && (isRunning || if (runtimeMode == ReticulumRuntimeMode.EMBEDDED) {
-                        tcpPeers.isNotEmpty() && tcpPeers.all { it.validationError() == null }
+                        (tcpPeers.isNotEmpty() || rnodeInterfaces.isNotEmpty()) &&
+                            tcpPeers.all { it.validationError() == null } &&
+                            rnodeInterfaces.all { it.validationError() == null }
                     } else existingRpcKey.length >= 32 && existingRpcKey.length % 2 == 0),
                     onClick = {
                         if (isRunning) {
@@ -1432,6 +1621,7 @@ private fun SettingsPage(
                                         ifacNetworkName = peer.ifacNetworkName?.trim()?.ifBlank { null },
                                         ifacPassphrase = peer.ifacPassphrase?.takeIf { it.isNotBlank() },
                                     ) },
+                                    rnodeInterfaces = rnodeInterfaces.map { radio -> radio.copy(port = radio.port.trim()) },
                                 )
                                 ReticulumRuntimeMode.EXISTING_SHARED_INSTANCE -> ReticulumNodeConfig(
                                     mode = runtimeMode,
@@ -1439,7 +1629,7 @@ private fun SettingsPage(
                                 )
                             }
                             val error = when {
-                                config.ifacValidationError() != null -> config.ifacValidationError()
+                                config.validationError() != null -> config.validationError()
                                 runtimeMode == ReticulumRuntimeMode.EXISTING_SHARED_INSTANCE && existingRpcKey.length < 32 ->
                                     "The RPC key must be at least 32 hexadecimal characters."
                                 else -> null

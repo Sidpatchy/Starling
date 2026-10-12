@@ -26,7 +26,7 @@
 
 ## Protocol direction
 
-- Start with IP connectivity, initially an outbound TCP client to a user-selected Reticulum peer/gateway; keep transport-node routing disabled by default. Evaluate local `AutoInterface` discovery as a separate convenience path. Android and desktop now have embedded RNS node paths with live RRC and LXMF adapters; physical Android service validation remains open.
+- Start with IP connectivity, initially an outbound TCP client to a user-selected Reticulum peer/gateway; keep transport-node routing disabled by default. Desktop now also has an initial serial RNode interface path; physical radio validation and Android/iOS hardware adapters remain open. Evaluate local `AutoInterface` discovery as a separate convenience path.
 - Treat Bluetooth as a later interface project, not an assumed built-in phone-to-phone mesh. First investigate BLE connectivity to supported RNode hardware (BLE is the device link; LoRa or another radio is the over-the-air mesh), then assess custom BLE packet interfaces and their Android/iOS interoperability constraints.
 - Preserve an advanced option to connect Starling to an already-running Reticulum instance, while keeping the default embedded-node path behind the same shared transport boundary.
 - Start with RRC (Reticulum Relay Chat) for core room messaging.

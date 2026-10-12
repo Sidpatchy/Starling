@@ -16,3 +16,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "Starling"
 include(":composeApp")
+include(":androidApp")
