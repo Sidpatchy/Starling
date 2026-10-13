@@ -201,7 +201,16 @@ jobs:
         uses: gradle/actions/setup-gradle@v6
 
       - name: Build unsigned macOS DMG
-        run: ./gradlew --no-daemon "-PstarlingVersion=${{ needs.resolve-version.outputs.app_version }}" "-PstarlingPackageVersion=${{ needs.resolve-version.outputs.package_version }}" :composeApp:packageReleaseDmg
+        env:
+          APP_VERSION: ${{ needs.resolve-version.outputs.app_version }}
+          PACKAGE_VERSION: ${{ needs.resolve-version.outputs.package_version }}
+        run: |
+          mac_package_version="$PACKAGE_VERSION"
+          if [[ "$mac_package_version" == 0.* ]]; then
+            echo "macOS jpackage rejects zero-major versions; using 1.0.0 for the bundle metadata."
+            mac_package_version=1.0.0
+          fi
+          ./gradlew --no-daemon "-PstarlingVersion=$APP_VERSION" "-PstarlingPackageVersion=$mac_package_version" :composeApp:packageReleaseDmg
 
       - name: Show jpackage diagnostics
         if: failure()
