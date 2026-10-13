@@ -11,6 +11,7 @@ OUTPUT_DIR="$1"
 CRYPTOGRAPHY_VERSION="50.0.2"
 CIBUILDWHEEL_VERSION="3.1.4"
 CFFI_VERSION="2.1.1"
+OPENSSL_SRC_VERSION="300.6.1+3.6.3"
 CRYPTOGRAPHY_SDIST_URL="https://files.pythonhosted.org/packages/9d/af/182eb91b0df3fe75c4d9f26fe70684569566745f6ba7e5c9c73a862c5252/cryptography-50.0.2.tar.gz"
 CRYPTOGRAPHY_SDIST_SHA256="7b46165bb56eb4704e2eaaf86f3c940d19154535d9b0ca7d6d590b04060e00d5"
 TEMP_DIR="$(mktemp -d)"
@@ -38,23 +39,18 @@ mkdir -p "$TEMP_DIR/cryptography-source" "$TEMP_DIR/wheels"
 tar -xzf "$TEMP_DIR/cryptography-sdist.tar.gz" --strip-components=1 -C "$TEMP_DIR/cryptography-source"
 # PyCA's Rust build script runs CFFI's code generator with the cross Python.
 # Give that subprocess a host CFFI backend while keeping its iOS sysconfig.
-python3 - "$TEMP_DIR/cryptography-source/src/rust/cryptography-cffi/build.rs" <<'PY'
-import pathlib
-import sys
-
-build_script = pathlib.Path(sys.argv[1])
-source = build_script.read_text(encoding="utf-8")
-original = '    let output = Command::new(&python)\n        .env("OUT_DIR", &out_dir)\n'
-replacement = (
-    '    let output = Command::new(&python)\n'
-    '        .env("PYTHONPATH", env::var("STARLING_CFFI_HOST_PYTHONPATH")\n'
-    '            .expect("STARLING_CFFI_HOST_PYTHONPATH must be set for iOS builds"))\n'
-    '        .env("OUT_DIR", &out_dir)\n'
-)
-if source.count(original) != 1:
-    raise SystemExit("Unexpected PyCA build.rs; refusing to apply the CFFI cross-build patch.")
-build_script.write_text(source.replace(original, replacement), encoding="utf-8")
-PY
+# PyCA 50 no longer enables openssl-sys's vendored feature by default. A host
+# OpenSSL cannot be linked into iOS wheels, so enable the locked openssl-src
+# builder, which has dedicated iOS device and simulator targets.
+python3 "$ROOT/packaging/ios/patch-cryptography-ios-build.py" "$TEMP_DIR/cryptography-source"
+cargo update \
+  --manifest-path "$TEMP_DIR/cryptography-source/src/rust/Cargo.toml" \
+  --package openssl-sys
+cargo update \
+  --manifest-path "$TEMP_DIR/cryptography-source/src/rust/Cargo.toml" \
+  --package openssl-src \
+  --precise "$OPENSSL_SRC_VERSION"
+grep -Fq "name = \"openssl-src\"" "$TEMP_DIR/cryptography-source/Cargo.lock"
 cat > "$TEMP_DIR/cryptography-source/ios_crypto_smoke.py" <<'PY'
 import cffi
 from cryptography.hazmat.primitives.asymmetric import ed25519, x25519
