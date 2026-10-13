@@ -28,6 +28,7 @@ HOST_BUILD_DEPS="$TEMP_DIR/host-build-deps"
 python3 -m pip install --disable-pip-version-check --no-input --target "$HOST_BUILD_DEPS" \
   "cffi==$CFFI_VERSION"
 HOST_BUILD_ENV="STARLING_CFFI_HOST_PYTHONPATH=$(printf '%q' "$HOST_BUILD_DEPS")"
+PYO3_CONFIG_SCRIPT="$(printf '%q' "$ROOT/packaging/ios/prepare-pyo3-cross-lib.py")"
 
 curl --fail --location --silent --show-error "$CRYPTOGRAPHY_SDIST_URL" -o "$TEMP_DIR/cryptography-sdist.tar.gz"
 if command -v shasum >/dev/null 2>&1; then
@@ -82,7 +83,7 @@ PY
 (
   cd "$TEMP_DIR/cryptography-source"
   CIBW_BUILD="cp313-ios_arm64_iphoneos cp313-ios_arm64_iphonesimulator" \
-  CIBW_ENVIRONMENT="$HOST_BUILD_ENV" \
+  CIBW_ENVIRONMENT="$HOST_BUILD_ENV PYO3_CROSS=1 PYO3_CROSS_PYTHON_VERSION=3.13 PYO3_CROSS_LIB_DIR=\$(python3 $PYO3_CONFIG_SCRIPT)" \
   CIBW_TEST_COMMAND="python -m ios_crypto_smoke" \
   CIBW_TEST_REQUIRES="cffi==$CFFI_VERSION rns==1.5.7" \
   CIBW_TEST_SOURCES="ios_crypto_smoke.py" \

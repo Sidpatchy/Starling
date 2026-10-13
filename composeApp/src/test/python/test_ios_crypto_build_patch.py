@@ -2,6 +2,7 @@
 
 import importlib.util
 from pathlib import Path
+import runpy
 import tempfile
 import unittest
 
@@ -18,6 +19,32 @@ class IosCryptoBuildPatchTest(unittest.TestCase):
         script = (ROOT / "packaging/ios/build-ios-cryptography-wheels.sh").read_text(encoding="utf-8")
         self.assertIn('ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"', script)
         self.assertIn('python3 "$ROOT/packaging/ios/patch-cryptography-ios-build.py"', script)
+
+    def test_builder_passes_the_active_cross_python_library_to_pyo3(self):
+        script = (ROOT / "packaging/ios/build-ios-cryptography-wheels.sh").read_text(encoding="utf-8")
+        self.assertIn("PYO3_CROSS=1", script)
+        self.assertIn("PYO3_CROSS_PYTHON_VERSION=3.13", script)
+        self.assertIn("PYO3_CROSS_LIB_DIR=\\$(python3 $PYO3_CONFIG_SCRIPT)", script)
+
+    def test_target_slice_staging_keeps_sysconfig_and_library_together(self):
+        helper_path = ROOT / "packaging/ios/prepare-pyo3-cross-lib.py"
+        with tempfile.TemporaryDirectory(prefix="starling-pyo3-cross-") as temporary:
+            slice_root = Path(temporary) / "ios-arm64_x86_64-simulator"
+            sysconfig_dir = slice_root / "platform-config/arm64-iphonesimulator"
+            library_dir = slice_root / "lib"
+            sysconfig_dir.mkdir(parents=True)
+            library_dir.mkdir()
+            sysconfig_file = sysconfig_dir / "_sysconfigdata__ios_arm64-iphonesimulator.py"
+            sysconfig_file.write_text("build_time_vars = {}\n", encoding="utf-8")
+            library = library_dir / "libpython3.13.dylib"
+            library.write_bytes(b"simulator-python")
+
+            namespace = runpy.run_path(str(helper_path))
+            staged = namespace["stage_python_library"](slice_root, "arm64-iphonesimulator")
+
+            self.assertEqual((staged / sysconfig_file.name).read_text(encoding="utf-8"), "build_time_vars = {}\n")
+            self.assertTrue((staged / library.name).is_symlink())
+            self.assertEqual((staged / library.name).resolve(), library.resolve())
 
     def make_source_tree(self, root):
         cffi = root / "src/rust/cryptography-cffi"
