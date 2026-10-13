@@ -5,18 +5,18 @@ import ComposeApp
 
 @MainActor
 final class StarlingIdentityDocuments: NSObject, @preconcurrency IosIdentityDocuments, UIDocumentPickerDelegate {
-    private var importCompletion: ((KotlinByteArray?, String?) -> KotlinUnit)?
-    private var exportCompletion: ((String?, String?) -> KotlinUnit)?
+    private var importCompletion: IosIdentityImportCallback?
+    private var exportCompletion: IosIdentityExportCallback?
     private var exportDirectory: URL?
     private weak var picker: UIDocumentPickerViewController?
 
-    func importIdentity(completion: @escaping (KotlinByteArray?, String?) -> KotlinUnit) {
-        importCompletion = completion
+    func importIdentity(callback: IosIdentityImportCallback) {
+        importCompletion = callback
         present(UIDocumentPickerViewController(forOpeningContentTypes: [.item], asCopy: false))
     }
 
-    func exportIdentity(bytes: KotlinByteArray, suggestedName: String, completion: @escaping (String?, String?) -> KotlinUnit) {
-        exportCompletion = completion
+    func exportIdentity(bytes: KotlinByteArray, suggestedName: String, callback: IosIdentityExportCallback) {
+        exportCompletion = callback
         do {
             let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
             exportDirectory = directory
@@ -84,7 +84,7 @@ final class StarlingIdentityDocuments: NSObject, @preconcurrency IosIdentityDocu
         importCompletion = nil
         exportCompletion = nil
         picker = nil
-        _ = importCallback?(imported, error)
-        _ = exportCallback?(exported ? "saved" : nil, error)
+        importCallback?.onImport(bytes: imported, error: error)
+        exportCallback?.onExport(saved: exported ? "saved" : nil, error: error)
     }
 }

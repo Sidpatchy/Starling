@@ -11,7 +11,7 @@ final class StarlingEmbeddedPythonRuntime: NSObject, IosPythonRuntime {
     private var didInitialize = false
     private var startupError: String?
 
-    init() {
+    override init() {
         let supportDirectory = FileManager.default.urls(
             for: .applicationSupportDirectory,
             in: .userDomainMask
