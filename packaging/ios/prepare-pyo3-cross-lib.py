@@ -4,7 +4,6 @@
 from pathlib import Path
 import shutil
 import sys
-import sysconfig
 
 
 def stage_python_library(slice_root: Path, multiarch: str, version: str = "3.13") -> Path:
@@ -13,18 +12,23 @@ def stage_python_library(slice_root: Path, multiarch: str, version: str = "3.13"
     if len(sysconfig_files) != 1:
         raise RuntimeError(f"Expected one {multiarch} Python sysconfig file in {config_dir}")
 
-    library = slice_root / "lib" / f"libpython{version}.dylib"
-    if not library.is_file():
-        raise RuntimeError(f"Target Python library is missing: {library}")
+    # BeeWare's XCFramework releases have used both a loose libpython dylib
+    # and a Python.framework binary. PyO3 links using `-lpythonX.Y`, so expose
+    # either real target binary with the conventional libpython name.
+    python_library = slice_root / "lib" / f"libpython{version}.dylib"
+    if not python_library.is_file():
+        python_library = slice_root / "Python.framework" / "Python"
+    if not python_library.is_file():
+        raise RuntimeError(f"Target Python library/framework binary is missing from {slice_root}")
 
     cross_lib_dir = slice_root / "lib" / "pyo3-cross"
     cross_lib_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy2(sysconfig_files[0], cross_lib_dir / sysconfig_files[0].name)
 
-    staged_library = cross_lib_dir / library.name
+    staged_library = cross_lib_dir / f"libpython{version}.dylib"
     if staged_library.exists() or staged_library.is_symlink():
         staged_library.unlink()
-    staged_library.symlink_to(library)
+    staged_library.symlink_to(python_library)
     return cross_lib_dir
 
 

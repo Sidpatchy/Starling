@@ -3,8 +3,10 @@
 import importlib.util
 from pathlib import Path
 import runpy
+from types import SimpleNamespace
 import tempfile
 import unittest
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -24,7 +26,7 @@ class IosCryptoBuildPatchTest(unittest.TestCase):
         script = (ROOT / "packaging/ios/build-ios-cryptography-wheels.sh").read_text(encoding="utf-8")
         self.assertIn("PYO3_CROSS=1", script)
         self.assertIn("PYO3_CROSS_PYTHON_VERSION=3.13", script)
-        self.assertIn("PYO3_CROSS_LIB_DIR=\\$(python3 $PYO3_CONFIG_SCRIPT)", script)
+        self.assertIn('PYO3_CROSS_LIB_DIR=\\$(python3 \\"$ROOT/packaging/ios/prepare-pyo3-cross-lib.py\\")', script)
 
     def test_target_slice_staging_keeps_sysconfig_and_library_together(self):
         helper_path = ROOT / "packaging/ios/prepare-pyo3-cross-lib.py"
@@ -45,6 +47,39 @@ class IosCryptoBuildPatchTest(unittest.TestCase):
             self.assertEqual((staged / sysconfig_file.name).read_text(encoding="utf-8"), "build_time_vars = {}\n")
             self.assertTrue((staged / library.name).is_symlink())
             self.assertEqual((staged / library.name).resolve(), library.resolve())
+
+    def test_target_slice_staging_accepts_beeware_python_framework_layout(self):
+        helper_path = ROOT / "packaging/ios/prepare-pyo3-cross-lib.py"
+        with tempfile.TemporaryDirectory(prefix="starling-pyo3-framework-") as temporary:
+            slice_root = Path(temporary) / "ios-arm64"
+            sysconfig_dir = slice_root / "platform-config/arm64-iphoneos"
+            framework_dir = slice_root / "Python.framework"
+            sysconfig_dir.mkdir(parents=True)
+            framework_dir.mkdir()
+            sysconfig_file = sysconfig_dir / "_sysconfigdata__ios_arm64-iphoneos.py"
+            sysconfig_file.write_text("build_time_vars = {}\n", encoding="utf-8")
+            framework_binary = framework_dir / "Python"
+            framework_binary.write_bytes(b"beeware-python-framework")
+
+            namespace = runpy.run_path(str(helper_path))
+            staged = namespace["stage_python_library"](slice_root, "arm64-iphoneos")
+
+            staged_library = staged / "libpython3.13.dylib"
+            self.assertTrue(staged_library.is_symlink())
+            self.assertEqual(staged_library.resolve(), framework_binary.resolve())
+            self.assertTrue((staged / sysconfig_file.name).is_file())
+
+    def test_cli_resolves_target_slice_and_multiarch_from_cibuildwheel_python(self):
+        helper_path = ROOT / "packaging/ios/prepare-pyo3-cross-lib.py"
+        slice_root = Path("/python-ios/Python.xcframework/ios-arm64")
+        with patch("sys.version_info", SimpleNamespace(major=3, minor=13)), \
+                patch("sys.implementation", SimpleNamespace(_multiarch="arm64-iphoneos")), \
+                patch("shutil.which", return_value=str(slice_root / "bin/python3.13")):
+            target_slice, multiarch, version = runpy.run_path(str(helper_path))["active_python_slice"]()
+
+        self.assertEqual(target_slice, slice_root)
+        self.assertEqual(multiarch, "arm64-iphoneos")
+        self.assertEqual(version, "3.13")
 
     def make_source_tree(self, root):
         cffi = root / "src/rust/cryptography-cffi"
