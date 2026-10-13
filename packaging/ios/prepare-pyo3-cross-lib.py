@@ -4,9 +4,20 @@
 from pathlib import Path
 import shutil
 import sys
+import tempfile
 
 
-def stage_python_library(slice_root: Path, multiarch: str, version: str = "3.13") -> Path:
+def default_stage_root(multiarch: str) -> Path:
+    return Path(tempfile.gettempdir()) / "starling-pyo3-cross" / multiarch
+
+
+def stage_python_library(
+    slice_root: Path, multiarch: str, version: str = "3.13", stage_root: Path | None = None
+) -> Path:
+    # Stage outside the XCframework slice: the cibuildwheel iOS testbed bundles
+    # the slice into the app, and iOS rejects symlinks that escape the bundle.
+    if stage_root is None:
+        stage_root = default_stage_root(multiarch)
     config_dir = slice_root / "platform-config" / multiarch
     sysconfig_files = list(config_dir.glob("_sysconfigdata*.py"))
     if len(sysconfig_files) != 1:
@@ -21,7 +32,7 @@ def stage_python_library(slice_root: Path, multiarch: str, version: str = "3.13"
     if not python_library.is_file():
         raise RuntimeError(f"Target Python library/framework binary is missing from {slice_root}")
 
-    cross_lib_dir = slice_root / "lib" / "pyo3-cross"
+    cross_lib_dir = stage_root / "lib" / "pyo3-cross"
     cross_lib_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy2(sysconfig_files[0], cross_lib_dir / sysconfig_files[0].name)
 
@@ -35,12 +46,13 @@ def stage_python_library(slice_root: Path, multiarch: str, version: str = "3.13"
     include_src = slice_root / "include" / f"python{version}"
     if not include_src.is_dir():
         raise RuntimeError(f"Target Python headers are missing: {include_src}")
-    include_dst = slice_root / "include" / cross_lib_dir.name
+    include_dst = stage_root / "include" / cross_lib_dir.name
+    include_dst.parent.mkdir(parents=True, exist_ok=True)
     if include_dst.is_symlink():
         include_dst.unlink()
     elif include_dst.exists():
         shutil.rmtree(include_dst)
-    include_dst.symlink_to(include_src.name)
+    include_dst.symlink_to(include_src)
 
     return cross_lib_dir
 

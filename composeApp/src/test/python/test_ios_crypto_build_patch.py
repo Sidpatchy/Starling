@@ -44,14 +44,18 @@ class IosCryptoBuildPatchTest(unittest.TestCase):
             library.write_bytes(b"simulator-python")
             (include_dir / "Python.h").write_text("// Python.h\n", encoding="utf-8")
 
+            stage_root = Path(temporary) / "stage"
             namespace = runpy.run_path(str(helper_path))
-            staged = namespace["stage_python_library"](slice_root, "arm64-iphonesimulator")
+            staged = namespace["stage_python_library"](slice_root, "arm64-iphonesimulator", stage_root=stage_root)
 
             self.assertEqual((staged / sysconfig_file.name).read_text(encoding="utf-8"), "build_time_vars = {}\n")
             self.assertTrue((staged / library.name).is_symlink())
             self.assertEqual((staged / library.name).resolve(), library.resolve())
-            self.assertTrue((slice_root / "include/pyo3-cross").is_symlink())
-            self.assertEqual((slice_root / "include/pyo3-cross").resolve(), include_dir.resolve())
+            self.assertTrue((stage_root / "include/pyo3-cross").is_symlink())
+            self.assertEqual((stage_root / "include/pyo3-cross").resolve(), include_dir.resolve())
+            # The iOS testbed bundles the slice; staged symlinks must stay out of it.
+            self.assertFalse((slice_root / "lib/pyo3-cross").exists())
+            self.assertFalse((slice_root / "include/pyo3-cross").exists())
 
     def test_target_slice_staging_accepts_beeware_python_framework_layout(self):
         helper_path = ROOT / "packaging/ios/prepare-pyo3-cross-lib.py"
@@ -69,15 +73,16 @@ class IosCryptoBuildPatchTest(unittest.TestCase):
             framework_binary.write_bytes(b"beeware-python-framework")
             (include_dir / "Python.h").write_text("// Python.h\n", encoding="utf-8")
 
+            stage_root = Path(temporary) / "stage"
             namespace = runpy.run_path(str(helper_path))
-            staged = namespace["stage_python_library"](slice_root, "arm64-iphoneos")
+            staged = namespace["stage_python_library"](slice_root, "arm64-iphoneos", stage_root=stage_root)
 
             staged_library = staged / "libpython3.13.dylib"
             self.assertTrue(staged_library.is_symlink())
             self.assertEqual(staged_library.resolve(), framework_binary.resolve())
             self.assertTrue((staged / sysconfig_file.name).is_file())
-            self.assertTrue((slice_root / "include/pyo3-cross").is_symlink())
-            self.assertEqual((slice_root / "include/pyo3-cross").resolve(), include_dir.resolve())
+            self.assertTrue((stage_root / "include/pyo3-cross").is_symlink())
+            self.assertEqual((stage_root / "include/pyo3-cross").resolve(), include_dir.resolve())
 
     def test_target_slice_staging_includes_python_headers(self):
         helper_path = ROOT / "packaging/ios/prepare-pyo3-cross-lib.py"
@@ -95,10 +100,11 @@ class IosCryptoBuildPatchTest(unittest.TestCase):
             framework_binary.write_bytes(b"beeware-python-framework")
             (include_dir / "Python.h").write_text("// Python.h\n", encoding="utf-8")
 
+            stage_root = Path(temporary) / "stage"
             namespace = runpy.run_path(str(helper_path))
-            staged = namespace["stage_python_library"](slice_root, "arm64-iphoneos")
+            staged = namespace["stage_python_library"](slice_root, "arm64-iphoneos", stage_root=stage_root)
 
-            staged_include = slice_root / "include/pyo3-cross"
+            staged_include = stage_root / "include/pyo3-cross"
             self.assertTrue(staged_include.is_symlink())
             self.assertEqual(staged_include.resolve(), include_dir.resolve())
             self.assertTrue((staged_include / "Python.h").is_file())
