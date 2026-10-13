@@ -59,21 +59,6 @@ class AndroidReticulumNodeController(context: Context) : ReticulumNodeController
             return
         }
 
-        when (config.mode) {
-            ReticulumRuntimeMode.EMBEDDED -> Unit
-            ReticulumRuntimeMode.EXISTING_SHARED_INSTANCE -> Unit
-        }
-
-        if (config.mode == ReticulumRuntimeMode.EXISTING_SHARED_INSTANCE) {
-            val key = config.existingInstanceRpcKeyHex.orEmpty()
-            if (key.length < 32 || key.length % 2 != 0 || key.any { it.digitToIntOrNull(16) == null }) {
-                _state.value = ReticulumNodeState.Failed(
-                    "Enter the existing local RNS instance's RPC key as at least 32 hexadecimal characters.",
-                )
-                return
-            }
-        }
-
         config.validationError()?.let {
             _state.value = ReticulumNodeState.Failed(it)
             return

@@ -2234,7 +2234,7 @@ private fun SettingsPage(
                         (tcpPeers.isNotEmpty() || rnodeInterfaces.isNotEmpty()) &&
                             tcpPeers.all { it.validationError() == null } &&
                             rnodeInterfaces.all { it.validationError() == null }
-                    } else existingRpcKey.length >= 32 && existingRpcKey.length % 2 == 0),
+                    } else isValidReticulumRpcKey(existingRpcKey)),
                     onClick = {
                         if (isRunning) {
                             onDisconnectNode()
@@ -2254,12 +2254,7 @@ private fun SettingsPage(
                                     existingInstanceRpcKeyHex = existingRpcKey,
                                 )
                             }
-                            val error = when {
-                                config.validationError() != null -> config.validationError()
-                                runtimeMode == ReticulumRuntimeMode.EXISTING_SHARED_INSTANCE && existingRpcKey.length < 32 ->
-                                    "The RPC key must be at least 32 hexadecimal characters."
-                                else -> null
-                            }
+                            val error = config.validationError()
                             connectionInputError = error
                             if (error == null) onStartNode(config)
                         }

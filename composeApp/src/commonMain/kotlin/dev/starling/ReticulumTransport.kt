@@ -59,6 +59,9 @@ data class ReticulumNodeConfig(
     val existingInstanceRpcKeyHex: String? = null,
 ) {
     fun validationError(): String? {
+        if (mode == ReticulumRuntimeMode.EXISTING_SHARED_INSTANCE && !isValidReticulumRpcKey(existingInstanceRpcKeyHex.orEmpty())) {
+            return "Enter the existing local RNS instance's RPC key as at least 32 hexadecimal characters."
+        }
         if (mode != ReticulumRuntimeMode.EMBEDDED && (tcpPeers.isNotEmpty() || rnodeInterfaces.isNotEmpty())) {
             return "Interfaces can only be configured for Starling's embedded node."
         }
@@ -91,6 +94,10 @@ data class ReticulumNodeConfig(
         return null
     }
 }
+
+/** Shared-instance RPC keys contain at least 16 bytes, represented as whole hexadecimal pairs. */
+fun isValidReticulumRpcKey(key: String): Boolean =
+    key.length >= 32 && key.length % 2 == 0 && key.all { it.digitToIntOrNull(16) != null }
 
 sealed interface ReticulumNodeState {
     data object Stopped : ReticulumNodeState
@@ -205,7 +212,7 @@ sealed interface ReticulumEvent {
 /**
  * Chat-protocol seam for RRC and LXMF. Node lifecycle and underlay interface
  * management are handled separately by [ReticulumNodeController]; platform
- * implementations own wire encoding while common code stays independent of
+ * implementations own runtime communication while common code stays independent of
  * platform and Python APIs.
  *
  * RRC room traffic and LXMF direct delivery are implemented by platform adapters.

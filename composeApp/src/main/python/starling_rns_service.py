@@ -1,24 +1,15 @@
 """Long-lived JSON-free line protocol wrapper for the desktop RNS bridge."""
 
-import base64
-import json
 import os
 import queue
 import sys
 import threading
 import time
 
+from starling_bridge_protocol import dispatch_lxmf, dispatch_rrc, encode, parse_start_request, status_line
 
 protocol_out = sys.stdout
 commands = queue.Queue()
-
-
-def decode(value):
-    return base64.b64decode(value.encode("ascii")).decode("utf-8")
-
-
-def encode(value):
-    return base64.b64encode(value.encode("utf-8")).decode("ascii")
 
 
 def emit(line):
@@ -26,59 +17,10 @@ def emit(line):
     protocol_out.flush()
 
 
-def status_line(module):
-    value = json.loads(module.status())
-    if not value.get("running"):
-        return "STATUS\tSTOPPED"
-    peer_status = ";".join(
-        "{},{},{}".format(encode(peer.get("host", "")), peer.get("port", 0), 1 if peer.get("online") else 0)
-        for peer in value.get("tcp_interfaces", [])
-    )
-    rnode_status = ";".join(
-        "{},{}".format(encode(radio.get("port", "")), 1 if radio.get("online") else 0)
-        for radio in value.get("rnode_interfaces", [])
-    )
-    return "STATUS\tRUNNING\t{}\t{}\t{}\t{}\t{}".format(
-        value.get("mode", "embedded"),
-        encode(peer_status),
-        len(value.get("tcp_interfaces", [])),
-        1 if value.get("shared_instance_connected") else 0,
-        encode(rnode_status),
-    )
-
-
 def read_commands():
     for line in sys.stdin:
-        commands.put(line.strip())
+        commands.put(line.rstrip("\r\n"))
     commands.put("EOF")
-
-
-def dispatch_rrc(command, rrc):
-    fields = command.split("\t")
-    action = fields[0]
-    if action == "RRC_CONNECT" and len(fields) == 3:
-        display_name = decode(fields[2])
-        rrc.connect(decode(fields[1]), display_name)
-    elif action == "RRC_DISCONNECT":
-        rrc.disconnect()
-    elif action == "RRC_JOIN" and len(fields) == 2:
-        rrc.join(decode(fields[1]))
-    elif action == "RRC_PART" and len(fields) == 2:
-        rrc.part(decode(fields[1]))
-    elif action == "RRC_SEND" and len(fields) == 4:
-        rrc.send(decode(fields[1]), decode(fields[2]), fields[3] == "1")
-    else:
-        raise ValueError("Invalid RRC command")
-
-
-def dispatch_lxmf(command, lxmf):
-    fields = command.split("\t")
-    if fields[0] == "LXMF_SEND" and len(fields) == 3:
-        lxmf.send_direct(decode(fields[1]), decode(fields[2]))
-    elif fields[0] == "LXMF_SET_NAME" and len(fields) == 2:
-        lxmf.set_display_name(decode(fields[1]))
-    else:
-        raise ValueError("Invalid LXMF command")
 
 
 def main():
@@ -92,52 +34,17 @@ def main():
     sys.stdout = log_file
     sys.stderr = log_file
 
-    start = sys.stdin.readline().strip().split("\t")
-    if len(start) < 6 or start[0] != "START":
-        emit("ERROR\t" + encode("Invalid start request."))
-        return 2
-
-    mode = start[1]
-    rpc_key_hex = decode(start[2])
-    if start[3] != "4":
-        emit("ERROR\t" + encode("Unsupported desktop bridge protocol version."))
-        return 2
+    start = sys.stdin.readline().rstrip("\r\n").split("\t")
     try:
-        peer_count = int(start[4])
-        rnode_count = int(start[5])
-    except ValueError:
-        emit("ERROR\t" + encode("Invalid interface count."))
+        config_mode, rpc_key_hex, tcp_peers, rnode_interfaces = parse_start_request(start)
+    except ValueError as error:
+        emit("ERROR\t" + encode(str(error)))
         return 2
-    if peer_count < 0 or rnode_count < 0 or len(start) != 6 + peer_count * 4 + rnode_count * 6:
-        emit("ERROR\t" + encode("Interface configuration data is incomplete."))
-        return 2
-    tcp_peers = []
-    for index in range(peer_count):
-        offset = 6 + index * 4
-        tcp_peers.append({
-            "host": decode(start[offset]),
-            "port": int(start[offset + 1]),
-            "ifac_network_name": decode(start[offset + 2]),
-            "ifac_passphrase": decode(start[offset + 3]),
-        })
-    rnode_interfaces = []
-    rnode_offset = 6 + peer_count * 4
-    for index in range(rnode_count):
-        offset = rnode_offset + index * 6
-        rnode_interfaces.append({
-            "port": decode(start[offset]),
-            "frequency_hz": int(start[offset + 1]),
-            "bandwidth_hz": int(start[offset + 2]),
-            "tx_power_dbm": int(start[offset + 3]),
-            "spreading_factor": int(start[offset + 4]),
-            "coding_rate": int(start[offset + 5]),
-        })
 
     try:
         import starling_rns
         import starling_rrc
         import starling_lxmf
-        config_mode = "embedded" if mode == "EMBEDDED" else "existing_shared_instance"
         starling_rns.start_node(data_dir, config_mode, tcp_peers, rpc_key_hex, rnode_interfaces)
         lxmf_start_error = None
         try:

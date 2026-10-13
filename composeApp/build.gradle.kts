@@ -57,6 +57,7 @@ kotlin {
 
         commonTest.dependencies {
             implementation(kotlin("test"))
+            implementation(libs.kotlinx.coroutines.test)
         }
 
         val iosTest = create("iosTest") {

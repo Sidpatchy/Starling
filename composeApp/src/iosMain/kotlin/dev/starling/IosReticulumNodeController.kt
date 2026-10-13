@@ -43,10 +43,6 @@ class IosReticulumNodeController(
     private var runtimeUsed = false
 
     override suspend fun start(config: ReticulumNodeConfig) = operations.withLock {
-        if (config.mode == ReticulumRuntimeMode.EXISTING_SHARED_INSTANCE && !validRpcKey(config.existingInstanceRpcKeyHex.orEmpty())) {
-            _state.value = ReticulumNodeState.Failed("Enter the existing local RNS instance's RPC key as at least 32 hexadecimal characters.")
-            return@withLock
-        }
         config.validationError()?.let {
             _state.value = ReticulumNodeState.Failed(it)
             return@withLock
@@ -159,53 +155,11 @@ class IosReticulumNodeController(
     }
 
     private fun applyServiceLine(line: String, requestedConfig: ReticulumNodeConfig): Boolean {
-        val fields = line.split('\t')
-        when {
-            fields.firstOrNull() == "ERROR" -> {
-                val message = fields.getOrNull(1)?.decodeIosBase64().orEmpty().ifBlank { "The iOS Reticulum runtime failed." }
-                _state.value = ReticulumNodeState.Failed(message)
-                return true
-            }
-            fields.firstOrNull() == "STOPPED" -> {
-                _state.value = ReticulumNodeState.Stopped
-                return true
-            }
-            (fields.firstOrNull() == "READY" || fields.firstOrNull() == "STATUS") && fields.getOrNull(1) == "RUNNING" -> {
-                val mode = runCatching { ReticulumRuntimeMode.valueOf(fields.getOrNull(2).orEmpty()) }
-                    .getOrDefault(requestedConfig.mode)
-                val onlineIds = fields.getOrNull(3)?.decodeIosBase64().orEmpty()
-                    .split(';')
-                    .mapNotNull { peerStatus ->
-                        val statusFields = peerStatus.split(',')
-                        val host = statusFields.getOrNull(0)?.decodeIosBase64().orEmpty()
-                        val port = statusFields.getOrNull(1)?.toIntOrNull() ?: return@mapNotNull null
-                        if (statusFields.getOrNull(2) == "1") "${host.lowercase()}:$port" else null
-                    }
-                    .toSet()
-                val onlineRNodePorts = fields.getOrNull(6)?.decodeIosBase64().orEmpty()
-                    .split(';')
-                    .mapNotNull { radioStatus ->
-                        val statusFields = radioStatus.split(',')
-                        val port = statusFields.getOrNull(0)?.decodeIosBase64().orEmpty()
-                        port.takeIf { it.isNotBlank() && statusFields.getOrNull(1) == "1" }?.lowercase()
-                    }
-                    .toSet()
-                _state.value = ReticulumNodeState.Running(
-                    mode = mode,
-                    tcpPeers = requestedConfig.tcpPeers,
-                    onlineTcpPeerIds = onlineIds,
-                    sharedInstanceConnected = fields.getOrNull(5) == "1",
-                    rnodeInterfaces = requestedConfig.rnodeInterfaces,
-                    onlineRNodePorts = onlineRNodePorts,
-                )
-                return true
-            }
-            fields.firstOrNull() == "READY" && fields.getOrNull(1) == "STOPPED" -> {
-                _state.value = ReticulumNodeState.Failed("Reticulum started without a running shared instance.")
-                return true
-            }
-        }
-        return false
+        val state = parseReticulumNodeBridgeState(
+            line, requestedConfig, defaultFailureMessage = "The iOS Reticulum runtime failed.",
+        ) ?: return false
+        _state.value = state
+        return true
     }
 
     private fun startCommand(config: ReticulumNodeConfig): String {
@@ -226,28 +180,4 @@ class IosReticulumNodeController(
         }
         return fields.joinToString("\t")
     }
-
-    private fun String.decodeIosBase64(): String {
-        if (isEmpty()) return ""
-        val alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
-        val output = ByteArray(length * 3 / 4)
-        var outputIndex = 0
-        var buffer = 0
-        var bits = 0
-        for (character in this) {
-            if (character == '=') break
-            val value = alphabet.indexOf(character)
-            if (value < 0) continue
-            buffer = (buffer shl 6) or value
-            bits += 6
-            if (bits >= 8) {
-                bits -= 8
-                if (outputIndex < output.size) output[outputIndex++] = ((buffer shr bits) and 0xff).toByte()
-            }
-        }
-        return output.copyOf(outputIndex).decodeToString(throwOnInvalidSequence = false)
-    }
-
-    private fun validRpcKey(key: String): Boolean =
-        key.length >= 32 && key.length % 2 == 0 && key.all { it.digitToIntOrNull(16) != null }
 }

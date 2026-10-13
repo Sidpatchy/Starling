@@ -42,10 +42,6 @@ class DesktopReticulumNodeController : ReticulumNodeController {
     private var activeConfig: ReticulumNodeConfig? = null
 
     override suspend fun start(config: ReticulumNodeConfig) = operations.withLock {
-        if (config.mode == ReticulumRuntimeMode.EXISTING_SHARED_INSTANCE && !validRpcKey(config.existingInstanceRpcKeyHex.orEmpty())) {
-            _state.value = ReticulumNodeState.Failed("Enter the existing local RNS instance's RPC key as at least 32 hexadecimal characters.")
-            return@withLock
-        }
         config.validationError()?.let {
             _state.value = ReticulumNodeState.Failed(it)
             return@withLock
@@ -134,6 +130,7 @@ class DesktopReticulumNodeController : ReticulumNodeController {
 
         val bridgeDirectory = dataDirectory.resolve("python-bridge")
         Files.createDirectories(bridgeDirectory)
+        extractBridgeResource("python/starling_bridge_protocol.py", bridgeDirectory.resolve("starling_bridge_protocol.py"))
         extractBridgeResource("python/starling_rns.py", bridgeDirectory.resolve("starling_rns.py"))
         extractBridgeResource("python/starling_rrc.py", bridgeDirectory.resolve("starling_rrc.py"))
         extractBridgeResource("python/starling_lxmf.py", bridgeDirectory.resolve("starling_lxmf.py"))
@@ -202,53 +199,9 @@ class DesktopReticulumNodeController : ReticulumNodeController {
     }
 
     private fun applyServiceLine(line: String, requestedConfig: ReticulumNodeConfig): Boolean {
-        val fields = line.split('\t')
-        when {
-            fields.firstOrNull() == "ERROR" -> {
-                val message = fields.getOrNull(1)?.let(::decodeBase64).orEmpty().ifBlank { "The RNS runtime failed." }
-                _state.value = ReticulumNodeState.Failed(message)
-                return true
-            }
-            fields.firstOrNull() == "STOPPED" -> {
-                _state.value = ReticulumNodeState.Stopped
-                return true
-            }
-            (fields.firstOrNull() == "READY" || fields.firstOrNull() == "STATUS") && fields.getOrNull(1) == "RUNNING" -> {
-                val mode = runCatching { ReticulumRuntimeMode.valueOf(fields.getOrNull(2).orEmpty()) }
-                    .getOrDefault(requestedConfig.mode)
-                val onlineIds = fields.getOrNull(3)?.let(::decodeBase64).orEmpty()
-                    .split(';')
-                    .mapNotNull { peerStatus ->
-                        val statusFields = peerStatus.split(',')
-                        val host = statusFields.getOrNull(0)?.let(::decodeBase64).orEmpty()
-                        val port = statusFields.getOrNull(1)?.toIntOrNull() ?: return@mapNotNull null
-                        if (statusFields.getOrNull(2) == "1") "${host.lowercase()}:$port" else null
-                    }
-                    .toSet()
-                val onlineRNodePorts = fields.getOrNull(6)?.let(::decodeBase64).orEmpty()
-                    .split(';')
-                    .mapNotNull { radioStatus ->
-                        val statusFields = radioStatus.split(',')
-                        val port = statusFields.getOrNull(0)?.let(::decodeBase64).orEmpty()
-                        port.takeIf { it.isNotBlank() && statusFields.getOrNull(1) == "1" }?.lowercase()
-                    }
-                    .toSet()
-                _state.value = ReticulumNodeState.Running(
-                    mode = mode,
-                    tcpPeers = requestedConfig.tcpPeers,
-                    onlineTcpPeerIds = onlineIds,
-                    sharedInstanceConnected = fields.getOrNull(5) == "1",
-                    rnodeInterfaces = requestedConfig.rnodeInterfaces,
-                    onlineRNodePorts = onlineRNodePorts,
-                )
-                return true
-            }
-            fields.firstOrNull() == "READY" && fields.getOrNull(1) == "STOPPED" -> {
-                _state.value = ReticulumNodeState.Failed("Reticulum started without a running shared instance.")
-                return true
-            }
-        }
-        return false
+        val state = parseReticulumNodeBridgeState(line, requestedConfig, decodeField = ::decodeBase64) ?: return false
+        _state.value = state
+        return true
     }
 
     private fun startCommand(config: ReticulumNodeConfig): String {
@@ -367,9 +320,6 @@ class DesktopReticulumNodeController : ReticulumNodeController {
         processWriter = null
         activeConfig = null
     }
-
-    private fun validRpcKey(key: String): Boolean =
-        key.length >= 32 && key.length % 2 == 0 && key.all { it.digitToIntOrNull(16) != null }
 
     private fun encodeBase64(value: String): String = Base64.getEncoder().encodeToString(value.toByteArray(Charsets.UTF_8))
 
