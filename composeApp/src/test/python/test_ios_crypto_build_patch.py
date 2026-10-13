@@ -3,6 +3,7 @@
 import importlib.util
 from pathlib import Path
 import runpy
+import subprocess
 from types import SimpleNamespace
 import tempfile
 import unittest
@@ -26,7 +27,12 @@ class IosCryptoBuildPatchTest(unittest.TestCase):
         script = (ROOT / "packaging/ios/build-ios-cryptography-wheels.sh").read_text(encoding="utf-8")
         self.assertIn("PYO3_CROSS=1", script)
         self.assertIn("PYO3_CROSS_PYTHON_VERSION=3.13", script)
-        self.assertIn('PYO3_CROSS_LIB_DIR=\\$(python3 \\"$ROOT/packaging/ios/prepare-pyo3-cross-lib.py\\")', script)
+        self.assertIn("CIBW_BEFORE_BUILD", script)
+        # The helper is invoked via a variable that sources the shell script
+        self.assertIn('PYO3_CROSS_SETUP="source \\"$ROOT/packaging/ios/prepare-pyo3-cross-lib.sh\\""', script)
+        self.assertIn('CIBW_BEFORE_BUILD="$PYO3_CROSS_SETUP"', script)
+        # Old command-substitution approach should be gone
+        self.assertNotIn("PYO3_CROSS_LIB_DIR=", script)
 
     def test_target_slice_staging_keeps_sysconfig_and_library_together(self):
         helper_path = ROOT / "packaging/ios/prepare-pyo3-cross-lib.py"
@@ -114,6 +120,53 @@ class IosCryptoBuildPatchTest(unittest.TestCase):
         self.assertEqual(target_slice, slice_root)
         self.assertEqual(multiarch, "arm64-iphoneos")
         self.assertEqual(version, "3.13")
+
+    def test_shell_helper_stages_slice_and_exports_cross_lib_dir(self):
+        helper_path = ROOT / "packaging/ios/prepare-pyo3-cross-lib.sh"
+        with tempfile.TemporaryDirectory(prefix="starling-pyo3-sh-") as temporary:
+            slice_root = Path(temporary) / "ios-arm64"
+            sysconfig_dir = slice_root / "platform-config/arm64-iphoneos"
+            framework_dir = slice_root / "Python.framework"
+            include_dir = slice_root / "include/python3.13"
+            bin_dir = slice_root / "bin"
+            sysconfig_dir.mkdir(parents=True)
+            framework_dir.mkdir()
+            include_dir.mkdir(parents=True)
+            bin_dir.mkdir()
+            sysconfig_file = sysconfig_dir / "_sysconfigdata__ios_arm64-iphoneos.py"
+            sysconfig_file.write_text("build_time_vars = {}\n", encoding="utf-8")
+            framework_binary = framework_dir / "Python"
+            framework_binary.write_bytes(b"beeware-python-framework")
+            (include_dir / "Python.h").write_text("// Python.h\n", encoding="utf-8")
+            python_wrapper = bin_dir / "python3.13"
+            python_wrapper.write_text("#!/bin/sh\necho wrapper\n", encoding="utf-8")
+            python_wrapper.chmod(0o755)
+
+            # Source the helper in a subprocess and capture exported PYO3_CROSS_LIB_DIR
+            env = {
+                "PATH": f"{bin_dir}:/usr/bin:/bin",
+                "PYO3_CROSS_PYTHON_VERSION": "3.13",
+            }
+            result = subprocess.run(
+                ["bash", "-c", f"source {helper_path} && echo PYO3_CROSS_LIB_DIR=$PYO3_CROSS_LIB_DIR"],
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("PYO3_CROSS_LIB_DIR=", result.stdout)
+            cross_lib_dir = result.stdout.strip().split("=")[1]
+            self.assertTrue(Path(cross_lib_dir).is_dir())
+            self.assertTrue((Path(cross_lib_dir) / "libpython3.13.dylib").is_symlink())
+            self.assertTrue((Path(cross_lib_dir) / "include/python3.13/Python.h").is_file())
+            self.assertEqual(
+                (Path(cross_lib_dir) / "libpython3.13.dylib").resolve(),
+                framework_binary.resolve(),
+            )
+            self.assertEqual(
+                (Path(cross_lib_dir) / "include/python3.13").resolve(),
+                include_dir.resolve(),
+            )
 
     def make_source_tree(self, root):
         cffi = root / "src/rust/cryptography-cffi"
