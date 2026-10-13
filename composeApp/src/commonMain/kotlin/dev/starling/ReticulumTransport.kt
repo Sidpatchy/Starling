@@ -117,6 +117,8 @@ sealed interface ReticulumNodeState {
 interface ReticulumNodeController {
     val state: StateFlow<ReticulumNodeState>
     val isSupported: Boolean
+    /** False when the platform can only test a TCP socket, not exchange RNS packets. */
+    val supportsReticulumProtocol: Boolean get() = true
     /** RNode USB/serial support is currently implemented by the desktop runtime only. */
     val supportsRNodeInterfaces: Boolean get() = false
     suspend fun start(config: ReticulumNodeConfig)

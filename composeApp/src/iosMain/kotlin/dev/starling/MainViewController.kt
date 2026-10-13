@@ -7,8 +7,6 @@ import platform.UIKit.UIViewController
 fun MainViewController(): UIViewController = ComposeUIViewController {
     StarlingApp(
         repository = LocalPreviewChatRepository(),
-        nodeController = UnsupportedReticulumNodeController(
-            "Reticulum connectivity is not available in this iOS shim yet.",
-        ),
+        nodeController = IosReticulumNodeController(),
     )
 }

@@ -1,7 +1,6 @@
 package dev.starling
 
 import androidx.compose.foundation.Canvas as ComposeCanvas
-import androidx.compose.foundation.Image
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -84,7 +83,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.ui.layout.FirstBaseline
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
@@ -107,10 +105,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeoutOrNull
-import org.jetbrains.compose.resources.painterResource
-import dev.starling.generated.resources.Res
-import dev.starling.generated.resources.starling_dark
-import dev.starling.generated.resources.starling_light
 
 private data class StarlingPalette(
     val ink: Color,
@@ -393,6 +387,7 @@ fun StarlingApp(
                                 onPreferredHubNetworkChange = { id -> liveChatRepository?.savePreferredHubNetworkId(id) },
                                 nodeState = reticulumNodeState,
                                 nodeSupported = nodeController.isSupported,
+                                supportsReticulumProtocol = nodeController.supportsReticulumProtocol,
                                 supportsRNodeInterfaces = nodeController.supportsRNodeInterfaces,
                                 rrcState = visibleConnectionState,
                                 rrcError = visibleConnectionError,
@@ -570,6 +565,7 @@ fun StarlingApp(
                                 onPreferredHubNetworkChange = { id -> liveChatRepository?.savePreferredHubNetworkId(id) },
                                 nodeState = reticulumNodeState,
                                 nodeSupported = nodeController.isSupported,
+                                supportsReticulumProtocol = nodeController.supportsReticulumProtocol,
                                 supportsRNodeInterfaces = nodeController.supportsRNodeInterfaces,
                                 rrcState = visibleConnectionState,
                                 rrcError = visibleConnectionError,
@@ -1481,14 +1477,7 @@ private fun RoomSidebar(
                 Modifier.size(34.dp).clip(RoundedCornerShape(11.dp)).background(PaleAccent),
                 contentAlignment = Alignment.Center,
             ) {
-                Image(
-                    painter = painterResource(
-                        if (LocalStarlingPalette.current == DarkPalette) Res.drawable.starling_dark else Res.drawable.starling_light,
-                    ),
-                    contentDescription = "Starling",
-                    modifier = Modifier.fillMaxSize().padding(2.dp),
-                    contentScale = ContentScale.Fit,
-                )
+                Text("S", color = Accent, fontSize = 20.sp, fontWeight = FontWeight.Bold)
             }
             Spacer(Modifier.width(11.dp))
             Column {
@@ -1727,6 +1716,7 @@ private fun SettingsPage(
     onPreferredHubNetworkChange: (String?) -> Unit,
     nodeState: ReticulumNodeState,
     nodeSupported: Boolean,
+    supportsReticulumProtocol: Boolean,
     supportsRNodeInterfaces: Boolean,
     rrcState: ReticulumConnectionState,
     rrcError: String?,
@@ -1899,7 +1889,13 @@ private fun SettingsPage(
                 verticalArrangement = Arrangement.spacedBy(9.dp),
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Reticulum node", modifier = Modifier.weight(1f), color = Ink, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        if (supportsReticulumProtocol) "Reticulum node" else "TCP connectivity",
+                        modifier = Modifier.weight(1f),
+                        color = Ink,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    )
                     Text(
                         if (previewMode) "ISOLATED PREVIEW" else when (nodeState) {
                                 is ReticulumNodeState.Running -> if (nodeState.interfaceOnline) "CONNECTED" else "RETRYING"
@@ -1919,7 +1915,11 @@ private fun SettingsPage(
                     if (previewMode) {
                         "Preview mode is isolated. It shows sample data only and stops live Reticulum connections."
                     } else {
-                        "Starting RNS manages the network node; RRC room traffic is a separate connection below."
+                        if (supportsReticulumProtocol) {
+                            "Starting RNS manages the network node; RRC room traffic is a separate connection below."
+                        } else {
+                            "iOS can open a TCP connection to a configured peer. Reticulum packets, IFAC, RRC, and LXMF are not implemented on iOS yet."
+                        }
                     },
                     color = Muted,
                     fontSize = 12.sp,
@@ -1949,7 +1949,9 @@ private fun SettingsPage(
                     )
                 } else {
                     Text(
-                        if (runtimeMode == ReticulumRuntimeMode.EMBEDDED) {
+                        if (!supportsReticulumProtocol) {
+                            "TCP peer settings are temporary and are not retained after the app closes."
+                        } else if (runtimeMode == ReticulumRuntimeMode.EMBEDDED) {
                             "Interface settings are saved and the node starts automatically in live mode on next launch."
                         } else {
                             "The shared-instance RPC key is session-only; re-enter it after restarting the app."
@@ -1958,15 +1960,19 @@ private fun SettingsPage(
                         fontSize = 11.sp,
                         lineHeight = 16.sp,
                     )
-                RuntimeModeSelection(
-                    selected = runtimeMode,
-                    enabled = !isRunning && !isStarting && nodeSupported,
-                    onSelect = { runtimeModeName = it.name; connectionInputError = null },
-                )
+                if (supportsReticulumProtocol) {
+                    RuntimeModeSelection(
+                        selected = runtimeMode,
+                        enabled = !isRunning && !isStarting && nodeSupported,
+                        onSelect = { runtimeModeName = it.name; connectionInputError = null },
+                    )
+                }
 
                 if (runtimeMode == ReticulumRuntimeMode.EMBEDDED) {
                     Text(
-                        if (supportsRNodeInterfaces) {
+                        if (!supportsReticulumProtocol) {
+                            "This opens a plain TCP socket only; it does not exchange Reticulum traffic."
+                        } else if (supportsRNodeInterfaces) {
                             "Configure TCP peers and/or an RNode serial radio. Starling stays a client; Reticulum transport routing remains disabled."
                         } else {
                             "Manage outbound TCP client interfaces. Starling stays a client; Reticulum transport routing remains disabled."
@@ -2009,26 +2015,30 @@ private fun SettingsPage(
                                 singleLine = true,
                                 enabled = !isRunning && !isStarting,
                             )
-                            OutlinedTextField(
-                                value = peer.ifacNetworkName.orEmpty(),
-                                onValueChange = { value -> tcpPeers = tcpPeers.mapIndexed { i, old -> if (i == index) old.copy(ifacNetworkName = value.takeIf(String::isNotBlank)) else old }; connectionInputError = null },
-                                modifier = Modifier.fillMaxWidth(),
-                                label = { Text("IFAC network name (optional)") },
-                                singleLine = true,
-                                enabled = !isRunning && !isStarting,
-                            )
-                            OutlinedTextField(
-                                value = peer.ifacPassphrase.orEmpty(),
-                                onValueChange = { value -> tcpPeers = tcpPeers.mapIndexed { i, old -> if (i == index) old.copy(ifacPassphrase = value.takeIf(String::isNotBlank)) else old }; connectionInputError = null },
-                                modifier = Modifier.fillMaxWidth(),
-                                label = { Text("IFAC passphrase (optional)") },
-                                singleLine = true,
-                                visualTransformation = PasswordVisualTransformation(),
-                                enabled = !isRunning && !isStarting,
-                            )
+                            if (supportsReticulumProtocol) {
+                                OutlinedTextField(
+                                    value = peer.ifacNetworkName.orEmpty(),
+                                    onValueChange = { value -> tcpPeers = tcpPeers.mapIndexed { i, old -> if (i == index) old.copy(ifacNetworkName = value.takeIf(String::isNotBlank)) else old }; connectionInputError = null },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    label = { Text("IFAC network name (optional)") },
+                                    singleLine = true,
+                                    enabled = !isRunning && !isStarting,
+                                )
+                                OutlinedTextField(
+                                    value = peer.ifacPassphrase.orEmpty(),
+                                    onValueChange = { value -> tcpPeers = tcpPeers.mapIndexed { i, old -> if (i == index) old.copy(ifacPassphrase = value.takeIf(String::isNotBlank)) else old }; connectionInputError = null },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    label = { Text("IFAC passphrase (optional)") },
+                                    singleLine = true,
+                                    visualTransformation = PasswordVisualTransformation(),
+                                    enabled = !isRunning && !isStarting,
+                                )
+                            }
                         }
                     }
-                    Text("IFAC values are per connection and must match that peer. Leave both blank to disable IFAC.", color = Muted, fontSize = 10.sp)
+                    if (supportsReticulumProtocol) {
+                        Text("IFAC values are per connection and must match that peer. Leave both blank to disable IFAC.", color = Muted, fontSize = 10.sp)
+                    }
                     if (!isRunning && !isStarting) {
                         TextButton(onClick = { tcpPeers = tcpPeers + ReticulumTcpPeer("", 4242) }) {
                             Text("+ Add TCP connection", color = Accent)
@@ -2201,14 +2211,20 @@ private fun SettingsPage(
                         state.rnodeInterfaces.isNotEmpty() -> "${state.onlineRNodePorts.size} of ${state.rnodeInterfaces.size} RNode radios online. " +
                             state.rnodeInterfaces.joinToString { radio -> "${radio.port} ${if (radio.id in state.onlineRNodePorts) "(online)" else "(retrying)"}" }
                         state.tcpPeers.isNotEmpty() -> "${state.onlineTcpPeerIds.size} of ${state.tcpPeers.size} TCP connections online. " +
-                            state.tcpPeers.joinToString { peer -> "${peer.host}:${peer.port} ${if (peer.id in state.onlineTcpPeerIds) "(online)" else "(retrying)"}" }
+                            (if (supportsReticulumProtocol) "" else "Socket check only; RNS traffic is not implemented on iOS. ") +
+                            state.tcpPeers.joinToString {
+                                "${it.host}:${it.port} ${if (it.id in state.onlineTcpPeerIds) "(online)" else if (supportsReticulumProtocol) "(retrying)" else "(offline)"}"
+                            }
                         else -> "RNS node is running without a configured interface."
                     }
                     is ReticulumNodeState.Starting -> "Starting the Reticulum node…"
                     is ReticulumNodeState.PreparingRuntime -> state.detail
                     is ReticulumNodeState.Failed -> state.message
                     is ReticulumNodeState.Unavailable -> state.reason
-                    ReticulumNodeState.Stopped -> if (nodeSupported) "No Reticulum node is running. The app remains in local preview." else "Embedded RNS is not available on this platform yet."
+                    ReticulumNodeState.Stopped -> if (nodeSupported) {
+                        if (supportsReticulumProtocol) "No Reticulum node is running. The app remains in local preview."
+                        else "No TCP connection is open. Turn off local preview to test a peer."
+                    } else "Embedded RNS is not available on this platform yet."
                 }
                 Text(stateMessage, color = if (nodeState is ReticulumNodeState.Failed) Color(0xFFC44545) else Muted, fontSize = 11.sp)
                 connectionInputError?.let { Text(it, color = Color(0xFFC44545), fontSize = 11.sp) }
@@ -2250,11 +2266,23 @@ private fun SettingsPage(
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = Accent),
                 ) {
-                    Text(if (isRunning) "Disconnect node" else if (isStarting) "Starting…" else "Start node")
+                    Text(
+                        if (isRunning) {
+                            if (supportsReticulumProtocol) "Disconnect node" else "Disconnect TCP"
+                        } else if (isStarting) "Connecting…" else if (supportsReticulumProtocol) "Start node" else "Connect TCP",
+                    )
                 }
                 }
             }
-            if (previewMode) {
+            if (!supportsReticulumProtocol) {
+                Text("MESSAGING", color = Muted, fontSize = 10.sp, letterSpacing = 1.3.sp, fontWeight = FontWeight.Bold)
+                Text(
+                    "RRC room chat and LXMF direct messaging are not implemented on iOS yet. The TCP check above only opens a socket.",
+                    color = Muted,
+                    fontSize = 12.sp,
+                    lineHeight = 18.sp,
+                )
+            } else if (previewMode) {
                 Text("MESSAGING", color = Muted, fontSize = 10.sp, letterSpacing = 1.3.sp, fontWeight = FontWeight.Bold)
                 Text(
                     "Preview messages are simulated locally. RRC hub details and the LXMF delivery address are hidden.",

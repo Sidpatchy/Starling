@@ -4,6 +4,15 @@ on:
   release:
     types: [published]
   workflow_dispatch:
+    inputs:
+      mobile_build:
+        description: Select iOS only for an unsigned IPA build, or both mobile artifacts
+        type: choice
+        options:
+          - ios-only
+          - android-and-ios
+        default: ios-only
+        required: true
 
 permissions:
   contents: read
@@ -38,6 +47,7 @@ jobs:
 
   android-apk:
     name: Unsigned Android APK
+    if: github.event_name == 'release' || inputs.mobile_build == 'android-and-ios'
     needs: resolve-version
     runs-on: ubuntu-latest
     steps:

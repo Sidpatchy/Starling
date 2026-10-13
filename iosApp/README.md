@@ -14,5 +14,8 @@ xtool dev build --triple arm64-apple-ios-simulator
 
 The Swift package links `composeApp/build/XCFrameworks/debug/ComposeApp.xcframework`
 and hosts `MainViewController()` from `iosMain`. The same Compose UI is used on
-Android, desktop, and iOS. iOS currently uses local preview data only; a native
-Reticulum node and transport are not implemented on iOS yet.
+Android, desktop, and iOS. iOS starts in local preview. Turn preview off in
+Settings to open a plain outbound TCP socket to a configured host and port. This
+is only a reachability check: iOS does not yet implement Reticulum packet framing,
+IFAC, identity storage, RRC, or LXMF. TCP settings are session-only. iOS asks for
+local-network permission when connecting to a peer on the local network.
