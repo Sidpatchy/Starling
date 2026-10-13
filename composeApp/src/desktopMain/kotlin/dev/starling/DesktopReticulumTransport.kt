@@ -1,6 +1,5 @@
 package dev.starling
 
-import java.util.Base64
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -74,7 +73,7 @@ class DesktopReticulumTransport(
         _state.value = ReticulumConnectionState.Connecting
         try {
             nodeController.sendBridgeCommand(
-                listOf("RRC_CONNECT", b64(destination), b64(config.displayName.trim().take(32))).joinToString("\t"),
+                listOf("RRC_CONNECT", encodeBridgeBase64(destination), encodeBridgeBase64(config.displayName.trim().take(32))).joinToString("\t"),
             )
         } catch (error: Exception) {
             _state.value = ReticulumConnectionState.Failed(error.message ?: "Could not connect to the RRC hub.")
@@ -88,31 +87,31 @@ class DesktopReticulumTransport(
 
     override suspend fun joinRoom(roomId: String) {
         requireConnectedOrConnecting()
-        send("RRC_JOIN\t${b64(roomId)}")
+        send("RRC_JOIN\t${encodeBridgeBase64(roomId)}")
     }
 
     override suspend fun leaveRoom(roomId: String) {
         requireConnectedOrConnecting()
-        send("RRC_PART\t${b64(roomId)}")
+        send("RRC_PART\t${encodeBridgeBase64(roomId)}")
     }
 
     override suspend fun sendRoomMessage(roomId: String, body: String, isAction: Boolean) {
         if (_state.value !is ReticulumConnectionState.Connected) {
             throw IllegalStateException("Connect to an RRC hub before sending room messages.")
         }
-        send("RRC_SEND\t${b64(roomId)}\t${b64(body)}\t${if (isAction) 1 else 0}")
+        send("RRC_SEND\t${encodeBridgeBase64(roomId)}\t${encodeBridgeBase64(body)}\t${if (isAction) 1 else 0}")
     }
 
     override suspend fun sendDirectMessage(address: String, body: String) {
         if (_localDeliveryAddress.value == null) {
             throw IllegalStateException("Start the Reticulum node before sending LXMF messages.")
         }
-        nodeController.sendBridgeCommand("LXMF_SEND\t${b64(address)}\t${b64(body)}")
+        nodeController.sendBridgeCommand("LXMF_SEND\t${encodeBridgeBase64(address)}\t${encodeBridgeBase64(body)}")
     }
 
     override suspend fun setLocalDisplayName(displayName: String) {
         if (!nodeController.state.value.let { it is ReticulumNodeState.Running }) return
-        nodeController.sendBridgeCommand("LXMF_SET_NAME\t${b64(displayName)}")
+        nodeController.sendBridgeCommand("LXMF_SET_NAME\t${encodeBridgeBase64(displayName)}")
     }
 
     suspend fun close() {
@@ -136,5 +135,4 @@ class DesktopReticulumTransport(
         }
     }
 
-    private fun b64(value: String): String = Base64.getEncoder().encodeToString(value.toByteArray(Charsets.UTF_8))
 }

@@ -5,10 +5,9 @@ and Compose Multiplatform. Android, desktop, and iOS share the same UI.
 
 The app keeps an isolated local preview as its no-setup mode. Its on/off choice
 is saved, and preview hides live network settings and communications data.
-Android and desktop can
-start an embedded RNS node over multiple user-configured TCP peers at once or
-attach to an existing local RNS shared instance in advanced mode. Desktop can
-also attach RNode firmware radios over serial on Linux, Windows, and macOS.
+Android and iOS can start an embedded RNS node over multiple user-configured TCP
+peers at once or attach to an existing local RNS shared instance in advanced mode.
+Desktop can also attach RNode firmware radios over serial on Linux, Windows, and macOS.
 Each embedded TCP connection can
 have its own optional IFAC network name and passphrase. Live rooms use RRC and
 direct messages use the reference LXMF router. RRC rooms are joined by channel
@@ -25,13 +24,15 @@ local delivery address is shown in Identity and Settings for sharing. The Identi
 screen lets you set a global LXMF nickname and per-hub RRC nickname overrides.
 Contacts, requests, and configured networks/channels and live message history are stored locally; QR
 scanning is not implemented yet. A minimal SwiftUI/xtool host embeds the shared
-Compose UI on iOS. iOS currently uses local preview only until a native
-Reticulum adapter is implemented. See
+Compose UI and CPython RNS/LXMF runtime on iOS. iOS supports TCP/IFAC, RRC, and
+LXMF while the app is in the foreground; direct RNode support and an Android-style
+background service are not available. See
 [`iosApp/README.md`](iosApp/README.md) for the current build flow and host limits.
 
 Android bundles the reference `rns==1.5.7` and `lxmf==1.2.0` Python packages using Chaquopy;
-desktop installs the pinned packages in a Starling-private Python environment on
-first explicit connection. Their licenses are included in `licenses/`.
+iOS embeds CPython 3.13 and the same pinned Python modules; desktop installs the
+pinned packages in a Starling-private Python environment on first explicit
+connection. Their licenses are included in `licenses/`.
 
 Starling is licensed under the GNU Affero General Public License, version 3
 (AGPL-3.0-only); see [`LICENSE`](LICENSE). Third-party components remain under

@@ -7,6 +7,25 @@ data class ParsedRrcBridgeEvent(
     val event: ReticulumEvent? = null,
 )
 
+internal fun encodeBridgeBase64(value: String): String {
+    val bytes = value.encodeToByteArray()
+    val alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+    return buildString((bytes.size + 2) / 3 * 4) {
+        var index = 0
+        while (index < bytes.size) {
+            val first = bytes[index++].toInt() and 0xff
+            val hasSecond = index < bytes.size
+            val second = if (hasSecond) bytes[index++].toInt() and 0xff else 0
+            val hasThird = index < bytes.size
+            val third = if (hasThird) bytes[index++].toInt() and 0xff else 0
+            append(alphabet[(first ushr 2) and 0x3f])
+            append(alphabet[((first shl 4) or (second ushr 4)) and 0x3f])
+            append(if (hasSecond) alphabet[((second shl 2) or (third ushr 6)) and 0x3f] else '=')
+            append(if (hasThird) alphabet[third and 0x3f] else '=')
+        }
+    }
+}
+
 fun parseRrcBridgeEvent(line: String): ParsedRrcBridgeEvent? {
     val fields = line.split('\t')
     return when (fields.firstOrNull()) {

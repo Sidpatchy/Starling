@@ -10,3 +10,6 @@ out/
 xtool/
 __pycache__/
 *.py[cod]
+iosApp/Vendor/Python.xcframework/
+iosApp/Sources/Starling/PythonModules/*
+!iosApp/Sources/Starling/PythonModules/.gitkeep

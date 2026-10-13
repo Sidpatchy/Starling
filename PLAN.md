@@ -48,9 +48,9 @@
 ## Suggested first milestones
 
 1. Validate the experimental Android embedded node against a real RNS TCP peer, including service lifecycle, reconnects, and identity/config storage.
-2. Choose a distributable embedded runtime strategy for desktop and iOS; retain a typed advanced option for an existing local shared instance.
+2. Validate the pinned CPython/Python-Apple-support packaging and runtime lifecycle on iOS; retain a typed advanced option for an existing local shared instance.
 3. Verify RRC's current protocol behavior and interoperability expectations, then implement platform `ReticulumTransport` adapters for RRC hub/room events and sending messages; keep Compose behind the shared repository boundary.
 4. Define the smallest useful history capability: negotiation, bounded request/response, message identifiers, timestamps, and retention controls.
 5. Prototype shared Kotlin UI/core and Reticulum connectivity on Android and desktop.
-6. Add and validate the shared Compose UI on iOS using Xcode; investigate whether a web target is practical later.
+6. Validate the embedded CPython/RNS runtime, IFAC, RRC, and LXMF on a physical iPhone; then investigate whether a web target is practical later.
 7. Build a minimal chat experience before broadening protocol features.

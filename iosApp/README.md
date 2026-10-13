@@ -5,17 +5,37 @@ entry point. It requires the Compose XCFramework and deliberately has no
 separate SwiftUI fallback UI. Kotlin/Native can compile iOS source sets to
 klibs on Linux, but the final Apple framework and IPA must be built on macOS.
 
-On macOS with Xcode installed, build and host the shared UI with:
+On macOS with Xcode installed, prepare the embedded Python runtime, then build
+and host the shared UI with:
 
 ```sh
+bash packaging/ios/prepare-python-runtime.sh
 ./gradlew :composeApp:assembleComposeAppDebugXCFramework
 xtool dev build --triple arm64-apple-ios-simulator
+app_path="$(find .build -type d -name Starling.app -print -quit)"
+bash packaging/ios/install-python-runtime-into-app.sh "$app_path"
 ```
 
-The Swift package links `composeApp/build/XCFrameworks/debug/ComposeApp.xcframework`
-and hosts `MainViewController()` from `iosMain`. The same Compose UI is used on
-Android, desktop, and iOS. iOS starts in local preview. Turn preview off in
-Settings to open a plain outbound TCP socket to a configured host and port. This
-is only a reachability check: iOS does not yet implement Reticulum packet framing,
-IFAC, identity storage, RRC, or LXMF. TCP settings are session-only. iOS asks for
-local-network permission when connecting to a peer on the local network.
+The Swift package links the shared `ComposeApp` framework and embeds CPython 3.13
+with the same RNS, RRC, and LXMF bridge used by the other clients. The iOS runtime
+uses Reticulum's built-in Python crypto provider (wire-compatible, but slower than
+PyCA/OpenSSL). RNS identities and config live in app-private Application Support;
+chat preferences and history use the shared persisted-state codec. iOS does not
+provide an Android-style background service, so live networking is foreground-only.
+
+The unsigned IPA workflow prepares the pinned Python support framework, builds
+the Compose framework, lets xtool create the IPA, then installs Python's standard
+library and extension frameworks into the app bundle. To run it manually on a Mac
+with Xcode installed:
+
+```sh
+bash packaging/ios/prepare-python-runtime.sh
+./gradlew :composeApp:assembleComposeAppDebugXCFramework
+xtool dev build --configuration debug --ipa --triple arm64-apple-ios
+# Then run packaging/ios/package-python-ipa.sh on the generated IPA.
+```
+
+The app starts in local preview. Turn preview off in Settings to configure TCP
+peers and optional per-peer IFAC credentials, or attach to an existing local RNS
+shared instance. The iOS local-network permission prompt appears when connecting
+to a peer on the local network. RNode hardware is not supported on iOS.

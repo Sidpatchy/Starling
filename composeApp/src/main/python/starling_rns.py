@@ -14,6 +14,7 @@ _mode = None
 _tcp_peers = []
 _rnode_interfaces = []
 _rpc_key_hex = None
+_config_dir = None
 
 
 def construct_without_required_process_signals(factory):
@@ -100,8 +101,8 @@ def _write_config(config_dir, mode, tcp_peers, rnode_interfaces, rpc_key_hex):
         pass
 
 
-def start_node(config_dir, mode, tcp_peers="[]", rpc_key_hex="", rnode_interfaces="[]"):
-    global _reticulum, _mode, _tcp_peers, _rnode_interfaces, _rpc_key_hex
+def start_node(config_dir, mode, tcp_peers="[]", rpc_key_hex="", rnode_interfaces="[]", allow_reconfigure=False):
+    global _reticulum, _mode, _tcp_peers, _rnode_interfaces, _rpc_key_hex, _config_dir
     import RNS
 
     if mode not in ("embedded", "existing_shared_instance"):
@@ -182,13 +183,41 @@ def start_node(config_dir, mode, tcp_peers="[]", rpc_key_hex="", rnode_interface
         normalized_rnodes = []
 
     if _reticulum is not None:
-        if (
-            _mode != mode
-            or _tcp_peers != normalized_peers
-            or _rnode_interfaces != normalized_rnodes
-            or _rpc_key_hex != (rpc_key_hex or None)
-        ):
-            raise RuntimeError("The running RNS node has a different configuration. Disconnect it before changing modes or peers.")
+        same_configuration = (
+            _mode == mode
+            and _tcp_peers == normalized_peers
+            and _rnode_interfaces == normalized_rnodes
+            and _rpc_key_hex == (rpc_key_hex or None)
+        )
+        if same_configuration and mode == "existing_shared_instance" and not _reticulum.is_connected_to_shared_instance:
+            _reticulum._Reticulum__start_local_interface()
+            if not _reticulum.is_connected_to_shared_instance:
+                raise RuntimeError("Could not reconnect to the existing shared Reticulum instance.")
+        elif not same_configuration:
+            if not allow_reconfigure:
+                raise RuntimeError("The running RNS node has a different configuration. Disconnect it before changing modes or peers.")
+            if _mode != mode:
+                raise RuntimeError("Changing between embedded and shared-instance mode requires restarting Starling on iOS.")
+            # iOS embeds CPython in the app process, where finalizing/restarting
+            # the interpreter is unsafe. Reuse its RNS singleton and replace
+            # only Starling's interfaces after an explicit disconnect.
+            _disconnect_configured_interfaces()
+            _write_config(config_dir, mode, normalized_peers, normalized_rnodes, rpc_key_hex)
+            if mode == "embedded":
+                from RNS.vendor.configobj import ConfigObj
+
+                _reticulum.config = ConfigObj(_reticulum.configpath)
+                for name, interface_config in _reticulum.config.get("interfaces", {}).items():
+                    _reticulum._synthesize_interface(interface_config, name, force_attach=True)
+            elif not _reticulum.is_connected_to_shared_instance:
+                _reticulum._Reticulum__start_local_interface()
+                if not _reticulum.is_connected_to_shared_instance:
+                    raise RuntimeError("Could not reconnect to the existing shared Reticulum instance.")
+            _mode = mode
+            _tcp_peers = normalized_peers
+            _rnode_interfaces = normalized_rnodes
+            _rpc_key_hex = rpc_key_hex or None
+            _config_dir = config_dir
         return status()
 
     os.makedirs(config_dir, exist_ok=True)
@@ -207,7 +236,41 @@ def start_node(config_dir, mode, tcp_peers="[]", rpc_key_hex="", rnode_interface
     _tcp_peers = normalized_peers
     _rnode_interfaces = normalized_rnodes
     _rpc_key_hex = rpc_key_hex or None
+    _config_dir = config_dir
     return status()
+
+
+def _disconnect_configured_interfaces():
+    if _reticulum is None:
+        return
+
+    import RNS
+
+    if _mode == "embedded":
+        for interface in list(RNS.Transport.interfaces):
+            if interface.name.startswith("Starling TCP ") or interface.name.startswith("Starling RNode "):
+                _reticulum._detach_interface(interface.name, internal_forced=True)
+    elif _mode == "existing_shared_instance":
+        interface = _reticulum.shared_instance_interface
+        if interface is not None:
+            try:
+                interface.detach()
+            finally:
+                RNS.Transport.remove_interface(interface)
+                if interface in RNS.Transport.local_client_interfaces:
+                    RNS.Transport.local_client_interfaces.remove(interface)
+                _reticulum.shared_instance_interface = None
+                _reticulum.is_connected_to_shared_instance = False
+                RNS.Transport.shared_connection_disappeared()
+
+
+def disconnect_node():
+    """Detach Starling's interfaces but keep the in-process RNS core reusable."""
+    _disconnect_configured_interfaces()
+    global _tcp_peers, _rnode_interfaces
+    _tcp_peers = []
+    _rnode_interfaces = []
+    return True
 
 
 def status():
@@ -255,7 +318,7 @@ def status():
 
 
 def stop_node():
-    global _reticulum, _mode, _tcp_peers, _rnode_interfaces, _rpc_key_hex
+    global _reticulum, _mode, _tcp_peers, _rnode_interfaces, _rpc_key_hex, _config_dir
     if _reticulum is not None:
         import RNS
         RNS.Reticulum.exit_handler()
@@ -264,4 +327,5 @@ def stop_node():
     _tcp_peers = []
     _rnode_interfaces = []
     _rpc_key_hex = None
+    _config_dir = None
     return True

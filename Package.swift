@@ -4,16 +4,28 @@ import Foundation
 import PackageDescription
 
 let composeFrameworkPath = "composeApp/build/XCFrameworks/debug/ComposeApp.xcframework"
+let pythonFrameworkPath = "iosApp/Vendor/Python.xcframework"
 let packageTargets: [Target] = {
     guard FileManager.default.fileExists(atPath: composeFrameworkPath) else {
         fatalError("Build :composeApp:assembleComposeAppDebugXCFramework before building the iOS app.")
     }
+    guard FileManager.default.fileExists(atPath: pythonFrameworkPath) else {
+        fatalError("Run packaging/ios/prepare-python-runtime.sh before building the iOS app.")
+    }
     return [
         .binaryTarget(name: "ComposeApp", path: composeFrameworkPath),
+        .binaryTarget(name: "Python", path: pythonFrameworkPath),
+        .target(
+            name: "PythonRuntimeShim",
+            dependencies: [.target(name: "Python")],
+            path: "iosApp/Sources/PythonRuntimeShim",
+            publicHeadersPath: "include"
+        ),
         .target(
             name: "Starling",
-            dependencies: [.target(name: "ComposeApp")],
-            path: "iosApp/Sources/Starling"
+            dependencies: [.target(name: "ComposeApp"), .target(name: "PythonRuntimeShim")],
+            path: "iosApp/Sources/Starling",
+            resources: [.copy("PythonModules")]
         ),
     ]
 }()

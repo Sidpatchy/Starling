@@ -104,11 +104,19 @@ jobs:
           distribution: temurin
           java-version: '25'
 
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
 
       - name: Install xtool
         run: brew install xtool-org/tap/xtool
+
+      - name: Prepare embedded iOS Python runtime
+        run: bash packaging/ios/prepare-python-runtime.sh
 
       - name: Build Compose iOS framework
         run: ./gradlew --no-daemon "-PstarlingVersion=${{ needs.resolve-version.outputs.app_version }}" :composeApp:assembleComposeAppDebugXCFramework
@@ -119,16 +127,18 @@ jobs:
       - name: Build unsigned device IPA
         run: xtool dev build --configuration debug --ipa --triple arm64-apple-ios
 
-      - name: Collect IPA
+      - name: Package unsigned IPA with embedded Python
         shell: bash
         run: |
-          ipa_path="$(find . -type f -name '*.ipa' -not -path './.git/*' -print -quit)"
+          ipa_path="$(find . -type f -name '*.ipa' -not -path './.git/*' -not -path './artifacts/*' -print -quit)"
           if [[ -z "$ipa_path" ]]; then
             echo "xtool did not produce an IPA" >&2
             exit 1
           fi
           mkdir -p artifacts
-          cp "$ipa_path" "artifacts/Starling-${{ needs.resolve-version.outputs.app_version }}-ios-unsigned.ipa"
+          bash packaging/ios/package-python-ipa.sh \
+            "$ipa_path" \
+            "artifacts/Starling-${{ needs.resolve-version.outputs.app_version }}-ios-unsigned.ipa"
 
       - name: Upload unsigned IPA
         uses: actions/upload-artifact@v7
