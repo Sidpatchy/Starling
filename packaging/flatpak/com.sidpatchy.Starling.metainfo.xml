@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component type="desktop-application">
-  <id>dev.starling.Starling</id>
+  <id>com.sidpatchy.Starling</id>
   <name>Starling</name>
   <summary>Chat over Reticulum</summary>
   <metadata_license>CC0-1.0</metadata_license>
@@ -8,5 +8,5 @@
   <description>
     <p>Starling is a focused chat client for the Reticulum networking stack. It brings room conversations and LXMF direct messages together in one desktop app.</p>
   </description>
-  <launchable type="desktop-id">dev.starling.Starling.desktop</launchable>
+  <launchable type="desktop-id">com.sidpatchy.Starling.desktop</launchable>
 </component>

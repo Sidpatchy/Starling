@@ -122,7 +122,7 @@ jobs:
       - name: Build Flatpak bundle
         uses: flatpak/flatpak-github-actions/flatpak-builder@v6
         with:
-          manifest-path: packaging/flatpak/dev.starling.Starling.yml
+          manifest-path: packaging/flatpak/com.sidpatchy.Starling.yml
           bundle: Starling-${{ needs.resolve-version.outputs.app_version }}-x86_64.flatpak
           branch: stable
           artifact-name: starling-linux-flatpak-x86_64
@@ -202,6 +202,23 @@ jobs:
 
       - name: Build unsigned macOS DMG
         run: ./gradlew --no-daemon "-PstarlingVersion=${{ needs.resolve-version.outputs.app_version }}" "-PstarlingPackageVersion=${{ needs.resolve-version.outputs.package_version }}" :composeApp:packageReleaseDmg
+
+      - name: Show jpackage diagnostics
+        if: failure()
+        shell: bash
+        run: |
+          for log in composeApp/build/compose/logs/createReleaseDistributable/*.txt; do
+            [[ -f "$log" ]] || continue
+            echo "::group::$log"
+            cat "$log"
+            echo "::endgroup::"
+          done
+          args_file=composeApp/build/compose/tmp/createReleaseDistributable.args.txt
+          if [[ -f "$args_file" ]]; then
+            echo "::group::$args_file"
+            cat "$args_file"
+            echo "::endgroup::"
+          fi
 
       - name: Collect DMG
         run: |

@@ -24,20 +24,20 @@ mkdir -p \
   "$appdir/usr/share/icons/hicolor/512x512/apps" \
   "$artifactdir"
 cp -a "$distribution/." "$appdir/usr/lib/starling/"
-cp "$repo_root/packaging/flatpak/dev.starling.Starling.metainfo.xml" \
-  "$appdir/usr/share/metainfo/dev.starling.Starling.metainfo.xml"
-cp "$repo_root/packaging/flatpak/dev.starling.Starling.metainfo.xml" \
-  "$appdir/usr/share/metainfo/dev.starling.Starling.appdata.xml"
+cp "$repo_root/packaging/flatpak/com.sidpatchy.Starling.metainfo.xml" \
+  "$appdir/usr/share/metainfo/com.sidpatchy.Starling.metainfo.xml"
+cp "$repo_root/packaging/flatpak/com.sidpatchy.Starling.metainfo.xml" \
+  "$appdir/usr/share/metainfo/com.sidpatchy.Starling.appdata.xml"
 cp "$repo_root/assets/branding/starling-light-512.png" \
-  "$appdir/usr/share/icons/hicolor/512x512/apps/dev.starling.Starling.png"
+  "$appdir/usr/share/icons/hicolor/512x512/apps/com.sidpatchy.Starling.png"
 
-cat > "$appdir/usr/share/applications/dev.starling.Starling.desktop" <<'EOF'
+cat > "$appdir/usr/share/applications/com.sidpatchy.Starling.desktop" <<'EOF'
 [Desktop Entry]
 Type=Application
 Name=Starling
 Comment=Chat over Reticulum
 Exec=AppRun
-Icon=dev.starling.Starling
+Icon=com.sidpatchy.Starling
 Terminal=false
 Categories=Network;InstantMessaging;
 StartupWMClass=Starling
@@ -49,8 +49,8 @@ runtime_server_lib="$appdir/usr/lib/starling/lib/runtime/lib/server"
 LD_LIBRARY_PATH="$runtime_server_lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
   NO_STRIP=true APPIMAGE_EXTRACT_AND_RUN=1 ./linuxdeploy-x86_64.AppImage \
   --appdir "$appdir" \
-  --desktop-file "$appdir/usr/share/applications/dev.starling.Starling.desktop" \
-  --icon-file "$appdir/usr/share/icons/hicolor/512x512/apps/dev.starling.Starling.png" \
+  --desktop-file "$appdir/usr/share/applications/com.sidpatchy.Starling.desktop" \
+  --icon-file "$appdir/usr/share/icons/hicolor/512x512/apps/com.sidpatchy.Starling.png" \
   --custom-apprun "$repo_root/packaging/linux/AppRun" \
   --executable "$appdir/usr/lib/starling/bin/Starling"
 

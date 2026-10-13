@@ -98,7 +98,7 @@ compose.desktop {
             }
 
             macOS {
-                bundleID = "dev.starling.desktop"
+                bundleID = "com.sidpatchy.Starling"
                 iconFile.set(project.file("../assets/branding/starling.icns"))
             }
         }
