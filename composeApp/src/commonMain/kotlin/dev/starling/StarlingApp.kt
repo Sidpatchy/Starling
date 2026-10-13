@@ -2621,12 +2621,11 @@ private fun NetworkRow(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 12.dp, vertical = 2.dp)
-            .clip(RoundedCornerShape(9.dp))
-            .padding(start = 10.dp, end = 2.dp),
+            .clip(RoundedCornerShape(9.dp)),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Row(
-            modifier = Modifier.weight(1f).clip(RoundedCornerShape(8.dp))
+            modifier = Modifier.weight(1f).clip(RoundedCornerShape(9.dp))
                 .pointerInput(onDetails) {
                     awaitPointerEventScope {
                         while (true) {
@@ -2639,7 +2638,7 @@ private fun NetworkRow(
                     }
                 }
                 .combinedClickable(onClick = onClick, onLongClick = onDetails)
-                .padding(vertical = 8.dp),
+                .padding(start = 10.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(if (expanded) "⌄" else "›", color = Muted, fontSize = 15.sp)
@@ -2654,7 +2653,7 @@ private fun NetworkRow(
                 maxLines = 1,
             )
         }
-        IconButton(onClick = onAddChannel, modifier = Modifier.size(32.dp)) {
+        IconButton(onClick = onAddChannel, modifier = Modifier.size(30.dp)) {
             Icon(Icons.Filled.Add, contentDescription = "Add channel to ${network.name}", tint = Muted)
         }
     }
