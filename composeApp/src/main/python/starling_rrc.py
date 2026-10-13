@@ -4,7 +4,6 @@ This module intentionally implements only the versioned core wire protocol:
 HELLO/WELCOME, JOIN/PART, MSG/ACTION, NOTICE, PING/PONG, and ERROR.
 """
 
-import os
 import queue
 import secrets
 import base64
@@ -387,16 +386,9 @@ def connect(destination_hash_hex, display_name):
         _display_name = _normalize_nickname(display_name)
 
     try:
-        identity_path = os.path.join(RNS.Reticulum.configdir, "starling_identity")
-        _identity = RNS.Identity.from_file(identity_path) if os.path.isfile(identity_path) else None
-        if _identity is None:
-            _identity = RNS.Identity()
-            if not _identity.to_file(identity_path):
-                raise RuntimeError("Could not persist the Starling Reticulum identity")
-            try:
-                os.chmod(identity_path, 0o600)
-            except OSError:
-                pass
+        from starling_identity import load_identity
+
+        _identity = load_identity(RNS.Reticulum.configdir)
 
         _emit("self", member_id=_identity.hash.hex(), member_name=_display_name)
 
@@ -465,12 +457,13 @@ def _finish_connect(destination_hash, generation, recalled):
 
 
 def disconnect():
-    global _link, _destination, _connection_state, _hub_name, _welcome_timer, _connect_generation
+    global _link, _destination, _identity, _connection_state, _hub_name, _welcome_timer, _connect_generation
     with _lock:
         _connect_generation += 1
         link = _link
         _link = None
         _destination = None
+        _identity = None
         _connection_state = "disconnected"
         _hub_name = None
         timer = _welcome_timer

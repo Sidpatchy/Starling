@@ -22,6 +22,8 @@ preferred hub and reconnects when a saved embedded node starts. In preview, netw
 channels are local-only. Live LXMF unknown senders go to Requests; the
 local delivery address is shown in Identity and Settings for sharing. The Identity
 screen lets you set a global LXMF nickname and per-hub RRC nickname overrides.
+Saved nicknames are used for manual and automatic hub connections; changing the
+active hub's effective nickname reconnects it and rejoins configured channels.
 Contacts, requests, and configured networks/channels and live message history are stored locally; QR
 scanning is not implemented yet. A minimal SwiftUI/xtool host embeds the shared
 Compose UI and CPython RNS/LXMF runtime on iOS. iOS supports TCP/IFAC, RRC, and
@@ -31,12 +33,29 @@ background service are not available. See
 
 Android bundles the reference `rns==1.5.7` and `lxmf==1.2.0` Python packages using Chaquopy;
 iOS embeds CPython 3.13 and the same pinned Python modules; desktop installs the
-pinned packages in a Starling-private Python environment on first explicit
-connection. Their licenses are included in `licenses/`.
+pinned packages in a Starling-private Python environment when identity management
+or live networking needs them. Their licenses are included in `licenses/`.
 
 Starling is licensed under the GNU Affero General Public License, version 3
 (AGPL-3.0-only); see [`LICENSE`](LICENSE). Third-party components remain under
 their respective licenses.
+
+## Identity management
+
+Fresh installs do **not** generate a chat identity. Turn off Local preview in
+Settings, then open **Identity** to create an identity or import an existing
+Reticulum private identity file. Existing saved identities are reused unchanged.
+An identity is required before live networking starts; there is no welcome screen yet.
+
+Identity provides **Create**, **Import**, **Export backup**, and **Delete**.
+Disconnect the node before creating, replacing, or deleting an identity. Import
+and export use platform file dialogs and standard 64-byte Reticulum private-key
+files (exports use the `.rnsidentity` extension).
+
+**Backups are unencrypted private keys. Anyone with a copy can use your identity.**
+Keep backups secure. Import replaces the current identity; export it first if
+needed. Delete removes the identity from this app, not contacts, chat history,
+or previously exported copies. Private keys are never displayed or stored in chat state.
 
 ## Run
 
@@ -79,7 +98,8 @@ Run the shared Kotlin regression tests on desktop with JDK 25:
 These tests use local preview data and fake transports; no live Reticulum peer
 or Python runtime is required.
 
-The Python bridge protocol tests need only host Python 3.8+ (no RNS/LXMF installation):
+The Python bridge and identity tests need only host Python 3.8+. Optional reference
+interoperability tests also run when RNS/LXMF are installed:
 
 ```sh
 PYTHONPATH=composeApp/src/main/python python3 -m unittest discover -s composeApp/src/test/python

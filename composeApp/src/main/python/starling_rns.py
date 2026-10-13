@@ -104,6 +104,9 @@ def _write_config(config_dir, mode, tcp_peers, rnode_interfaces, rpc_key_hex):
 def start_node(config_dir, mode, tcp_peers="[]", rpc_key_hex="", rnode_interfaces="[]", allow_reconfigure=False):
     global _reticulum, _mode, _tcp_peers, _rnode_interfaces, _rpc_key_hex, _config_dir
     import RNS
+    from starling_identity import load_identity
+
+    load_identity(config_dir)
 
     if mode not in ("embedded", "existing_shared_instance"):
         raise ValueError("Unsupported Reticulum runtime mode")

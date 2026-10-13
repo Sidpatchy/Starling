@@ -30,11 +30,12 @@ class ReticulumChatRepository(
 ) : ChatRepository by preview {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val joinMutex = Mutex()
+    private val nicknameReconnectMutex = Mutex()
     private val persistenceRequests = Channel<Unit>(Channel.CONFLATED)
     private var persistenceJob: Job? = null
     private val joinedRoomNames = mutableSetOf<String>()
     private val restoredState = runCatching { stateStore.read()?.let(ChatStateCodec::decode) }.getOrNull()
-    private val restoredPreviewMode = restoredState?.previewMode ?: true
+    private val restoredPreviewMode = (restoredState?.previewMode ?: true).also(preview::setPreviewMode)
     private val _nodeConfig = MutableStateFlow(restoredState?.nodeConfig)
     val nodeConfig: StateFlow<ReticulumNodeConfig?> = _nodeConfig.asStateFlow()
     private val _globalNickname = MutableStateFlow(normalizeStarlingNickname(restoredState?.globalNickname ?: "Starling"))
@@ -42,6 +43,7 @@ class ReticulumChatRepository(
     private val _preferredHubNetworkId = MutableStateFlow(restoredState?.preferredHubNetworkId)
     val preferredHubNetworkId: StateFlow<String?> = _preferredHubNetworkId.asStateFlow()
     private val _localIdentityHash = MutableStateFlow(restoredState?.localIdentityHash)
+    private val managedIdentityLoaded = MutableStateFlow(false)
     val localIdentityHash: StateFlow<String?> = combine(
         _localIdentityHash,
         preview.previewMode,
@@ -140,7 +142,6 @@ class ReticulumChatRepository(
     )
 
     init {
-        preview.setPreviewMode(restoredPreviewMode)
         restoredState?.networks.orEmpty().forEach(preview::restoreNetwork)
         restoredState?.rooms.orEmpty().forEach(preview::restoreRoom)
         if (restoredPreviewMode && transport.state.value != ReticulumConnectionState.Disconnected) {
@@ -177,6 +178,7 @@ class ReticulumChatRepository(
                 when (event) {
                     is ReticulumEvent.LocalIdentityChanged -> {
                         val identityHash = event.identityHash.trim().lowercase()
+                        if (managedIdentityLoaded.value && identityHash != _localIdentityHash.value) return@collect
                         if (identityHash.length == 32 && identityHash.all { it in "0123456789abcdef" } &&
                             _localIdentityHash.value != identityHash
                         ) {
@@ -187,6 +189,7 @@ class ReticulumChatRepository(
                     is ReticulumEvent.RoomMessageReceived -> receive(event.message)
                     is ReticulumEvent.DirectMessage -> receiveDirect(event.message)
                     is ReticulumEvent.LocalMemberChanged -> {
+                        if (managedIdentityLoaded.value && event.member.id != _localIdentityHash.value) return@collect
                         val self = event.member.copy(isSelf = true, address = localMember.value?.address)
                         val changed = localMember.value != self
                         localMember.value = self
@@ -301,8 +304,14 @@ class ReticulumChatRepository(
     override fun restoreRoom(room: ChatRoom) = preview.restoreRoom(room)
 
     override fun updateNetworkNickname(networkId: String, nickname: String?) {
+        val previous = preview.networks.value.firstOrNull { it.id == networkId }?.rrcNickname
         preview.updateNetworkNickname(networkId, nickname)
-        if (!preview.previewMode.value) persistState()
+        if (!preview.previewMode.value) {
+            persistState()
+            if (previous != preview.networks.value.firstOrNull { it.id == networkId }?.rrcNickname) {
+                reconnectForNicknameChange(networkId)
+            }
+        }
     }
 
     override fun removeRoom(roomId: String) {
@@ -476,7 +485,7 @@ class ReticulumChatRepository(
             throw IllegalArgumentException("The selected RRC network destination changed. Select it again.")
         }
         saveActiveHubNetworkId(network.id)
-        transport.connect(config)
+        transport.connect(config.copy(displayName = nicknameForNetwork(network)))
     }
 
     suspend fun disconnectFromHub() {
@@ -503,6 +512,42 @@ class ReticulumChatRepository(
         val nickname = normalizeStarlingNickname(value)
         if (_globalNickname.value == nickname) return
         _globalNickname.value = nickname
+        persistState()
+        val activeNetwork = preview.networks.value.firstOrNull { it.id == _activeHubNetworkId.value }
+        if (activeNetwork != null && activeNetwork.rrcNickname.isNullOrBlank()) {
+            reconnectForNicknameChange(activeNetwork.id)
+        }
+    }
+
+    private fun nicknameForNetwork(network: ChatNetwork): String =
+        normalizeStarlingNickname(network.rrcNickname?.takeIf(String::isNotBlank) ?: _globalNickname.value)
+
+    private fun reconnectForNicknameChange(networkId: String) {
+        if (preview.previewMode.value || networkId != _activeHubNetworkId.value) return
+        if (transport.state.value !is ReticulumConnectionState.Connected && transport.state.value != ReticulumConnectionState.Connecting) return
+        scope.launch {
+            nicknameReconnectMutex.withLock {
+                if (preview.previewMode.value || _activeHubNetworkId.value != networkId) return@withLock
+                val network = preview.networks.value.firstOrNull { it.id == networkId } ?: return@withLock
+                runCatching {
+                    transport.disconnect()
+                    joinMutex.withLock { joinedRoomNames.clear() }
+                    if (!preview.previewMode.value && _activeHubNetworkId.value == networkId) {
+                        transport.connect(ReticulumConnectionConfig(network.hubDestination.orEmpty(), nicknameForNetwork(network), network.id))
+                    }
+                }.onFailure { _lastError.value = it.message ?: "Could not apply the RRC nickname. Reconnect to the hub." }
+            }
+        }
+    }
+
+    /** Identity keys live outside chat state; invalidate cached self data when the key changes. */
+    fun updateManagedIdentity(identityHash: String?) {
+        managedIdentityLoaded.value = true
+        if (identityHash != null && _localIdentityHash.value == identityHash) return
+        _localIdentityHash.value = identityHash
+        localMember.value = null
+        discoveredMembers.value = discoveredMembers.value.filterNot { it.isSelf }
+        liveMembers.value = liveMembers.value.mapValues { (_, members) -> members.filterNot { it.isSelf } }
         persistState()
     }
 

@@ -108,6 +108,10 @@ def invoke(command):
     action = fields[0]
 
     try:
+        if action == "IDENTITY" and len(fields) == 3:
+            from starling_identity import invoke as invoke_identity
+
+            return invoke_identity(_decode(fields[1]), _decode(fields[2]))
         if action == "IOS_START":
             return _start(fields)
         if action == "STATUS":

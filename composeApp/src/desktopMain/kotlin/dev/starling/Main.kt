@@ -14,6 +14,14 @@ fun main() = application {
     val chatRepository = remember {
         ReticulumChatRepository(LocalPreviewChatRepository(), reticulumTransport, DesktopChatStateStore())
     }
+    val identityManager = remember {
+        ReticulumIdentityManager(
+            store = ReticulumIdentityStore(nodeController::invokeIdentityCommand),
+            files = DesktopIdentityFiles(),
+            nodeController = nodeController,
+            onIdentityChanged = { chatRepository.updateManagedIdentity(it?.hash) },
+        )
+    }
     Window(
         onCloseRequest = {
             runBlocking {
@@ -30,6 +38,7 @@ fun main() = application {
             repository = chatRepository,
             nodeController = nodeController,
             liveChatRepository = chatRepository,
+            identityManager = identityManager,
         )
     }
 }

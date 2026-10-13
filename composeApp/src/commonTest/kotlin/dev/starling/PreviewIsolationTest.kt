@@ -158,6 +158,7 @@ class PreviewIsolationTest {
         repository.savePreferredHubNetworkId(hub.id)
         repository.connectToHub(ReticulumConnectionConfig(hub.hubDestination!!, "Starling", hub.id))
         repository.close()
+        assertEquals(identityHash, ChatStateCodec.decode(store.value!!)!!.localIdentityHash)
 
         val restored = ReticulumChatRepository(LocalPreviewChatRepository(), FakeReticulumTransport(), store)
         assertEquals(config, restored.nodeConfig.value)
@@ -234,6 +235,72 @@ class PreviewIsolationTest {
             repository.close()
         }
     }
+
+    @Test
+    fun connectionsUseSavedNicknamesAndChangesReconnectTheActiveHub() = runBlocking {
+        val hub = ChatNetwork("hub", "Mesh", "0123456789abcdef0123456789abcdef")
+        val store = MemoryChatStateStore(ChatStateCodec.encode(PersistedChatState(
+            previewMode = false, networks = listOf(hub), globalNickname = "Global operator",
+        )))
+        val transport = FakeReticulumTransport().apply { state.value = ReticulumConnectionState.Disconnected }
+        val repository = ReticulumChatRepository(LocalPreviewChatRepository(), transport, store)
+        try {
+            repository.connectToHub(ReticulumConnectionConfig(hub.hubDestination!!, "Starling", hub.id))
+            assertEquals("Global operator", transport.connections.value.single().displayName)
+            repository.updateNetworkNickname(hub.id, "Hub operator")
+            assertEquals("Hub operator", transport.connections.first { it.size == 2 }.last().displayName)
+            repository.saveGlobalNickname("Updated global")
+            assertEquals(2, transport.connections.value.size)
+            repository.updateNetworkNickname(hub.id, "   ")
+            assertEquals("Updated global", transport.connections.first { it.size == 3 }.last().displayName)
+            repository.saveGlobalNickname("Current global")
+            assertEquals("Current global", transport.connections.first { it.size == 4 }.last().displayName)
+        } finally {
+            repository.close()
+        }
+    }
+
+    @Test
+    fun identityDeletionClearsCachedSelfWithoutDeletingHistory() = runBlocking {
+        val hash = "0123456789abcdef0123456789abcdef"
+        val store = MemoryChatStateStore(ChatStateCodec.encode(PersistedChatState(
+            previewMode = false,
+            localIdentityHash = hash,
+            members = listOf(ChatMember(hash, "Me", isSelf = true)),
+            roomMessages = mapOf("room" to listOf(ChatMessage("message", "Me", "Saved history", "12:00", isMine = true))),
+        )))
+        val repository = ReticulumChatRepository(LocalPreviewChatRepository(), FakeReticulumTransport(), store)
+        repository.updateManagedIdentity(null)
+        repository.close()
+        val state = ChatStateCodec.decode(store.value!!)!!
+        assertNull(state.localIdentityHash)
+        assertTrue(state.members.none { it.isSelf })
+        assertEquals("Saved history", state.roomMessages["room"]?.single()?.text)
+    }
+
+    @Test
+    fun staleRuntimeEventsCannotRestoreADeletedIdentity() = runBlocking {
+        val transport = FakeReticulumTransport()
+        val store = MemoryChatStateStore(ChatStateCodec.encode(PersistedChatState(previewMode = false)))
+        val repository = ReticulumChatRepository(LocalPreviewChatRepository(), transport, store)
+        repository.updateManagedIdentity(null)
+        transport.events.subscriptionCount.first { it > 0 }
+        transport.events.emit(ReticulumEvent.LocalIdentityChanged("0123456789abcdef0123456789abcdef"))
+        transport.events.emit(ReticulumEvent.LocalMemberChanged(ChatMember("old-self", "Old self", isSelf = true)))
+        // Wait until the event collector processes an error sent after both stale events.
+        transport.events.emit(ReticulumEvent.Error("processed"))
+        repository.lastError.first { it == "processed" }
+        repository.close()
+        val state = ChatStateCodec.decode(store.value!!)!!
+        assertNull(state.localIdentityHash)
+        assertTrue(state.members.none { it.isSelf })
+    }
+
+    @Test
+    fun nicknameByteLimitNeverSplitsASurrogatePair() {
+        assertEquals("a".repeat(30), normalizeStarlingNickname("a".repeat(30) + "🌍"))
+        assertEquals("a".repeat(28) + "🌍", normalizeStarlingNickname("a".repeat(28) + "🌍"))
+    }
 }
 
 private class MemoryChatStateStore(var value: String? = null) : ChatStateStore {
@@ -252,8 +319,12 @@ private class FakeReticulumTransport : ReticulumTransport {
     val sentDirectMessages = mutableListOf<Pair<String, String>>()
     val roomMessagesSent: Int get() = sentRoomMessages.size
     val directMessagesSent: Int get() = sentDirectMessages.size
+    val connections = MutableStateFlow<List<ReticulumConnectionConfig>>(emptyList())
 
-    override suspend fun connect(config: ReticulumConnectionConfig) = Unit
+    override suspend fun connect(config: ReticulumConnectionConfig) {
+        connections.value = connections.value + config
+        state.value = ReticulumConnectionState.Connecting
+    }
     override suspend fun disconnect() {
         state.value = ReticulumConnectionState.Disconnected
     }

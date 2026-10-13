@@ -14,6 +14,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -48,6 +50,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.MaterialTheme
@@ -150,6 +153,7 @@ fun StarlingApp(
         UnsupportedReticulumNodeController("The embedded RNS runtime is not available on this platform yet.")
     },
     liveChatRepository: ReticulumChatRepository? = null,
+    identityManager: ReticulumIdentityManager? = null,
 ) {
     var selectedRoomId by rememberSaveable { mutableStateOf("general") }
     val networks by repository.networks.collectAsState()
@@ -186,11 +190,41 @@ fun StarlingApp(
     val localIdentityHash by remember(liveChatRepository) {
         liveChatRepository?.localIdentityHash ?: flowOf(null)
     }.collectAsState(initial = liveChatRepository?.localIdentityHash?.value)
+    val identityState by remember(identityManager) {
+        identityManager?.state ?: flowOf<ReticulumIdentityState>(ReticulumIdentityState.Missing)
+    }.collectAsState(initial = identityManager?.state?.value ?: ReticulumIdentityState.Missing)
+    val identityBusy by remember(identityManager) { identityManager?.busy ?: flowOf(false) }.collectAsState(initial = false)
+    val identityError by remember(identityManager) { identityManager?.error ?: flowOf(null) }.collectAsState(initial = null)
+    val managedIdentity = (identityState as? ReticulumIdentityState.Available)?.identity
+    var identityNotice by remember { mutableStateOf<String?>(null) }
     val visibleConnectionState = if (previewMode) ReticulumConnectionState.Disconnected else reticulumConnectionState
     val visibleConnectionError = if (previewMode) null else reticulumConnectionError
     val visibleHubNetworkId = if (previewMode) null else activeHubNetworkId
     val visibleDeliveryAddress = if (previewMode) null else localDeliveryAddress
     val scope = rememberCoroutineScope()
+    val createIdentity: () -> Unit = {
+        identityNotice = null
+        scope.launch { if (identityManager?.create() == true) identityNotice = "Identity created. Export a backup before using it." }
+    }
+    val importIdentity: () -> Unit = {
+        identityNotice = null
+        scope.launch { if (identityManager?.importIdentity() == true) identityNotice = "Identity imported." }
+    }
+    val exportIdentity: () -> Unit = {
+        identityNotice = null
+        scope.launch { if (identityManager?.exportIdentity() == true) identityNotice = "Private identity backup exported. Keep it secure." }
+    }
+    val deleteIdentity: () -> Unit = {
+        identityNotice = null
+        scope.launch { if (identityManager?.delete() == true) identityNotice = "Identity deleted from this app. Backups remain valid." }
+    }
+    val disconnectIdentityNode: () -> Unit = {
+        scope.launch {
+            liveChatRepository?.disconnectFromHub()
+            nodeController.disconnect()
+            nodeController.refreshState()
+        }
+    }
     LaunchedEffect(previewMode, nodeController) {
         if (previewMode) {
             nodeController.disconnect()
@@ -231,8 +265,10 @@ fun StarlingApp(
             networkToInspect = null
         }
     }
-    LaunchedEffect(nodeController, liveChatRepository) {
+    LaunchedEffect(nodeController, liveChatRepository, identityManager) {
+        identityManager?.refresh()
         if (repository.previewMode.value || !nodeController.isSupported) return@LaunchedEffect
+        if (identityManager != null && identityManager.state.value !is ReticulumIdentityState.Available) return@LaunchedEffect
         nodeController.refreshState()
         val savedConfig = liveChatRepository?.nodeConfig?.value ?: return@LaunchedEffect
         if (savedConfig.mode != ReticulumRuntimeMode.EMBEDDED || savedConfig.validationError() != null) return@LaunchedEffect
@@ -287,7 +323,7 @@ fun StarlingApp(
             if (connection != ReticulumConnectionState.Disconnected) chat.disconnectFromHub()
             runCatching {
                 chat.connectToHub(
-                    ReticulumConnectionConfig(network.hubDestination.orEmpty(), "Starling", network.id),
+                    ReticulumConnectionConfig(network.hubDestination.orEmpty(), network.rrcNickname ?: globalNickname, network.id),
                 )
             }
         }
@@ -387,6 +423,9 @@ fun StarlingApp(
                                 onPreferredHubNetworkChange = { id -> liveChatRepository?.savePreferredHubNetworkId(id) },
                                 nodeState = reticulumNodeState,
                                 nodeSupported = nodeController.isSupported,
+                                identityAvailable = managedIdentity != null,
+                                identityBusy = identityBusy,
+                                onManageIdentity = { showSettings = false; showIdentityPage = true },
                                 supportsReticulumProtocol = nodeController.supportsReticulumProtocol,
                                 supportsRNodeInterfaces = nodeController.supportsRNodeInterfaces,
                                 rrcState = visibleConnectionState,
@@ -419,8 +458,18 @@ fun StarlingApp(
                                 previewMode = previewMode,
                                 nodeState = reticulumNodeState,
                                 rrcState = visibleConnectionState,
-                                identityHash = localIdentityHash,
-                                localDeliveryAddress = visibleDeliveryAddress,
+                                identityHash = if (identityManager != null) managedIdentity?.hash else localIdentityHash,
+                                localDeliveryAddress = managedIdentity?.deliveryAddress ?: visibleDeliveryAddress,
+                                identityState = identityState,
+                                identityBusy = identityBusy,
+                                identityError = identityError,
+                                identityNotice = identityNotice,
+                                identitySupported = identityManager != null,
+                                onCreateIdentity = createIdentity,
+                                onImportIdentity = importIdentity,
+                                onExportIdentity = exportIdentity,
+                                onDeleteIdentity = deleteIdentity,
+                                onDisconnectNode = disconnectIdentityNode,
                                 globalNickname = globalNickname,
                                 networks = networks,
                                 onGlobalNicknameChange = { liveChatRepository?.saveGlobalNickname(it) },
@@ -565,6 +614,9 @@ fun StarlingApp(
                                 onPreferredHubNetworkChange = { id -> liveChatRepository?.savePreferredHubNetworkId(id) },
                                 nodeState = reticulumNodeState,
                                 nodeSupported = nodeController.isSupported,
+                                identityAvailable = managedIdentity != null,
+                                identityBusy = identityBusy,
+                                onManageIdentity = { showSettings = false; showIdentityPage = true },
                                 supportsReticulumProtocol = nodeController.supportsReticulumProtocol,
                                 supportsRNodeInterfaces = nodeController.supportsRNodeInterfaces,
                                 rrcState = visibleConnectionState,
@@ -595,8 +647,18 @@ fun StarlingApp(
                                 previewMode = previewMode,
                                 nodeState = reticulumNodeState,
                                 rrcState = visibleConnectionState,
-                                identityHash = localIdentityHash,
-                                localDeliveryAddress = visibleDeliveryAddress,
+                                identityHash = if (identityManager != null) managedIdentity?.hash else localIdentityHash,
+                                localDeliveryAddress = managedIdentity?.deliveryAddress ?: visibleDeliveryAddress,
+                                identityState = identityState,
+                                identityBusy = identityBusy,
+                                identityError = identityError,
+                                identityNotice = identityNotice,
+                                identitySupported = identityManager != null,
+                                onCreateIdentity = createIdentity,
+                                onImportIdentity = importIdentity,
+                                onExportIdentity = exportIdentity,
+                                onDeleteIdentity = deleteIdentity,
+                                onDisconnectNode = disconnectIdentityNode,
                                 globalNickname = globalNickname,
                                 networks = networks,
                                 onGlobalNicknameChange = { liveChatRepository?.saveGlobalNickname(it) },
@@ -1186,12 +1248,23 @@ private fun ManageChannelDialog(
 }
 
 @Composable
+@OptIn(ExperimentalLayoutApi::class)
 private fun IdentityPage(
     previewMode: Boolean,
     nodeState: ReticulumNodeState,
     rrcState: ReticulumConnectionState,
     identityHash: String?,
     localDeliveryAddress: String?,
+    identityState: ReticulumIdentityState,
+    identityBusy: Boolean,
+    identityError: String?,
+    identityNotice: String?,
+    identitySupported: Boolean,
+    onCreateIdentity: () -> Unit,
+    onImportIdentity: () -> Unit,
+    onExportIdentity: () -> Unit,
+    onDeleteIdentity: () -> Unit,
+    onDisconnectNode: () -> Unit,
     globalNickname: String,
     networks: List<ChatNetwork>,
     onGlobalNicknameChange: (String) -> Unit,
@@ -1203,6 +1276,9 @@ private fun IdentityPage(
 ) {
     var globalNicknameDraft by rememberSaveable { mutableStateOf(globalNickname) }
     LaunchedEffect(globalNickname) { globalNicknameDraft = globalNickname }
+    var identityConfirmation by remember { mutableStateOf<String?>(null) }
+    val identityAvailable = identityState is ReticulumIdentityState.Available
+    val identityMutable = identitySupported && !identityBusy && nodeState == ReticulumNodeState.Stopped
 
     Column(Modifier.fillMaxSize().background(Canvas)) {
         Row(
@@ -1238,13 +1314,20 @@ private fun IdentityPage(
                 } else {
                     Text("IDENTITY HASH", color = Muted, fontSize = 9.sp, letterSpacing = 1.sp, fontWeight = FontWeight.Bold)
                     if (identityHash.isNullOrBlank()) {
-                        Text("Start the Reticulum node to load this device’s identity.", color = Muted, fontSize = 12.sp)
+                        Text(
+                            when (identityState) {
+                                ReticulumIdentityState.Loading -> "Checking for a saved identity…"
+                                is ReticulumIdentityState.Failed -> identityState.message
+                                else -> "No identity is configured. Create one or import an existing Reticulum identity."
+                            },
+                            color = Muted, fontSize = 12.sp,
+                        )
                     } else {
                         SelectionContainer {
                             Text(identityHash, color = Accent, fontSize = 13.sp, fontFamily = FontFamily.Monospace)
                         }
                         Text(
-                            "This public hash identifies your device. Its private key remains stored locally and is never displayed.",
+                            "This is your public identity hash. The private key stays in app-private storage unless you explicitly export a backup; it is never displayed here.",
                             color = Muted,
                             fontSize = 11.sp,
                             lineHeight = 16.sp,
@@ -1253,11 +1336,40 @@ private fun IdentityPage(
                     Spacer(Modifier.height(4.dp))
                     Text("LXMF DELIVERY ADDRESS", color = Muted, fontSize = 9.sp, letterSpacing = 1.sp, fontWeight = FontWeight.Bold)
                     if (localDeliveryAddress.isNullOrBlank()) {
-                        Text("Available after the node and LXMF router start.", color = Muted, fontSize = 12.sp)
+                        Text("Available after creating or importing an identity.", color = Muted, fontSize = 12.sp)
                     } else {
                         SelectionContainer {
                             Text("lxmf://$localDeliveryAddress", color = Accent, fontSize = 13.sp, fontFamily = FontFamily.Monospace)
                         }
+                    }
+                    if (identitySupported) {
+                        Spacer(Modifier.height(6.dp))
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(
+                                onClick = onCreateIdentity,
+                                enabled = identityMutable && identityState == ReticulumIdentityState.Missing,
+                                colors = ButtonDefaults.buttonColors(containerColor = Accent),
+                            ) { Text("Create identity") }
+                            OutlinedButton(onClick = { identityConfirmation = "import" }, enabled = identityMutable) { Text("Import") }
+                        }
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(onClick = { identityConfirmation = "export" }, enabled = !identityBusy && identityAvailable) { Text("Export backup") }
+                            TextButton(
+                                onClick = { identityConfirmation = "delete" },
+                                enabled = identityMutable && identityState != ReticulumIdentityState.Missing && identityState != ReticulumIdentityState.Loading,
+                            ) { Text("Delete identity", color = Color(0xFFC44545)) }
+                        }
+                        if (nodeState != ReticulumNodeState.Stopped) {
+                            Text("Disconnect the node before creating, importing, or deleting an identity.", color = Muted, fontSize = 11.sp)
+                            TextButton(onClick = onDisconnectNode, enabled = !identityBusy) { Text("Disconnect node") }
+                        }
+                        if (identityBusy) Text("Identity operation in progress…", color = Muted, fontSize = 11.sp)
+                        identityError?.let { Text(it, color = Color(0xFFC44545), fontSize = 12.sp) }
+                        identityNotice?.let { Text(it, color = Muted, fontSize = 12.sp) }
+                        Text(
+                            "Identity backups are standard, unencrypted Reticulum private-key files. Anyone with a copy can use your identity. No identity is created automatically.",
+                            color = Muted, fontSize = 11.sp, lineHeight = 16.sp,
+                        )
                     }
                 }
             }
@@ -1300,7 +1412,7 @@ private fun IdentityPage(
                     val configuredHubs = networks.filterNot { it.isPreview }
                     Text("RRC hub nicknames", color = Ink, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
                     Text(
-                        "Set an override for a specific hub. Leave it blank to use the global nickname. Changes apply the next time you connect to that hub.",
+                        "Set an override for a specific hub. Leave it blank to use the global nickname. Changing an active hub's nickname reconnects it and rejoins your channels.",
                         color = Muted,
                         fontSize = 11.sp,
                         lineHeight = 16.sp,
@@ -1332,7 +1444,7 @@ private fun IdentityPage(
             }
 
             Text(
-                "Node interfaces, hub selection, and local identity settings are managed in Network settings. The identity key is not exported or replaced from this screen.",
+                "Manage identity keys here. Node interfaces and hub selection are managed in Network settings.",
                 color = Muted,
                 fontSize = 12.sp,
                 lineHeight = 18.sp,
@@ -1341,6 +1453,26 @@ private fun IdentityPage(
                 Text("Network settings")
             }
         }
+    }
+    identityConfirmation?.let { action ->
+        AlertDialog(
+            onDismissRequest = { identityConfirmation = null },
+            title = { Text(when (action) { "delete" -> "Delete identity?"; "export" -> "Export private identity?"; else -> "Import identity?" }) },
+            text = {
+                Text(when (action) {
+                    "delete" -> "This removes the private identity from this app. Without a backup it cannot be recovered. Contacts and chat history are kept, and existing backups remain usable."
+                    "export" -> "The exported file contains your unencrypted private keys. Anyone with it can impersonate you. Save it somewhere secure, not in a public or shared folder."
+                    else -> "Choose a standard Reticulum private identity file. This replaces any identity currently saved in this app and changes your delivery address. Export the current identity first if you need a backup."
+                })
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    identityConfirmation = null
+                    when (action) { "delete" -> onDeleteIdentity(); "export" -> onExportIdentity(); else -> onImportIdentity() }
+                }, enabled = !identityBusy) { Text(when (action) { "delete" -> "Delete"; "export" -> "Export"; else -> "Choose file" }) }
+            },
+            dismissButton = { TextButton(onClick = { identityConfirmation = null }) { Text("Cancel") } },
+        )
     }
 }
 
@@ -1716,6 +1848,9 @@ private fun SettingsPage(
     onPreferredHubNetworkChange: (String?) -> Unit,
     nodeState: ReticulumNodeState,
     nodeSupported: Boolean,
+    identityAvailable: Boolean,
+    identityBusy: Boolean,
+    onManageIdentity: () -> Unit,
     supportsReticulumProtocol: Boolean,
     supportsRNodeInterfaces: Boolean,
     rrcState: ReticulumConnectionState,
@@ -2229,12 +2364,17 @@ private fun SettingsPage(
                 Text(stateMessage, color = if (nodeState is ReticulumNodeState.Failed) Color(0xFFC44545) else Muted, fontSize = 11.sp)
                 connectionInputError?.let { Text(it, color = Color(0xFFC44545), fontSize = 11.sp) }
 
+                if (!identityAvailable) {
+                    Text("Create or import an identity before starting live networking.", color = Muted, fontSize = 12.sp)
+                    TextButton(onClick = onManageIdentity) { Text("Open Identity settings") }
+                }
+
                 Button(
-                    enabled = nodeSupported && !isStarting && (isRunning || if (runtimeMode == ReticulumRuntimeMode.EMBEDDED) {
+                    enabled = nodeSupported && !isStarting && !identityBusy && (isRunning || (identityAvailable && if (runtimeMode == ReticulumRuntimeMode.EMBEDDED) {
                         (tcpPeers.isNotEmpty() || rnodeInterfaces.isNotEmpty()) &&
                             tcpPeers.all { it.validationError() == null } &&
                             rnodeInterfaces.all { it.validationError() == null }
-                    } else isValidReticulumRpcKey(existingRpcKey)),
+                    } else isValidReticulumRpcKey(existingRpcKey))),
                     onClick = {
                         if (isRunning) {
                             onDisconnectNode()

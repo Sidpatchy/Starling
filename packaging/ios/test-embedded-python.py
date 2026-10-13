@@ -79,6 +79,9 @@ def b64(value):
     return base64.b64encode(value.encode("utf-8")).decode("ascii")
 
 data_dir, port, network_name, passphrase, destination_hash, expect_path = sys.argv[1:]
+created = starling_ios_runtime.invoke("IDENTITY\t" + b64(data_dir) + "\t" + b64("IDENTITY_CREATE"))
+if not created.startswith("MANAGED_IDENTITY\t"):
+    raise RuntimeError(created)
 command = "\t".join([
     "IOS_START", b64(data_dir), "EMBEDDED", b64(""), "4", "1", "0",
     b64("127.0.0.1"), port, b64(network_name), b64(passphrase),
@@ -148,6 +151,8 @@ def main():
     threading.Thread(target=accept_peer, name="ios-ifac-smoke", daemon=True).start()
     try:
         with tempfile.TemporaryDirectory(prefix="starling-ios-rns-") as data_dir:
+            created = starling_ios_runtime.invoke("IDENTITY\t" + b64(data_dir) + "\t" + b64("IDENTITY_CREATE"))
+            assert created.startswith("MANAGED_IDENTITY\t"), created
             command = "\t".join([
                 "IOS_START", b64(data_dir), "EMBEDDED", b64(""), "4", "1", "0",
                 b64("127.0.0.1"), str(listener.getsockname()[1]),

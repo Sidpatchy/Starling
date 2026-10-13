@@ -1,7 +1,6 @@
 """LXMF direct-delivery adapter using the reference LXMF router."""
 
 import base64
-import os
 import queue
 import re
 import threading
@@ -34,19 +33,9 @@ def _encode(value):
 
 
 def _identity_for_config(config_dir):
-    import RNS
+    from starling_identity import load_identity
 
-    identity_path = os.path.join(config_dir, "starling_identity")
-    identity = RNS.Identity.from_file(identity_path) if os.path.isfile(identity_path) else None
-    if identity is None:
-        identity = RNS.Identity()
-        if not identity.to_file(identity_path):
-            raise RuntimeError("Could not persist the Starling Reticulum identity")
-        try:
-            os.chmod(identity_path, 0o600)
-        except OSError:
-            pass
-    return identity
+    return load_identity(config_dir)
 
 
 def start(config_dir, display_name="Starling"):

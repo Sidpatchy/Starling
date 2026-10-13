@@ -53,6 +53,11 @@ class DesktopReticulumNodeController : ReticulumNodeController {
             return@withLock
         }
 
+        if (!Files.isRegularFile(appDataDirectory().resolve("reticulum/starling_identity"))) {
+            _state.value = ReticulumNodeState.Failed("Create or import an identity on the Identity page before starting the node.")
+            return@withLock
+        }
+
         try {
             withContext(Dispatchers.IO) { startProcess(config) }
         } catch (error: Exception) {
@@ -96,45 +101,8 @@ class DesktopReticulumNodeController : ReticulumNodeController {
         val dataDirectory = appDataDirectory()
         Files.createDirectories(dataDirectory)
         val logFile = dataDirectory.resolve("starling-rns.log").toFile()
-        _state.value = ReticulumNodeState.PreparingRuntime("Looking for a Python 3 interpreter…")
-        val basePython = findPython(logFile)
-        val packagedPython = System.getenv("STARLING_PYTHON_PACKAGED") == "1"
-        val venvDirectory = dataDirectory.resolve("python-env")
-        val venvPython = venvPythonPath(venvDirectory)
-        val runtimePython: List<String>
-
-        if (packagedPython) {
-            runtimePython = basePython
-            if (!hasPinnedRuntime(runtimePython, logFile)) {
-                throw IllegalStateException("The packaged Python runtime is missing RNS 1.5.7 or LXMF 1.2.0.")
-            }
-        } else {
-            if (!Files.isRegularFile(venvPython)) {
-                _state.value = ReticulumNodeState.PreparingRuntime("Creating Starling’s private Python environment…")
-                runChecked(basePython + listOf("-m", "venv", venvDirectory.toString()), logFile, "Could not create a private Python environment")
-            }
-
-            runtimePython = listOf(venvPython.toString())
-            if (!hasPinnedRuntime(runtimePython, logFile)) {
-                _state.value = ReticulumNodeState.PreparingRuntime("Installing reference RNS and LXMF in Starling’s private Python environment (first run only)…")
-                runChecked(
-                    runtimePython + listOf(
-                        "-m", "pip", "install", "--disable-pip-version-check", "--no-input", "rns==1.5.7", "lxmf==1.2.0",
-                    ),
-                    logFile,
-                    "Could not install RNS 1.5.7 and LXMF 1.2.0. Check the Starling log and your internet connection",
-                    timeoutSeconds = 600,
-                )
-            }
-        }
-
+        val runtimePython = preparePythonRuntime(dataDirectory, reportProgress = true)
         val bridgeDirectory = dataDirectory.resolve("python-bridge")
-        Files.createDirectories(bridgeDirectory)
-        extractBridgeResource("python/starling_bridge_protocol.py", bridgeDirectory.resolve("starling_bridge_protocol.py"))
-        extractBridgeResource("python/starling_rns.py", bridgeDirectory.resolve("starling_rns.py"))
-        extractBridgeResource("python/starling_rrc.py", bridgeDirectory.resolve("starling_rrc.py"))
-        extractBridgeResource("python/starling_lxmf.py", bridgeDirectory.resolve("starling_lxmf.py"))
-        extractBridgeResource("python/starling_rns_service.py", bridgeDirectory.resolve("starling_rns_service.py"))
 
         _state.value = ReticulumNodeState.Starting(config.mode)
         val child = ProcessBuilder(
@@ -184,6 +152,90 @@ class DesktopReticulumNodeController : ReticulumNodeController {
                 if (_state.value !is ReticulumNodeState.Stopped) {
                     _state.value = ReticulumNodeState.Failed(error.message ?: "Lost the RNS process connection.")
                 }
+            }
+        }
+    }
+
+    private fun preparePythonRuntime(dataDirectory: Path, reportProgress: Boolean): List<String> {
+        Files.createDirectories(dataDirectory)
+        val logFile = dataDirectory.resolve("starling-rns.log").toFile()
+        fun progress(detail: String) {
+            if (reportProgress) _state.value = ReticulumNodeState.PreparingRuntime(detail)
+        }
+        progress("Looking for a Python 3 interpreter…")
+        val basePython = findPython(logFile)
+        val packagedPython = System.getenv("STARLING_PYTHON_PACKAGED") == "1"
+        val venvDirectory = dataDirectory.resolve("python-env")
+        val venvPython = venvPythonPath(venvDirectory)
+        val runtimePython: List<String>
+
+        if (packagedPython) {
+            runtimePython = basePython
+            if (!hasPinnedRuntime(runtimePython, logFile)) {
+                throw IllegalStateException("The packaged Python runtime is missing RNS 1.5.7 or LXMF 1.2.0.")
+            }
+        } else {
+            if (!Files.isRegularFile(venvPython)) {
+                progress("Creating Starling’s private Python environment…")
+                runChecked(basePython + listOf("-m", "venv", venvDirectory.toString()), logFile, "Could not create a private Python environment")
+            }
+
+            runtimePython = listOf(venvPython.toString())
+            if (!hasPinnedRuntime(runtimePython, logFile)) {
+                progress("Installing reference RNS and LXMF in Starling’s private Python environment (first run only)…")
+                runChecked(
+                    runtimePython + listOf(
+                        "-m", "pip", "install", "--disable-pip-version-check", "--no-input", "rns==1.5.7", "lxmf==1.2.0",
+                    ),
+                    logFile,
+                    "Could not install RNS 1.5.7 and LXMF 1.2.0. Check the Starling log and your internet connection",
+                    timeoutSeconds = 600,
+                )
+            }
+        }
+
+        val bridgeDirectory = dataDirectory.resolve("python-bridge")
+        Files.createDirectories(bridgeDirectory)
+        extractBridgeResource("python/starling_bridge_protocol.py", bridgeDirectory.resolve("starling_bridge_protocol.py"))
+        extractBridgeResource("python/starling_identity.py", bridgeDirectory.resolve("starling_identity.py"))
+        extractBridgeResource("python/starling_rns.py", bridgeDirectory.resolve("starling_rns.py"))
+        extractBridgeResource("python/starling_rrc.py", bridgeDirectory.resolve("starling_rrc.py"))
+        extractBridgeResource("python/starling_lxmf.py", bridgeDirectory.resolve("starling_lxmf.py"))
+        extractBridgeResource("python/starling_rns_service.py", bridgeDirectory.resolve("starling_rns_service.py"))
+
+        return runtimePython
+    }
+
+    /** Standalone identity management does not start RNS or expose keys in process arguments/logs. */
+    suspend fun invokeIdentityCommand(command: String): String = operations.withLock {
+        withContext(Dispatchers.IO) {
+            val dataDirectory = appDataDirectory()
+            val configDirectory = dataDirectory.resolve("reticulum")
+            if (command == "IDENTITY_STATUS" && !Files.exists(configDirectory.resolve("starling_identity"))) {
+                return@withContext "IDENTITY_MISSING"
+            }
+            if (command != "IDENTITY_STATUS" && command != "IDENTITY_EXPORT") {
+                check(process?.isAlive != true) { "Disconnect the Reticulum node before changing the identity." }
+            }
+            if (command == "IDENTITY_DELETE") {
+                Files.deleteIfExists(configDirectory.resolve("starling_identity"))
+                return@withContext "IDENTITY_MISSING"
+            }
+            val python = preparePythonRuntime(dataDirectory, reportProgress = false)
+            val child = ProcessBuilder(python + listOf(
+                "-u", dataDirectory.resolve("python-bridge/starling_identity.py").toString(), configDirectory.toString(),
+            )).redirectError(ProcessBuilder.Redirect.DISCARD).start()
+            try {
+                child.outputStream.bufferedWriter(Charsets.UTF_8).use { writer ->
+                    writer.write(command)
+                    writer.newLine()
+                }
+                if (!child.waitFor(30, TimeUnit.SECONDS)) error("Identity operation timed out.")
+                check(child.exitValue() == 0) { "Could not complete the identity operation." }
+                child.inputStream.bufferedReader(Charsets.UTF_8).readLine()
+                    ?: error("The identity runtime did not respond.")
+            } finally {
+                if (child.isAlive) child.destroyForcibly()
             }
         }
     }

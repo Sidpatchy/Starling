@@ -210,7 +210,7 @@ class LocalPreviewChatRepository : ChatRepository {
 
     override fun updateNetworkNickname(networkId: String, nickname: String?) {
         if (allNetworks.value.none { it.id == networkId }) return
-        val normalized = nickname?.let(::normalizeStarlingNickname)?.takeIf { it.isNotBlank() }
+        val normalized = nickname?.trim()?.takeIf(String::isNotEmpty)?.let(::normalizeStarlingNickname)
         allNetworks.value = allNetworks.value.map { network ->
             if (network.id == networkId) network.copy(rrcNickname = normalized) else network
         }
@@ -349,7 +349,10 @@ internal fun normalizeChannelName(name: String): String = name.trim().removePref
 internal fun normalizeStarlingNickname(value: String): String {
     var nickname = value.trim()
     if (nickname.isEmpty()) return "Starling"
-    while (nickname.encodeToByteArray().size > 32) nickname = nickname.dropLast(1)
+    while (nickname.encodeToByteArray().size > 32) {
+        val count = if (nickname.length >= 2 && nickname.last().isLowSurrogate() && nickname[nickname.lastIndex - 1].isHighSurrogate()) 2 else 1
+        nickname = nickname.dropLast(count)
+    }
     return nickname.ifBlank { "Starling" }
 }
 

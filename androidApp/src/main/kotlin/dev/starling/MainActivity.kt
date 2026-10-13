@@ -27,11 +27,18 @@ class MainActivity : ComponentActivity() {
         nodeController = controller
         transport = reticulumTransport
         chatRepository = chat
+        val identityManager = ReticulumIdentityManager(
+            store = AndroidIdentityStore(applicationContext),
+            files = AndroidIdentityFiles(this),
+            nodeController = controller,
+            onIdentityChanged = { chat.updateManagedIdentity(it?.hash) },
+        )
         setContent {
             StarlingApp(
                 repository = chat,
                 nodeController = controller,
                 liveChatRepository = chat,
+                identityManager = identityManager,
             )
         }
     }

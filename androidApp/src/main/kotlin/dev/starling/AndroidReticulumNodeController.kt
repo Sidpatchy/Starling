@@ -64,6 +64,11 @@ class AndroidReticulumNodeController(context: Context) : ReticulumNodeController
             return
         }
 
+        if (!appContext.noBackupFilesDir.resolve("reticulum/starling_identity").isFile) {
+            _state.value = ReticulumNodeState.Failed("Create or import an identity on the Identity page before starting the node.")
+            return
+        }
+
         _state.value = ReticulumNodeState.Starting(config.mode)
         val peersJson = JSONArray()
         config.tcpPeers.forEach { peer ->
