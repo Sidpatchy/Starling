@@ -14,6 +14,11 @@ SPEC.loader.exec_module(PATCHER)
 
 
 class IosCryptoBuildPatchTest(unittest.TestCase):
+    def test_wheel_builder_defines_and_uses_the_repository_root(self):
+        script = (ROOT / "packaging/ios/build-ios-cryptography-wheels.sh").read_text(encoding="utf-8")
+        self.assertIn('ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"', script)
+        self.assertIn('python3 "$ROOT/packaging/ios/patch-cryptography-ios-build.py"', script)
+
     def make_source_tree(self, root):
         cffi = root / "src/rust/cryptography-cffi"
         cffi.mkdir(parents=True)

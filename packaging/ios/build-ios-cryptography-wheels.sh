@@ -6,6 +6,7 @@ if [[ $# -ne 1 ]]; then
   exit 2
 fi
 
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 OUTPUT_DIR="$1"
 [[ "$OUTPUT_DIR" = /* ]] || OUTPUT_DIR="$(pwd)/$OUTPUT_DIR"
 CRYPTOGRAPHY_VERSION="50.0.2"
