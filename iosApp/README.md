@@ -18,15 +18,16 @@ bash packaging/ios/install-python-runtime-into-app.sh "$app_path"
 
 The Swift package links the shared `ComposeApp` framework and embeds CPython 3.13
 with the same RNS, RRC, and LXMF bridge used by the other clients. The iOS runtime
-uses Reticulum's built-in Python crypto provider (wire-compatible, but slower than
-PyCA/OpenSSL). RNS identities and config live in app-private Application Support;
+uses PyCA `cryptography`, built as device and simulator iOS wheels and packaged as
+frameworks. RNS identities and config live in app-private Application Support;
 chat preferences and history use the shared persisted-state codec. iOS does not
 provide an Android-style background service, so live networking is foreground-only.
 
 The unsigned IPA workflow prepares the pinned Python support framework, builds
 the Compose framework, lets xtool create the IPA, then installs Python's standard
-library and extension frameworks into the app bundle. To run it manually on a Mac
-with Xcode installed:
+library and extension frameworks into the app bundle. It also cross-builds PyCA
+cryptography wheels for iOS device and simulator using cibuildwheel and Rust. To
+run it manually on a Mac with full Xcode and rustup installed:
 
 ```sh
 bash packaging/ios/prepare-python-runtime.sh

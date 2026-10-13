@@ -13,10 +13,12 @@ case "$PLATFORM" in
   iPhoneOS)
     EFFECTIVE_PLATFORM_NAME="-iphoneos"
     FRAMEWORK_SLICE="ios-arm64"
+    PYTHON_MODULE_SLICE="ios-device"
     ;;
   iPhoneSimulator)
     EFFECTIVE_PLATFORM_NAME="-iphonesimulator"
     FRAMEWORK_SLICE="ios-arm64_x86_64-simulator"
+    PYTHON_MODULE_SLICE="ios-simulator"
     ;;
   *)
     echo "Unsupported iOS app platform: $PLATFORM" >&2
@@ -38,6 +40,11 @@ if [[ -z "$RESOURCE_BUNDLE" || ! -d "$RESOURCE_BUNDLE/PythonModules" ]]; then
   echo "The app is missing its Starling_Starling.bundle/PythonModules resources." >&2
   exit 1
 fi
+if [[ "$PYTHON_MODULE_SLICE" == "ios-device" ]]; then
+  rm -rf "$RESOURCE_BUNDLE/PythonModules/ios-simulator"
+else
+  rm -rf "$RESOURCE_BUNDLE/PythonModules/ios-device"
+fi
 
 export PROJECT_DIR="$ROOT"
 export CODESIGNING_FOLDER_PATH="$APP_PATH"
@@ -50,4 +57,15 @@ export EXPANDED_CODE_SIGN_IDENTITY="-"
 source "$ROOT/iosApp/Vendor/Python.xcframework/build/utils.sh"
 install_python \
   "iosApp/Vendor/Python.xcframework" \
-  "${RESOURCE_BUNDLE#"$APP_PATH"/}/PythonModules"
+  "${RESOURCE_BUNDLE#"$APP_PATH"/}/PythonModules/$PYTHON_MODULE_SLICE"
+
+if ! find "$APP_PATH/Frameworks" -maxdepth 1 -type d \
+  -name 'cryptography.hazmat.bindings._rust.framework' -print -quit | grep -q .; then
+  echo "PyCA cryptography's signed Rust framework was not installed." >&2
+  exit 1
+fi
+if ! find "$APP_PATH/Frameworks" -maxdepth 1 -type d \
+  -name '_cffi_backend.framework' -print -quit | grep -q .; then
+  echo "CFFI's signed backend framework was not installed." >&2
+  exit 1
+fi

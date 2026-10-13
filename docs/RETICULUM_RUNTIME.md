@@ -4,7 +4,7 @@
 
 - **Local Preview** remains enabled by default and is persisted with chat state on Android, desktop, and iOS. Preview is isolated from live Reticulum state: it shows only sample/local preview data, hides live addresses and connection configuration, ignores live events, and disconnects the node and hub while active. Preview messages are never sent over RNS.
 - Android has an embedded node using reference `rns==1.5.7` and `lxmf==1.2.0` through Chaquopy 17 / Python 3.13.
-- iOS embeds CPython 3.13 from the pinned BeeWare Python Apple-support framework and uses the same `rns==1.5.7`, `lxmf==1.2.0`, and Starling Python bridge. Its RNS crypto provider is the built-in pure-Python implementation; it is wire-compatible but can be slower than PyCA/OpenSSL.
+- iOS embeds CPython 3.13 from the pinned BeeWare Python Apple-support framework and uses the same `rns==1.5.7`, `lxmf==1.2.0`, and Starling Python bridge. PyCA `cryptography` and CFFI are built as iOS device/simulator wheels and packaged as signed extension frameworks.
 - Desktop runs the same Python bridge in a child process, installing those pinned packages into a Starling-private virtual environment on first explicit connection. Windows and macOS use this same host-Python flow; Flatpak ships the Python/RNS dependencies inside its app bundle.
 - Android starts the node on demand from Settings in a dedicated process and foreground service. Android shows an ongoing notification while it is running.
 - Embedded mode configures multiple outbound `TCPClientInterface` instances from the TCP peer list. Each connection can have its own optional IFAC network name and passphrase; both must match that peer's interface settings. RNS transport-node routing is explicitly disabled; Starling is a client, not a gateway.
@@ -32,7 +32,7 @@ This first Starling adapter is desktop serial only. Direct Android USB/Bluetooth
 
 - Android service startup and saved-hub reconnect have been exercised on a Pixel. Further physical-device testing of service notifications, clean shutdown, and the latest LXMF signature/address changes is still needed; the latest build could not be installed while no device was attached.
 - Desktop RNode serial configuration has not yet been exercised with physical radio hardware. Starling does not discover serial ports or check whether the configured RF parameters are legal for the user's region; configure them to match the RNode network and local regulations.
-- iOS supports the same embedded TCP/IFAC, existing shared-instance, RRC, LXMF, and persisted chat-state features as Android. It uses RNS's internal pure-Python crypto provider; performance may be lower than Android/desktop and needs on-device review. iOS does not provide an Android-style foreground service, so live networking is foreground-only. RNode interfaces are not supported on iOS or Android.
+- iOS supports the same embedded TCP/IFAC, existing shared-instance, RRC, LXMF, and persisted chat-state features as Android. iOS does not provide an Android-style foreground service, so live networking is foreground-only. RNode interfaces are not supported on iOS or Android.
 - In one iOS app process, TCP peers can be disconnected and reconfigured, but switching between embedded and existing-shared-instance modes requires restarting the app because RNS is a process singleton.
 - The advanced shared-instance option currently assumes the external RNS instance uses the default local shared-instance ports. Custom ports are not exposed yet.
 - TCP authentication beyond IFAC, AutoInterface discovery, interface management, and detailed RNS status diagnostics are not exposed yet.
@@ -55,7 +55,7 @@ ANDROID_HOME="$HOME/Android/Sdk" ./gradlew :androidApp:assembleDebug
 
 The runtime experiment requires Android API 24 or newer and currently packages `arm64-v8a` and `x86_64`. The generated config is intentionally minimal; no transport routing is enabled.
 
-The manual iOS workflow defaults to **iOS only** and produces an unsigned IPA for AltStore. It downloads the pinned Python Apple-support XCFramework, stages the RNS/LXMF modules and Starling bridges, builds the app with xtool, and post-processes the IPA to install Python's standard library and extension frameworks.
+The manual iOS workflow defaults to **iOS only** and produces an unsigned IPA for AltStore. It downloads the pinned Python Apple-support XCFramework, cross-builds PyCA cryptography for device and simulator, stages the RNS/LXMF modules and Starling bridges, builds the app with xtool, and post-processes the IPA to install Python's standard library and extension frameworks.
 
 Desktop CI packages the self-contained JVM image as an x86_64 AppImage,
 Flatpak, and Windows MSI, plus Apple Silicon and Intel macOS DMGs. The AppImage, MSI,

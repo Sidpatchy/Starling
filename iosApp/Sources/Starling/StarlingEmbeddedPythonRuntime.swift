@@ -31,8 +31,14 @@ final class StarlingEmbeddedPythonRuntime: NSObject, IosPythonRuntime {
         dataDirectory = supportDirectory.path
 
         pythonHome = Bundle.main.bundleURL.appendingPathComponent("python", isDirectory: true).path
+        #if targetEnvironment(simulator)
+        let pythonPlatform = "ios-simulator"
+        #else
+        let pythonPlatform = "ios-device"
+        #endif
         pythonModules = Bundle.module.resourceURL!
             .appendingPathComponent("PythonModules", isDirectory: true)
+            .appendingPathComponent(pythonPlatform, isDirectory: true)
             .path
         let executableName = Bundle.main.infoDictionary?["CFBundleExecutable"] as? String ?? "Starling"
         executablePath = Bundle.main.executableURL?.path ?? Bundle.main.bundleURL.appendingPathComponent(executableName).path
