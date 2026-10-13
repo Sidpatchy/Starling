@@ -67,3 +67,26 @@ RNode radios. Example serial
 ports are `COM3` on Windows, `/dev/cu.usbserial*` on macOS, and
 `/dev/ttyUSB*` or `/dev/ttyACM*` on Linux. USB serial drivers and OS device
 permissions are still required.
+
+## Tests
+
+Run the shared Kotlin regression tests on desktop with JDK 25:
+
+```sh
+./gradlew :composeApp:desktopTest
+```
+
+These tests use local preview data and fake transports; no live Reticulum peer
+or Python runtime is required.
+
+The Python bridge protocol tests need only host Python 3.8+ (no RNS/LXMF installation):
+
+```sh
+PYTHONPATH=composeApp/src/main/python python3 -m unittest discover -s composeApp/src/test/python
+```
+
+Test the shared CI release-version resolver with host Python and Bash:
+
+```sh
+python3 .github/scripts/test_resolve_version.py
+```

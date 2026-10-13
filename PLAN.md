@@ -38,7 +38,7 @@
 - History is best-effort rather than authoritative: peers can be offline, retain different subsets, or decline to retain/share messages.
 - Plan for stable message IDs and timestamps, pagination and response limits, and explicit retention/privacy behavior.
 - Consider richer IRCv3-inspired features as optional capabilities, rather than assuming IRCv3 itself provides storage. Prioritize history retrieval; expand only when needs are clear.
-- Use RRC for room chat and LXMF as the preferred one-to-one DM transport, keeping delivery details mostly transparent in the chat UX. Both live paths are implemented and host-tested; initial local persistence for contacts, Requests, and live message history is implemented. Android device validation, encrypted storage, and user-created network/channel persistence remain open.
+- Use RRC for room chat and LXMF as the preferred one-to-one DM transport, keeping delivery details mostly transparent in the chat UX. Both live paths are implemented and host-tested; local persistence for contacts, Requests, configured networks/channels, and live message history is implemented. Further physical-device validation and encrypted storage remain open.
 
 ## Name
 
