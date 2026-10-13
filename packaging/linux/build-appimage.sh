@@ -44,7 +44,10 @@ StartupWMClass=Starling
 EOF
 
 cd "$repo_root"
-NO_STRIP=true APPIMAGE_EXTRACT_AND_RUN=1 ./linuxdeploy-x86_64.AppImage \
+# linuxdeploy runs ldd on JRE libraries individually, so expose libjvm to it.
+runtime_server_lib="$appdir/usr/lib/starling/lib/runtime/lib/server"
+LD_LIBRARY_PATH="$runtime_server_lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+  NO_STRIP=true APPIMAGE_EXTRACT_AND_RUN=1 ./linuxdeploy-x86_64.AppImage \
   --appdir "$appdir" \
   --desktop-file "$appdir/usr/share/applications/dev.starling.Starling.desktop" \
   --icon-file "$appdir/usr/share/icons/hicolor/512x512/apps/dev.starling.Starling.png" \

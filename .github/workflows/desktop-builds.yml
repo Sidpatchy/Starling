@@ -140,6 +140,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '25'
+          java-package: jdk+jmods # Temurin 25 omits JMODs by default; Compose ProGuard requires them.
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
@@ -194,6 +195,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '25'
+          java-package: jdk+jmods # Temurin 25 omits JMODs by default; Compose ProGuard requires them.
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
