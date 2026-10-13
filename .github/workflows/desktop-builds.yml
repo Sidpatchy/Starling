@@ -22,18 +22,7 @@ jobs:
       - name: Validate and export version
         id: version
         shell: bash
-        run: |
-          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
-            app_version="${GITHUB_REF_NAME#v}"
-          else
-            app_version="$(sed -n 's/^starlingVersion=//p' gradle.properties | tail -n 1)"
-          fi
-          if [[ ! "$app_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
-            echo "Version '$app_version' must use semantic version X.Y.Z[-prerelease]." >&2
-            exit 1
-          fi
-          echo "app_version=$app_version" >> "$GITHUB_OUTPUT"
-          echo "package_version=${app_version%%-*}" >> "$GITHUB_OUTPUT"
+        run: bash .github/scripts/resolve-version.sh
 
   linux-packages:
     name: Linux AppImage and Flatpak input
