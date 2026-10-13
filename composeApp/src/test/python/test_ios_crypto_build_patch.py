@@ -34,12 +34,15 @@ class IosCryptoBuildPatchTest(unittest.TestCase):
             slice_root = Path(temporary) / "ios-arm64_x86_64-simulator"
             sysconfig_dir = slice_root / "platform-config/arm64-iphonesimulator"
             library_dir = slice_root / "lib"
+            include_dir = slice_root / "include/python3.13"
             sysconfig_dir.mkdir(parents=True)
             library_dir.mkdir()
+            include_dir.mkdir(parents=True)
             sysconfig_file = sysconfig_dir / "_sysconfigdata__ios_arm64-iphonesimulator.py"
             sysconfig_file.write_text("build_time_vars = {}\n", encoding="utf-8")
             library = library_dir / "libpython3.13.dylib"
             library.write_bytes(b"simulator-python")
+            (include_dir / "Python.h").write_text("// Python.h\n", encoding="utf-8")
 
             namespace = runpy.run_path(str(helper_path))
             staged = namespace["stage_python_library"](slice_root, "arm64-iphonesimulator")
@@ -47,6 +50,8 @@ class IosCryptoBuildPatchTest(unittest.TestCase):
             self.assertEqual((staged / sysconfig_file.name).read_text(encoding="utf-8"), "build_time_vars = {}\n")
             self.assertTrue((staged / library.name).is_symlink())
             self.assertEqual((staged / library.name).resolve(), library.resolve())
+            self.assertTrue((staged / "include/python3.13").is_symlink())
+            self.assertEqual((staged / "include/python3.13").resolve(), include_dir.resolve())
 
     def test_target_slice_staging_accepts_beeware_python_framework_layout(self):
         helper_path = ROOT / "packaging/ios/prepare-pyo3-cross-lib.py"
@@ -54,12 +59,15 @@ class IosCryptoBuildPatchTest(unittest.TestCase):
             slice_root = Path(temporary) / "ios-arm64"
             sysconfig_dir = slice_root / "platform-config/arm64-iphoneos"
             framework_dir = slice_root / "Python.framework"
+            include_dir = slice_root / "include/python3.13"
             sysconfig_dir.mkdir(parents=True)
             framework_dir.mkdir()
+            include_dir.mkdir(parents=True)
             sysconfig_file = sysconfig_dir / "_sysconfigdata__ios_arm64-iphoneos.py"
             sysconfig_file.write_text("build_time_vars = {}\n", encoding="utf-8")
             framework_binary = framework_dir / "Python"
             framework_binary.write_bytes(b"beeware-python-framework")
+            (include_dir / "Python.h").write_text("// Python.h\n", encoding="utf-8")
 
             namespace = runpy.run_path(str(helper_path))
             staged = namespace["stage_python_library"](slice_root, "arm64-iphoneos")
@@ -68,6 +76,32 @@ class IosCryptoBuildPatchTest(unittest.TestCase):
             self.assertTrue(staged_library.is_symlink())
             self.assertEqual(staged_library.resolve(), framework_binary.resolve())
             self.assertTrue((staged / sysconfig_file.name).is_file())
+            self.assertTrue((staged / "include/python3.13").is_symlink())
+            self.assertEqual((staged / "include/python3.13").resolve(), include_dir.resolve())
+
+    def test_target_slice_staging_includes_python_headers(self):
+        helper_path = ROOT / "packaging/ios/prepare-pyo3-cross-lib.py"
+        with tempfile.TemporaryDirectory(prefix="starling-pyo3-headers-") as temporary:
+            slice_root = Path(temporary) / "ios-arm64"
+            sysconfig_dir = slice_root / "platform-config/arm64-iphoneos"
+            framework_dir = slice_root / "Python.framework"
+            include_dir = slice_root / "include/python3.13"
+            sysconfig_dir.mkdir(parents=True)
+            framework_dir.mkdir()
+            include_dir.mkdir(parents=True)
+            sysconfig_file = sysconfig_dir / "_sysconfigdata__ios_arm64-iphoneos.py"
+            sysconfig_file.write_text("build_time_vars = {}\n", encoding="utf-8")
+            framework_binary = framework_dir / "Python"
+            framework_binary.write_bytes(b"beeware-python-framework")
+            (include_dir / "Python.h").write_text("// Python.h\n", encoding="utf-8")
+
+            namespace = runpy.run_path(str(helper_path))
+            staged = namespace["stage_python_library"](slice_root, "arm64-iphoneos")
+
+            staged_include = staged / "include/python3.13"
+            self.assertTrue(staged_include.is_symlink())
+            self.assertEqual(staged_include.resolve(), include_dir.resolve())
+            self.assertTrue((staged_include / "Python.h").is_file())
 
     def test_cli_resolves_target_slice_and_multiarch_from_cibuildwheel_python(self):
         helper_path = ROOT / "packaging/ios/prepare-pyo3-cross-lib.py"

@@ -29,6 +29,20 @@ def stage_python_library(slice_root: Path, multiarch: str, version: str = "3.13"
     if staged_library.exists() or staged_library.is_symlink():
         staged_library.unlink()
     staged_library.symlink_to(python_library)
+
+    # Stage Python headers for PyO3 cross-compilation
+    include_src = slice_root / "include" / f"python{version}"
+    include_dst = cross_lib_dir / "include" / f"python{version}"
+    if include_src.is_dir():
+        if include_dst.is_symlink():
+            include_dst.unlink()
+        elif include_dst.exists():
+            shutil.rmtree(include_dst)
+        include_dst.parent.mkdir(parents=True, exist_ok=True)
+        include_dst.symlink_to(include_src)
+    else:
+        raise RuntimeError(f"Target Python headers are missing: {include_src}")
+
     return cross_lib_dir
 
 
