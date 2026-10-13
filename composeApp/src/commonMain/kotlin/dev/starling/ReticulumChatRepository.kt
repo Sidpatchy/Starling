@@ -429,14 +429,10 @@ class ReticulumChatRepository(
             _lastError.value = "Connect to this room's RRC hub before sending a message."
             return
         }
-        val input = text.trim()
-        if (input.isBlank()) return
-        val isAction = input.startsWith("/me ", ignoreCase = true)
-        val body = if (isAction) input.drop(4).trimStart() else input
-        if (body.isBlank()) return
+        val outgoing = parseOutgoingChatMessage(text) ?: return
         _lastError.value = null
         try {
-            transport.sendRoomMessage(room.name, body, isAction)
+            transport.sendRoomMessage(room.name, outgoing.body, outgoing.isAction)
         } catch (error: Exception) {
             _lastError.value = error.message ?: "Could not send the RRC message."
         }
@@ -447,11 +443,7 @@ class ReticulumChatRepository(
             preview.sendDirectMessage(memberId, text)
             return
         }
-        val input = text.trim()
-        if (input.isBlank()) return
-        val isAction = input.startsWith("/me ", ignoreCase = true)
-        val body = if (isAction) input.drop(4).trimStart() else input
-        if (body.isBlank()) return
+        val outgoing = parseOutgoingChatMessage(text) ?: return
 
         val member = knownMembers.value.firstOrNull { it.id == memberId }
         val address = member?.address?.let(::normalizeLxmfAddress)
@@ -469,7 +461,7 @@ class ReticulumChatRepository(
         }
         _lastError.value = null
         try {
-            transport.sendDirectMessage(address, body)
+            transport.sendDirectMessage(address, outgoing.body)
         } catch (error: Exception) {
             _lastError.value = error.message ?: "Could not send the LXMF message."
         }

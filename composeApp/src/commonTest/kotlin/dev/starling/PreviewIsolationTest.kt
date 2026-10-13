@@ -200,6 +200,40 @@ class PreviewIsolationTest {
         assertEquals("Starling", normalizeStarlingNickname(""))
         assertEquals(32, normalizeStarlingNickname("🌐".repeat(20)).encodeToByteArray().size)
     }
+
+    @Test
+    fun liveRoomsAndDirectMessagesNormalizeOutgoingTextConsistently() = runBlocking {
+        val network = ChatNetwork("hub", "Mesh", "0123456789abcdef0123456789abcdef")
+        val room = ChatRoom("room", network.id, "general", "", 0)
+        val member = ChatMember("contact", "Moss", address = "abcdef0123456789abcdef0123456789")
+        val store = MemoryChatStateStore(
+            ChatStateCodec.encode(
+                PersistedChatState(
+                    previewMode = false,
+                    networks = listOf(network),
+                    rooms = listOf(room),
+                    members = listOf(member),
+                    contacts = setOf(member.id),
+                    activeHubNetworkId = network.id,
+                ),
+            ),
+        )
+        val transport = FakeReticulumTransport()
+        val repository = ReticulumChatRepository(LocalPreviewChatRepository(), transport, store)
+        try {
+            repository.send(room.id, " \t\n ")
+            repository.sendDirectMessage(member.id, " \t\n ")
+            assertEquals(0, transport.roomMessagesSent)
+            assertEquals(0, transport.directMessagesSent)
+
+            repository.send(room.id, " /ME   waves 🌍 ")
+            repository.sendDirectMessage(member.id, " /ME   waves 🌍 ")
+            assertEquals(listOf(Triple(room.name, "waves 🌍", true)), transport.sentRoomMessages)
+            assertEquals(listOf(member.address to "waves 🌍"), transport.sentDirectMessages)
+        } finally {
+            repository.close()
+        }
+    }
 }
 
 private class MemoryChatStateStore(var value: String? = null) : ChatStateStore {
@@ -214,8 +248,10 @@ private class FakeReticulumTransport : ReticulumTransport {
     override val nodeReady = MutableStateFlow(true)
     override val localDeliveryAddress = MutableStateFlow<String?>("fedcba9876543210fedcba9876543210")
     override val events = MutableSharedFlow<ReticulumEvent>(replay = 1)
-    var roomMessagesSent = 0
-    var directMessagesSent = 0
+    val sentRoomMessages = mutableListOf<Triple<String, String, Boolean>>()
+    val sentDirectMessages = mutableListOf<Pair<String, String>>()
+    val roomMessagesSent: Int get() = sentRoomMessages.size
+    val directMessagesSent: Int get() = sentDirectMessages.size
 
     override suspend fun connect(config: ReticulumConnectionConfig) = Unit
     override suspend fun disconnect() {
@@ -224,10 +260,10 @@ private class FakeReticulumTransport : ReticulumTransport {
     override suspend fun joinRoom(roomId: String) = Unit
     override suspend fun leaveRoom(roomId: String) = Unit
     override suspend fun sendRoomMessage(roomId: String, body: String, isAction: Boolean) {
-        roomMessagesSent++
+        sentRoomMessages += Triple(roomId, body, isAction)
     }
     override suspend fun sendDirectMessage(address: String, body: String) {
-        directMessagesSent++
+        sentDirectMessages += address to body
     }
     override suspend fun setLocalDisplayName(displayName: String) = Unit
 }

@@ -4,6 +4,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 
@@ -87,11 +88,11 @@ class LocalPreviewChatRepository : ChatRepository {
 
     private val _knownMembers = MutableStateFlow(
         listOf(
-        ChatMember("moss", "moss"),
-        ChatMember("juniper", "juniper"),
-        ChatMember("birch", "birch"),
-        ChatMember("quill", "quill"),
-        ChatMember("you", "you", isSelf = true),
+            ChatMember("moss", "moss"),
+            ChatMember("juniper", "juniper"),
+            ChatMember("birch", "birch"),
+            ChatMember("quill", "quill"),
+            ChatMember("you", "you", isSelf = true),
         ),
     )
     override val knownMembers: StateFlow<List<ChatMember>> = _knownMembers.asStateFlow()
@@ -148,7 +149,7 @@ class LocalPreviewChatRepository : ChatRepository {
     override fun messages(roomId: String): Flow<List<ChatMessage>> =
         messagesByRoom.asStateFlow().map { it[roomId].orEmpty() }
 
-    override fun directMessages(memberId: String): Flow<List<ChatMessage>> = kotlinx.coroutines.flow.combine(
+    override fun directMessages(memberId: String): Flow<List<ChatMessage>> = combine(
         directMessagesByMember.asStateFlow(),
         previewMode,
     ) { messages, enabled -> if (enabled) messages[memberId].orEmpty() else emptyList() }
@@ -283,16 +284,15 @@ class LocalPreviewChatRepository : ChatRepository {
     }
 
     override suspend fun send(roomId: String, text: String) {
-        val (messageText, action) = parseMessage(text)
-        if (messageText.isEmpty()) return
+        val outgoing = parseOutgoingChatMessage(text) ?: return
 
         val message = ChatMessage(
             id = "local-${nextId++}",
             author = "you",
-            text = messageText,
+            text = outgoing.body,
             time = "now",
             isMine = true,
-            isAction = action,
+            isAction = outgoing.isAction,
         )
         allMessagesByRoom.value = allMessagesByRoom.value +
             (roomId to (allMessagesByRoom.value[roomId].orEmpty() + message))
@@ -300,27 +300,18 @@ class LocalPreviewChatRepository : ChatRepository {
     }
 
     override suspend fun sendDirectMessage(memberId: String, text: String) {
-        val (messageText, action) = parseMessage(text)
-        if (messageText.isEmpty()) return
+        val outgoing = parseOutgoingChatMessage(text) ?: return
 
         val message = ChatMessage(
             id = "local-dm-${nextId++}",
             author = "you",
-            text = messageText,
+            text = outgoing.body,
             time = "now",
             isMine = true,
-            isAction = action,
+            isAction = outgoing.isAction,
         )
         directMessagesByMember.value = directMessagesByMember.value +
             (memberId to (directMessagesByMember.value[memberId].orEmpty() + message))
-    }
-
-    private fun parseMessage(text: String): Pair<String, Boolean> {
-        val input = text.trim()
-        if (input.isEmpty()) return "" to false
-        val action = input.startsWith("/me ", ignoreCase = true)
-        val messageText = if (action) input.drop(4).trimStart() else input
-        return messageText to action
     }
 
     private fun refreshVisibleConfiguration() {

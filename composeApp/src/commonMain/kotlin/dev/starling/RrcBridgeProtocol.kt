@@ -7,24 +7,7 @@ data class ParsedRrcBridgeEvent(
     val event: ReticulumEvent? = null,
 )
 
-internal fun encodeBridgeBase64(value: String): String {
-    val bytes = value.encodeToByteArray()
-    val alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
-    return buildString((bytes.size + 2) / 3 * 4) {
-        var index = 0
-        while (index < bytes.size) {
-            val first = bytes[index++].toInt() and 0xff
-            val hasSecond = index < bytes.size
-            val second = if (hasSecond) bytes[index++].toInt() and 0xff else 0
-            val hasThird = index < bytes.size
-            val third = if (hasThird) bytes[index++].toInt() and 0xff else 0
-            append(alphabet[(first ushr 2) and 0x3f])
-            append(alphabet[((first shl 4) or (second ushr 4)) and 0x3f])
-            append(if (hasSecond) alphabet[((second shl 2) or (third ushr 6)) and 0x3f] else '=')
-            append(if (hasThird) alphabet[third and 0x3f] else '=')
-        }
-    }
-}
+internal fun encodeBridgeBase64(value: String): String = Base64TextCodec.encode(value)
 
 fun parseRrcBridgeEvent(line: String): ParsedRrcBridgeEvent? {
     val fields = line.split('\t')
@@ -130,23 +113,4 @@ fun parseRrcBridgeEvent(line: String): ParsedRrcBridgeEvent? {
     }
 }
 
-private fun String.decodeBridgeBase64(): String {
-    if (isEmpty()) return ""
-    val alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
-    val output = ByteArray(length * 3 / 4)
-    var outputIndex = 0
-    var buffer = 0
-    var bits = 0
-    for (character in this) {
-        if (character == '=') break
-        val value = alphabet.indexOf(character)
-        if (value < 0) continue
-        buffer = (buffer shl 6) or value
-        bits += 6
-        if (bits >= 8) {
-            bits -= 8
-            if (outputIndex < output.size) output[outputIndex++] = ((buffer shr bits) and 0xff).toByte()
-        }
-    }
-    return output.copyOf(outputIndex).decodeToString(throwOnInvalidSequence = false)
-}
+internal fun String.decodeBridgeBase64(): String = Base64TextCodec.decode(this, ignoreInvalidCharacters = true)
