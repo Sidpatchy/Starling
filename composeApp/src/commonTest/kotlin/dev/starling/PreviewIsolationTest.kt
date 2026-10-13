@@ -4,6 +4,8 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.runTest
+import kotlin.time.Duration.Companion.seconds
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -237,7 +239,7 @@ class PreviewIsolationTest {
     }
 
     @Test
-    fun connectionsUseSavedNicknamesAndChangesReconnectTheActiveHub() = runBlocking {
+    fun connectionsUseSavedNicknamesAndChangesReconnectTheActiveHub() = runTest(timeout = 10.seconds) {
         val hub = ChatNetwork("hub", "Mesh", "0123456789abcdef0123456789abcdef")
         val store = MemoryChatStateStore(ChatStateCodec.encode(PersistedChatState(
             previewMode = false, networks = listOf(hub), globalNickname = "Global operator",
@@ -322,8 +324,8 @@ private class FakeReticulumTransport : ReticulumTransport {
     val connections = MutableStateFlow<List<ReticulumConnectionConfig>>(emptyList())
 
     override suspend fun connect(config: ReticulumConnectionConfig) {
-        connections.value = connections.value + config
         state.value = ReticulumConnectionState.Connecting
+        connections.value = connections.value + config
     }
     override suspend fun disconnect() {
         state.value = ReticulumConnectionState.Disconnected

@@ -14,14 +14,13 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.FlowRow
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
@@ -94,6 +93,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -145,6 +145,8 @@ private val Line: Color @Composable get() = LocalStarlingPalette.current.line
 private val Accent: Color @Composable get() = LocalStarlingPalette.current.accent
 private val PaleAccent: Color @Composable get() = LocalStarlingPalette.current.paleAccent
 private val EMPTY_CHAT_ROOM = ChatRoom("empty", "", "", "", 0)
+private val SidebarEdgeInset = 12.dp
+private val SidebarActionSize = 30.dp
 
 @Composable
 fun StarlingApp(
@@ -329,6 +331,13 @@ fun StarlingApp(
         }
     }
     val selectedDirectMessage = knownMembers.firstOrNull { it.id == selectedDirectMessageId }
+    val sidebarSelection = sidebarSelectionForVisiblePage(
+        roomId = selectedRoom.id.takeIf { rooms.isNotEmpty() },
+        directMessageId = selectedDirectMessage?.id,
+        showSettings = showSettings,
+        showIdentityPage = showIdentityPage,
+        showContactRequests = showContactRequests,
+    )
     val directMessages by remember(selectedDirectMessageId) {
         selectedDirectMessageId?.let(repository::directMessages) ?: flowOf(emptyList())
     }.collectAsState(initial = emptyList())
@@ -379,8 +388,8 @@ fun StarlingApp(
                             activeHubNetworkId = visibleHubNetworkId,
                             contacts = knownMembers.filter { it.id in contactMemberIds },
                             requestsCount = contactRequests.size,
-                            selectedRoomId = selectedRoom.id,
-                            selectedDirectMessageId = selectedDirectMessageId,
+                            selectedRoomId = sidebarSelection.roomId,
+                            selectedDirectMessageId = sidebarSelection.directMessageId,
                             onRoomSelected = {
                                 selectedRoomId = it
                                 selectedDirectMessageId = null
@@ -541,8 +550,8 @@ fun StarlingApp(
                                     activeHubNetworkId = visibleHubNetworkId,
                                     contacts = knownMembers.filter { it.id in contactMemberIds },
                                     requestsCount = contactRequests.size,
-                                    selectedRoomId = selectedRoom.id,
-                                    selectedDirectMessageId = selectedDirectMessageId,
+                                    selectedRoomId = sidebarSelection.roomId,
+                                    selectedDirectMessageId = sidebarSelection.directMessageId,
                                     onRoomSelected = { roomId ->
                                         selectedRoomId = roomId
                                         selectedDirectMessageId = null
@@ -1248,7 +1257,6 @@ private fun ManageChannelDialog(
 }
 
 @Composable
-@OptIn(ExperimentalLayoutApi::class)
 private fun IdentityPage(
     previewMode: Boolean,
     nodeState: ReticulumNodeState,
@@ -1279,6 +1287,7 @@ private fun IdentityPage(
     var identityConfirmation by remember { mutableStateOf<String?>(null) }
     val identityAvailable = identityState is ReticulumIdentityState.Available
     val identityMutable = identitySupported && !identityBusy && nodeState == ReticulumNodeState.Stopped
+    val identityActionHeight = 56.dp
 
     Column(Modifier.fillMaxSize().background(Canvas)) {
         Row(
@@ -1344,20 +1353,31 @@ private fun IdentityPage(
                     }
                     if (identitySupported) {
                         Spacer(Modifier.height(6.dp))
-                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Button(
                                 onClick = onCreateIdentity,
+                                modifier = Modifier.weight(1f).height(identityActionHeight),
                                 enabled = identityMutable && identityState == ReticulumIdentityState.Missing,
                                 colors = ButtonDefaults.buttonColors(containerColor = Accent),
-                            ) { Text("Create identity") }
-                            OutlinedButton(onClick = { identityConfirmation = "import" }, enabled = identityMutable) { Text("Import") }
+                            ) { Text("Create identity", textAlign = TextAlign.Center) }
+                            OutlinedButton(
+                                onClick = { identityConfirmation = "import" },
+                                modifier = Modifier.weight(1f).height(identityActionHeight),
+                                enabled = identityMutable,
+                            ) { Text("Import", textAlign = TextAlign.Center) }
                         }
-                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            OutlinedButton(onClick = { identityConfirmation = "export" }, enabled = !identityBusy && identityAvailable) { Text("Export backup") }
-                            TextButton(
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(
+                                onClick = { identityConfirmation = "export" },
+                                modifier = Modifier.weight(1f).height(identityActionHeight),
+                                enabled = !identityBusy && identityAvailable,
+                            ) { Text("Export backup", textAlign = TextAlign.Center) }
+                            OutlinedButton(
                                 onClick = { identityConfirmation = "delete" },
+                                modifier = Modifier.weight(1f).height(identityActionHeight),
                                 enabled = identityMutable && identityState != ReticulumIdentityState.Missing && identityState != ReticulumIdentityState.Loading,
-                            ) { Text("Delete identity", color = Color(0xFFC44545)) }
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFC44545)),
+                            ) { Text("Delete identity", textAlign = TextAlign.Center) }
                         }
                         if (nodeState != ReticulumNodeState.Stopped) {
                             Text("Disconnect the node before creating, importing, or deleting an identity.", color = Muted, fontSize = 11.sp)
@@ -1549,7 +1569,7 @@ private fun RoomSidebar(
     activeHubNetworkId: String?,
     contacts: List<ChatMember>,
     requestsCount: Int,
-    selectedRoomId: String,
+    selectedRoomId: String?,
     selectedDirectMessageId: String?,
     onRoomSelected: (String) -> Unit,
     onContactSelected: (ChatMember) -> Unit,
@@ -1629,7 +1649,9 @@ private fun RoomSidebar(
                 .preferredFrameRate(120f),
         ) {
             Row(
-                modifier = Modifier.fillMaxWidth().padding(start = 22.dp, end = 10.dp, top = 20.dp, bottom = 6.dp),
+                modifier = Modifier.fillMaxWidth()
+                    .padding(start = 22.dp, end = SidebarEdgeInset, top = 20.dp, bottom = 6.dp)
+                    .heightIn(min = 48.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
@@ -1640,7 +1662,7 @@ private fun RoomSidebar(
                     letterSpacing = 1.3.sp,
                     fontWeight = FontWeight.SemiBold,
                 )
-                IconButton(onClick = onAddNetwork) {
+                IconButton(onClick = onAddNetwork, modifier = Modifier.size(SidebarActionSize)) {
                     Icon(Icons.Filled.Add, contentDescription = "Add network", tint = Accent)
                 }
             }
@@ -1683,7 +1705,9 @@ private fun RoomSidebar(
             }
 
             Row(
-                modifier = Modifier.fillMaxWidth().padding(start = 22.dp, end = 10.dp, top = 20.dp, bottom = 6.dp),
+                modifier = Modifier.fillMaxWidth()
+                    .padding(start = 22.dp, end = SidebarEdgeInset, top = 20.dp, bottom = 6.dp)
+                    .heightIn(min = 48.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
@@ -1694,14 +1718,14 @@ private fun RoomSidebar(
                     letterSpacing = 1.3.sp,
                     fontWeight = FontWeight.SemiBold,
                 )
-                IconButton(onClick = onAddContact) {
+                IconButton(onClick = onAddContact, modifier = Modifier.size(SidebarActionSize)) {
                     Icon(Icons.Filled.Add, contentDescription = "Add contact", tint = Accent)
                 }
             }
             contacts.forEach { member ->
                 Row(
                     modifier = Modifier.fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 2.dp)
+                        .padding(horizontal = SidebarEdgeInset, vertical = 2.dp)
                         .clip(RoundedCornerShape(9.dp))
                         .background(if (member.id == selectedDirectMessageId) PaleAccent else Color.Transparent)
                         .clickable { onContactSelected(member) }
@@ -1722,9 +1746,9 @@ private fun RoomSidebar(
                 )
             }
             Row(
-                modifier = Modifier.fillMaxWidth().padding(start = 22.dp, end = 16.dp, top = 8.dp, bottom = 6.dp)
-                    .clip(RoundedCornerShape(8.dp)).clickable(onClick = onRequestsClick)
-                    .padding(vertical = 7.dp),
+                modifier = Modifier.fillMaxWidth().padding(start = SidebarEdgeInset, end = SidebarEdgeInset, top = 8.dp, bottom = 6.dp)
+                    .clip(RoundedCornerShape(9.dp)).clickable(onClick = onRequestsClick)
+                    .padding(start = 10.dp, end = 8.dp, top = 7.dp, bottom = 7.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text("Message requests", modifier = Modifier.weight(1f), color = Ink, fontSize = 12.sp)
@@ -1741,7 +1765,7 @@ private fun RoomSidebar(
         }
 
         Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 12.dp),
+            modifier = Modifier.fillMaxWidth().padding(start = 10.dp, end = SidebarEdgeInset, top = 12.dp, bottom = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(
@@ -1760,7 +1784,7 @@ private fun RoomSidebar(
                     modifier = Modifier.padding(start = 16.dp, top = 4.dp),
                 )
             }
-            IconButton(onClick = onSettingsClick) {
+            IconButton(onClick = onSettingsClick, modifier = Modifier.size(SidebarActionSize)) {
                 Icon(
                     imageVector = Icons.Filled.Settings,
                     contentDescription = "Settings",
@@ -2620,7 +2644,7 @@ private fun NetworkRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 2.dp)
+            .padding(horizontal = SidebarEdgeInset, vertical = 2.dp)
             .clip(RoundedCornerShape(9.dp)),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -2653,7 +2677,7 @@ private fun NetworkRow(
                 maxLines = 1,
             )
         }
-        IconButton(onClick = onAddChannel, modifier = Modifier.size(30.dp)) {
+        IconButton(onClick = onAddChannel, modifier = Modifier.size(SidebarActionSize)) {
             Icon(Icons.Filled.Add, contentDescription = "Add channel to ${network.name}", tint = Muted)
         }
     }
@@ -2664,7 +2688,7 @@ private fun RoomRow(room: ChatRoom, selected: Boolean, onClick: () -> Unit, onMa
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 2.dp)
+            .padding(horizontal = SidebarEdgeInset, vertical = 2.dp)
             .clip(RoundedCornerShape(9.dp)),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -2686,7 +2710,7 @@ private fun RoomRow(room: ChatRoom, selected: Boolean, onClick: () -> Unit, onMa
             )
             if (selected) Text(room.members.toString(), color = Accent, fontSize = 11.sp)
         }
-        IconButton(onClick = onManage, modifier = Modifier.size(30.dp)) {
+        IconButton(onClick = onManage, modifier = Modifier.size(SidebarActionSize)) {
             Icon(Icons.Filled.MoreVert, contentDescription = "Manage #${room.name}", tint = Muted)
         }
     }
