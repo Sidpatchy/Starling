@@ -30,18 +30,17 @@ def stage_python_library(slice_root: Path, multiarch: str, version: str = "3.13"
         staged_library.unlink()
     staged_library.symlink_to(python_library)
 
-    # Stage Python headers for PyO3 cross-compilation
+    # cryptography-cffi's build.rs derives its header dir from PYO3_CROSS_LIB_DIR
+    # as <lib_dir>/../../include/<basename(lib_dir)>, i.e. include/pyo3-cross.
     include_src = slice_root / "include" / f"python{version}"
-    include_dst = cross_lib_dir / "include" / f"python{version}"
-    if include_src.is_dir():
-        if include_dst.is_symlink():
-            include_dst.unlink()
-        elif include_dst.exists():
-            shutil.rmtree(include_dst)
-        include_dst.parent.mkdir(parents=True, exist_ok=True)
-        include_dst.symlink_to(include_src)
-    else:
+    if not include_src.is_dir():
         raise RuntimeError(f"Target Python headers are missing: {include_src}")
+    include_dst = slice_root / "include" / cross_lib_dir.name
+    if include_dst.is_symlink():
+        include_dst.unlink()
+    elif include_dst.exists():
+        shutil.rmtree(include_dst)
+    include_dst.symlink_to(include_src.name)
 
     return cross_lib_dir
 
