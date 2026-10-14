@@ -53,6 +53,7 @@ export PLATFORM_FAMILY_NAME="iOS"
 export ARCHS="arm64"
 export PRODUCT_BUNDLE_IDENTIFIER="dev.starling.ios"
 export EXPANDED_CODE_SIGN_IDENTITY="-"
+export EXPANDED_CODE_SIGN_IDENTITY_NAME="-"
 
 source "$ROOT/iosApp/Vendor/Python.xcframework/build/utils.sh"
 install_python \
