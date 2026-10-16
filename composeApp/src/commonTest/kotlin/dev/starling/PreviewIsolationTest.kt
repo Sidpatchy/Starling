@@ -233,6 +233,21 @@ class PreviewIsolationTest {
             repository.sendDirectMessage(member.id, " /ME   waves 🌍 ")
             assertEquals(listOf(Triple(room.name, "waves 🌍", true)), transport.sentRoomMessages)
             assertEquals(listOf(member.address to "waves 🌍"), transport.sentDirectMessages)
+
+            repository.send(room.id, "/stats")
+            assertEquals(
+                listOf(Triple(room.name, "waves 🌍", true), Triple(room.name, "/stats", false)),
+                transport.sentRoomMessages,
+            )
+            repository.send(room.id, "/help")
+            assertEquals(
+                listOf(
+                    Triple(room.name, "waves 🌍", true),
+                    Triple(room.name, "/stats", false),
+                    Triple(room.name, "/help", false),
+                ),
+                transport.sentRoomMessages,
+            )
         } finally {
             repository.close()
         }

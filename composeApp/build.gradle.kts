@@ -70,6 +70,10 @@ kotlin {
             implementation(compose.desktop.currentOs)
         }
 
+        getByName("androidMain").dependencies {
+            implementation(libs.androidx.activity.compose)
+        }
+
     }
 }
 

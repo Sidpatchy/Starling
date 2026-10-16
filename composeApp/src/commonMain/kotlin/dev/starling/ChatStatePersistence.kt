@@ -25,10 +25,10 @@ data class PersistedChatState(
 
 /** Small versioned text codec to avoid platform-specific serialization APIs. */
 object ChatStateCodec {
-    private const val HEADER = "STARLING_CHAT_STATE_V7"
+    private const val HEADER = "STARLING_CHAT_STATE_V9"
     private val LEGACY_HEADERS = setOf(
         "STARLING_CHAT_STATE_V1", "STARLING_CHAT_STATE_V2", "STARLING_CHAT_STATE_V3", "STARLING_CHAT_STATE_V4",
-        "STARLING_CHAT_STATE_V5", "STARLING_CHAT_STATE_V6",
+        "STARLING_CHAT_STATE_V5", "STARLING_CHAT_STATE_V6", "STARLING_CHAT_STATE_V7", "STARLING_CHAT_STATE_V8",
     )
 
     fun encode(state: PersistedChatState): String = buildString {
@@ -158,15 +158,42 @@ object ChatStateCodec {
                     requests[request.id] = request
                 }
                 "R", "D" -> if (decoded.size >= 8) {
+                    val isSystem = decoded.getOrNull(9) == "1"
+                    val systemEvents = when {
+                        !isSystem -> emptyList()
+                        header == HEADER -> {
+                            val eventCount = decoded.getOrNull(10)?.toIntOrNull()?.coerceAtLeast(0) ?: 0
+                            decoded.drop(11).chunked(3).take(eventCount).mapNotNull { event ->
+                                if (event.size < 3) null else runCatching {
+                                    ChatSystemEvent(ChatSystemEventKind.valueOf(event[0]), event[2], event[1])
+                                }.getOrNull()
+                            }
+                        }
+                        else -> List(decoded.getOrNull(10)?.toIntOrNull()?.coerceIn(1, 1000) ?: 1) {
+                            val kind = if (decoded.getOrNull(8) == "client-help") {
+                                ChatSystemEventKind.OTHER
+                            } else {
+                                ChatSystemEventKind.NOTICE
+                            }
+                            ChatSystemEvent(kind, decoded[3], decoded[4])
+                        }
+                    }
+                    val messageText = if (header != HEADER && systemEvents.size > 1) {
+                        summarizeSystemEvents(systemEvents)
+                    } else {
+                        decoded[3]
+                    }
                     val message = ChatMessage(
                         id = decoded[1],
                         author = decoded[2],
-                        text = decoded[3],
+                        text = messageText,
                         time = decoded[4],
                         isMine = decoded[5] == "1",
                         isAction = decoded[6] == "1",
                         deliveryState = decoded[7].ifBlank { null },
                         authorId = decoded.getOrNull(8)?.ifBlank { null },
+                        isSystem = isSystem,
+                        systemEvents = systemEvents,
                     )
                     val bucket = if (fields[0] == "R") rooms else direct
                     bucket.getOrPut(decoded[0]) { mutableListOf() }.add(message)
@@ -194,9 +221,14 @@ object ChatStateCodec {
     }
 
     private fun StringBuilder.appendMessage(kind: String, ownerId: String, message: ChatMessage) {
+        val systemEvents = message.systemEvents.ifEmpty {
+            if (message.isSystem) listOf(ChatSystemEvent(ChatSystemEventKind.OTHER, message.text, message.time)) else emptyList()
+        }
+        val eventFields = systemEvents.flatMap { event -> listOf(event.kind.name, event.time, event.text) }
         appendRecord(
             kind, ownerId, message.id, message.author, message.text, message.time,
             message.isMine.bit(), message.isAction.bit(), message.deliveryState.orEmpty(), message.authorId.orEmpty(),
+            message.isSystem.bit(), systemEvents.size.toString(), *eventFields.toTypedArray(),
         )
     }
 

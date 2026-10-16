@@ -24,6 +24,24 @@ data class ChatNetwork(
     val rrcNickname: String? = null,
 )
 
+enum class ChatSystemEventKind {
+    JOIN,
+    MODE,
+    NICK,
+    LEAVE,
+    NOTICE,
+    ERROR,
+    COMMAND_ERROR,
+    HELP,
+    OTHER,
+}
+
+data class ChatSystemEvent(
+    val kind: ChatSystemEventKind,
+    val text: String,
+    val time: String,
+)
+
 data class ChatMessage(
     val id: String,
     val author: String,
@@ -33,7 +51,81 @@ data class ChatMessage(
     val isAction: Boolean = false,
     val deliveryState: String? = null,
     val authorId: String? = null,
+    val isSystem: Boolean = false,
+    val systemEvents: List<ChatSystemEvent> = emptyList(),
 )
+
+internal fun collapseRepeatedSystemMessage(
+    history: List<ChatMessage>,
+    message: ChatMessage,
+): List<ChatMessage> {
+    if (history.any { it.id == message.id }) return history
+    if (!message.isSystem) return history + message
+
+    val newEvents = message.systemEvents.ifEmpty {
+        listOf(ChatSystemEvent(ChatSystemEventKind.OTHER, message.text, message.time))
+    }
+    val isStandaloneSystemMessage = newEvents.any {
+        it.kind == ChatSystemEventKind.ERROR ||
+            it.kind == ChatSystemEventKind.COMMAND_ERROR ||
+            it.kind == ChatSystemEventKind.HELP
+    }
+    if (isStandaloneSystemMessage) return history + message.copy(systemEvents = newEvents)
+
+    val previous = history.lastOrNull()?.takeIf { prior ->
+        prior.isSystem && prior.systemEvents.none {
+            it.kind == ChatSystemEventKind.ERROR ||
+                it.kind == ChatSystemEventKind.COMMAND_ERROR ||
+                it.kind == ChatSystemEventKind.HELP
+        }
+    }
+    if (previous == null) {
+        return history + message.copy(
+            systemEvents = newEvents,
+            text = summarizeSystemEvents(newEvents),
+        )
+    }
+
+    val groupedEvents = previous.systemEvents.ifEmpty {
+        listOf(ChatSystemEvent(ChatSystemEventKind.OTHER, previous.text, previous.time))
+    } + newEvents
+    return history.dropLast(1) + previous.copy(
+        text = summarizeSystemEvents(groupedEvents),
+        time = message.time.ifBlank { previous.time },
+        systemEvents = groupedEvents,
+    )
+}
+
+internal fun summarizeSystemEvents(events: List<ChatSystemEvent>): String {
+    if (events.size == 1) return events.single().text
+
+    val counts = events.groupingBy(ChatSystemEvent::kind).eachCount()
+    val summaries = listOf(
+        counts[ChatSystemEventKind.JOIN]?.let { it.eventCount("user", "users", "has joined", "have joined") },
+        counts[ChatSystemEventKind.MODE]?.let { it.eventCount("mode", "modes", "was set", "were set") },
+        counts[ChatSystemEventKind.NICK]?.let { it.eventCount("user", "users", "has changed nick", "have changed nick") },
+        counts[ChatSystemEventKind.LEAVE]?.let { it.eventCount("user", "users", "has left", "have left") },
+        counts[ChatSystemEventKind.NOTICE]?.let { it.eventCount("server notice", "server notices") },
+        counts[ChatSystemEventKind.ERROR]?.let { it.eventCount("hub error", "hub errors") },
+        counts[ChatSystemEventKind.COMMAND_ERROR]?.let { it.eventCount("command error", "command errors") },
+        counts[ChatSystemEventKind.HELP]?.let { it.eventCount("help message", "help messages") },
+        counts[ChatSystemEventKind.OTHER]?.let { it.eventCount("system event", "system events") },
+    ).filterNotNull()
+    if (summaries.isEmpty()) return "${events.size} system events"
+    if (summaries.size == 1) return summaries.single()
+    return summaries.dropLast(1).joinToString(", ") + ", and " + summaries.last()
+}
+
+private fun Int.eventCount(
+    singular: String,
+    plural: String,
+    singularVerb: String? = null,
+    pluralVerb: String? = null,
+): String {
+    val noun = if (this == 1) singular else plural
+    val verb = if (this == 1) singularVerb else pluralVerb
+    return "$this $noun" + (verb?.let { " $it" } ?: "")
+}
 
 /** Boundary between shared chat UI and either local preview or a live session. */
 interface ChatRepository {
@@ -285,6 +377,21 @@ class LocalPreviewChatRepository : ChatRepository {
 
     override suspend fun send(roomId: String, text: String) {
         val outgoing = parseOutgoingChatMessage(text) ?: return
+
+        if (isLocalHelpCommand(outgoing.body)) {
+            val help = ChatMessage(
+                id = "local-system-${nextId++}",
+                author = "System",
+                text = RRC_COMMAND_HELP,
+                time = "now",
+                isSystem = true,
+                systemEvents = listOf(ChatSystemEvent(ChatSystemEventKind.HELP, RRC_COMMAND_HELP, "now")),
+            )
+            allMessagesByRoom.value = allMessagesByRoom.value +
+                (roomId to collapseRepeatedSystemMessage(allMessagesByRoom.value[roomId].orEmpty(), help))
+            refreshVisibleMessages()
+            return
+        }
 
         val message = ChatMessage(
             id = "local-${nextId++}",

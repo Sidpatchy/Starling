@@ -4,6 +4,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -36,6 +37,46 @@ class OutgoingChatMessageTest {
         for (input in listOf("/me", "/me   ", "/me\twaves", "/me\nwaves", "/message hello", "/unknown")) {
             assertEquals(OutgoingChatMessage(input.trim(), isAction = false), parseOutgoingChatMessage(input))
         }
+    }
+
+    @Test
+    fun messageLengthCountsUnicodeCodePointsAndTruncatesWithoutSplittingSurrogates() {
+        val draft = "a".repeat(MAX_CHAT_MESSAGE_CHARACTERS - 1) + "🌍x"
+        val limitedDraft = limitChatMessageLength(draft)
+
+        assertEquals(MAX_CHAT_MESSAGE_CHARACTERS + 1, countChatMessageCharacters(draft))
+        assertEquals(MAX_CHAT_MESSAGE_CHARACTERS, countChatMessageCharacters(limitedDraft))
+        assertEquals("a".repeat(MAX_CHAT_MESSAGE_CHARACTERS - 1) + "🌍", limitedDraft)
+        assertEquals(limitedDraft, parseOutgoingChatMessage(limitedDraft)?.body)
+        assertNull(parseOutgoingChatMessage(draft))
+    }
+
+    @Test
+    fun helpIsAClientCommandAndPreviewShowsTheAvailableHubCommands() = runBlocking {
+        val repository = LocalPreviewChatRepository()
+        val roomId = repository.rooms.value.first().id
+
+        repository.send(roomId, "/HELP")
+
+        val help = repository.messages(roomId).first().last()
+        assertTrue(help.isSystem)
+        assertTrue(help.text.contains("/list"))
+        assertTrue(help.text.contains("/topic"))
+    }
+
+    @Test
+    fun slashCommandSuggestionsFilterAndCompleteWithoutRemovingArguments() {
+        assertEquals(listOf("mode"), slashCommandSuggestions("/mo").map { it.name })
+        assertEquals(listOf("mode"), slashCommandSuggestions("/mode general +m").map { it.name })
+        assertEquals("/mode ", completeSlashCommand("/mo", RRC_SLASH_COMMANDS.first { it.name == "mode" }))
+        assertEquals("/stats ", completeSlashCommand("/stats", RRC_SLASH_COMMANDS.first { it.name == "stats" }))
+        assertEquals("/mode general +m", completeSlashCommand("/mode general +m", RRC_SLASH_COMMANDS.first { it.name == "mode" }))
+        assertTrue(slashCommandSuggestions("hello").isEmpty())
+        assertTrue(slashCommandSuggestions("/not-a-command").isEmpty())
+        assertTrue(isRrcServerSlashCommand("/stats"))
+        assertFalse(isRrcServerSlashCommand("/not-a-command"))
+        assertTrue(isUnrecognizedRrcCommandReply("Server says: Unrecognized command /foo"))
+        assertFalse(isUnrecognizedRrcCommandReply("/help returned 12 available commands"))
     }
 
     @Test

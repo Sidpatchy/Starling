@@ -11,7 +11,7 @@ class ChatStateCodecTest {
         val state = PersistedChatState(previewMode = false, preferredHubNetworkId = "hub")
 
         assertEquals(
-            "STARLING_CHAT_STATE_V7\nP\tMA==\nU\taHVi\nG\tU3Rhcmxpbmc=\n",
+            "STARLING_CHAT_STATE_V9\nP\tMA==\nU\taHVi\nG\tU3Rhcmxpbmc=\n",
             ChatStateCodec.encode(state),
         )
     }
@@ -29,6 +29,11 @@ class ChatStateCodecTest {
             isAction = true,
             deliveryState = "delivered",
             authorId = member.id,
+            isSystem = true,
+            systemEvents = listOf(
+                ChatSystemEvent(ChatSystemEventKind.NOTICE, "Hub message", "12:33"),
+                ChatSystemEvent(ChatSystemEventKind.NOTICE, text, "12:34"),
+            ),
         )
         val state = PersistedChatState(
             previewMode = false,
@@ -68,8 +73,45 @@ class ChatStateCodecTest {
     }
 
     @Test
+    fun consecutiveSystemEventsCollapseIntoOneExpandableSummary() {
+        val firstSystem = ChatMessage(
+            id = "system-1", author = "System", text = "Room is unregistered", time = "20:00",
+            authorId = "hub", isSystem = true,
+            systemEvents = listOf(ChatSystemEvent(ChatSystemEventKind.NOTICE, "Room is unregistered", "20:00")),
+        )
+        val secondSystem = ChatMessage(
+            id = "system-2", author = "System", text = "Alice joined #general", time = "20:01",
+            authorId = "alice", isSystem = true,
+            systemEvents = listOf(ChatSystemEvent(ChatSystemEventKind.JOIN, "Alice joined #general", "20:01")),
+        )
+
+        val collapsed = collapseRepeatedSystemMessage(listOf(firstSystem), secondSystem)
+
+        assertEquals(1, collapsed.size)
+        assertEquals("1 user has joined, and 1 server notice", collapsed.single().text)
+        assertEquals(listOf("Room is unregistered", "Alice joined #general"), collapsed.single().systemEvents.map { it.text })
+    }
+
+    @Test
+    fun unrecognizedCommandErrorsStayStandaloneBetweenSystemGroups() {
+        val serverNotice = ChatMessage(
+            id = "notice", author = "System", text = "Room information", time = "20:00", isSystem = true,
+            systemEvents = listOf(ChatSystemEvent(ChatSystemEventKind.NOTICE, "Room information", "20:00")),
+        )
+        val commandError = ChatMessage(
+            id = "command-error", author = "System", text = "Unrecognized command: /foo", time = "20:01", isSystem = true,
+            systemEvents = listOf(ChatSystemEvent(ChatSystemEventKind.COMMAND_ERROR, "Unrecognized command: /foo", "20:01")),
+        )
+
+        val afterError = collapseRepeatedSystemMessage(listOf(serverNotice), commandError)
+        val afterNextNotice = collapseRepeatedSystemMessage(afterError, serverNotice.copy(id = "notice-2", time = "20:02"))
+
+        assertEquals(listOf(serverNotice, commandError, serverNotice.copy(id = "notice-2", time = "20:02")), afterNextNotice)
+    }
+
+    @Test
     fun legacyHeadersAndMessagesWithoutAuthorIdsRemainReadable() {
-        for (version in 1..6) {
+        for (version in 1..8) {
             val state = ChatStateCodec.decode(
                 "STARLING_CHAT_STATE_V$version\n" +
                     "P\tMA==\n" +
@@ -82,19 +124,32 @@ class ChatStateCodecTest {
     }
 
     @Test
+    fun versionEightSystemRepeatCountsMigrateToExpandableNotices() {
+        val oldRecord = listOf(
+            "R", "room", "message", "Hub", "Room is unregistered", "20:47",
+            "0", "0", "", "hub", "1", "3",
+        ).joinToString("\t") { value -> if (value == "R") value else Base64TextCodec.encode(value) }
+        val message = ChatStateCodec.decode("STARLING_CHAT_STATE_V8\n$oldRecord\n")
+            ?.roomMessages?.get("room")?.single()
+
+        assertEquals("3 server notices", message?.text)
+        assertEquals(3, message?.systemEvents?.size)
+    }
+
+    @Test
     fun unpaddedFieldsRemainReadableButInvalidCharactersAreRejected() {
-        assertEquals("abc", ChatStateCodec.decode("STARLING_CHAT_STATE_V7\nJ\tYWJj\n")?.localIdentityHash)
-        assertNull(ChatStateCodec.decode("STARLING_CHAT_STATE_V7\nJ\tYW!Jj\n")?.localIdentityHash)
+        assertEquals("abc", ChatStateCodec.decode("STARLING_CHAT_STATE_V9\nJ\tYWJj\n")?.localIdentityHash)
+        assertNull(ChatStateCodec.decode("STARLING_CHAT_STATE_V9\nJ\tYW!Jj\n")?.localIdentityHash)
     }
 
     @Test
     fun unknownHeadersAreRejectedAndUnknownOrIncompleteRecordsAreIgnored() {
         assertNull(ChatStateCodec.decode(""))
-        assertNull(ChatStateCodec.decode("STARLING_CHAT_STATE_V8\n"))
+        assertNull(ChatStateCodec.decode("STARLING_CHAT_STATE_V10\n"))
         assertNull(ChatStateCodec.decode("not a chat state"))
         assertEquals(
             PersistedChatState(),
-            ChatStateCodec.decode("STARLING_CHAT_STATE_V7\nUNKNOWN\tYWJj\nM\tYWJj\nR\tYWJj\n"),
+            ChatStateCodec.decode("STARLING_CHAT_STATE_V9\nUNKNOWN\tYWJj\nM\tYWJj\nR\tYWJj\n"),
         )
     }
 }

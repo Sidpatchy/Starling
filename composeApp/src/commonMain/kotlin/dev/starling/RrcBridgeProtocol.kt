@@ -52,17 +52,26 @@ fun parseRrcBridgeEvent(line: String): ParsedRrcBridgeEvent? {
             val name = fields.getOrNull(3)?.decodeBridgeBase64().orEmpty()
             val address = fields.getOrNull(4)?.decodeBridgeBase64().orEmpty()
             if (memberId.isBlank()) null else ParsedRrcBridgeEvent(
-                event = ReticulumEvent.MemberJoined(roomId, ChatMember(memberId, name.ifBlank { memberId.take(12) }, address = address.ifBlank { null })),
+                event = ReticulumEvent.MemberJoined(
+                    roomId = roomId,
+                    member = ChatMember(memberId, name.ifBlank { memberId.take(12) }, address = address.ifBlank { null }),
+                    timestampMillis = fields.getOrNull(5)?.toLongOrNull() ?: 0,
+                ),
             )
         }
         "MEMBER_LEFT" -> ParsedRrcBridgeEvent(
             event = ReticulumEvent.MemberLeft(
                 fields.getOrNull(1)?.decodeBridgeBase64().orEmpty(),
                 fields.getOrNull(2)?.decodeBridgeBase64().orEmpty(),
+                fields.getOrNull(3)?.toLongOrNull() ?: 0,
             ),
         )
         "ERROR" -> ParsedRrcBridgeEvent(
-            event = ReticulumEvent.Error(fields.getOrNull(1)?.decodeBridgeBase64().orEmpty().ifBlank { "RRC error" }),
+            event = ReticulumEvent.Error(
+                message = fields.getOrNull(1)?.decodeBridgeBase64().orEmpty().ifBlank { "RRC error" },
+                roomId = fields.getOrNull(2)?.decodeBridgeBase64()?.ifBlank { null },
+                timestampMillis = fields.getOrNull(3)?.toLongOrNull() ?: 0,
+            ),
         )
         "LXMF_ERROR" -> ParsedRrcBridgeEvent(
             event = ReticulumEvent.Error(fields.getOrNull(1)?.decodeBridgeBase64().orEmpty().ifBlank { "LXMF error" }),

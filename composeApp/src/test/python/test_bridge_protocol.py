@@ -2,6 +2,7 @@
 
 import json
 import os
+import queue
 import subprocess
 import sys
 import tempfile
@@ -10,9 +11,27 @@ from unittest.mock import Mock, patch
 
 import starling_bridge_protocol as protocol
 import starling_ios_runtime as ios_runtime
+import starling_rrc as rrc
 
 
 class BridgeProtocolTest(unittest.TestCase):
+    def test_rrc_roomless_notices_and_presence_events_keep_context(self):
+        with patch.object(rrc, "_events", queue.Queue()):
+            rrc._emit("message", message_id="id", room="", sender_id="hub", sender_name="Hub",
+                      body="Command response", timestamp=123, is_notice=True)
+            rrc._emit("member_joined", room="general", member_id="member", member_name="Moss",
+                      lxmf_address="address", timestamp=124)
+            rrc._emit("member_left", room="general", member_id="member", timestamp=125)
+            rrc._emit("error", message="not authorized", room="general", timestamp=126)
+
+            lines = rrc.poll_event_lines().splitlines()
+
+        self.assertEqual(lines[0].split("\t")[2], "")
+        self.assertEqual(lines[0].split("\t")[6:9], ["123", "0", "1"])
+        self.assertEqual(lines[1].split("\t")[-1], "124")
+        self.assertEqual(lines[2].split("\t")[-1], "125")
+        self.assertEqual(lines[3].split("\t")[-1], "126")
+
     def mixed_start_fields(self):
         return [
             "START", "EMBEDDED", protocol.encode(""), "4", "2", "1",

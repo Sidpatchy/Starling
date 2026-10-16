@@ -309,6 +309,7 @@ def _packet_received(data, packet):
                         member_id=member_id,
                         member_name=nickname,
                         lxmf_address=_lxmf_address_for_identity(member_id),
+                        timestamp=envelope.get(3, int(time.time() * 1000)),
                     )
             return
         if message_type == PARTED and isinstance(room, str):
@@ -323,17 +324,24 @@ def _packet_received(data, packet):
                 _emit("room_left", room=room)
             else:
                 for member_id in member_ids:
-                    _emit("member_left", room=room, member_id=member_id)
+                    _emit(
+                        "member_left",
+                        room=room,
+                        member_id=member_id,
+                        timestamp=envelope.get(3, int(time.time() * 1000)),
+                    )
             return
         if message_type == PING:
             _send(PONG, room=room, body=body)
             return
         if message_type == ERROR:
             message = body if isinstance(body, str) else "The RRC hub reported an error"
-            _emit("error", message=message, room=room or "")
+            _emit("error", message=message, room=room or "", timestamp=envelope.get(3, int(time.time() * 1000)))
             return
 
-        if message_type in (MSG, NOTICE, ACTION) and isinstance(room, str):
+        if message_type in (MSG, NOTICE, ACTION) and (
+            isinstance(room, str) or (message_type == NOTICE and room is None)
+        ):
             sender = envelope.get(4, b"")
             if isinstance(sender, bytes):
                 sender_id = sender.hex()
@@ -351,7 +359,7 @@ def _packet_received(data, packet):
             _emit(
                 "message",
                 message_id=envelope.get(2, b"").hex() if isinstance(envelope.get(2), bytes) else "",
-                room=room,
+                room=room or "",
                 sender_id=sender_id,
                 sender_name=nickname,
                 body=text,
@@ -576,16 +584,18 @@ def poll_event_lines(limit=100):
             members = ";".join("{}={}".format(member_id, address) for member_id, address in event.get("member_ids", []))
             lines.append("MEMBERS\t{}\t{}".format(_b64(event.get("room", "")), members))
         elif kind == "member_joined":
-            lines.append("MEMBER_JOINED\t{}\t{}\t{}\t{}".format(
+            lines.append("MEMBER_JOINED\t{}\t{}\t{}\t{}\t{}".format(
                 _b64(event.get("room", "")),
                 _b64(event.get("member_id", "")),
                 _b64(event.get("member_name", "")),
                 _b64(event.get("lxmf_address", "")),
+                int(event.get("timestamp", 0)),
             ))
         elif kind == "member_left":
-            lines.append("MEMBER_LEFT\t{}\t{}".format(
+            lines.append("MEMBER_LEFT\t{}\t{}\t{}".format(
                 _b64(event.get("room", "")),
                 _b64(event.get("member_id", "")),
+                int(event.get("timestamp", 0)),
             ))
         elif kind == "message":
             lines.append("MESSAGE\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}".format(
@@ -601,7 +611,11 @@ def poll_event_lines(limit=100):
                 _b64(event.get("sender_lxmf_address", "")),
             ))
         elif kind == "error":
-            lines.append("ERROR\t{}\t{}".format(_b64(event.get("message", "")), _b64(event.get("room", ""))))
+            lines.append("ERROR\t{}\t{}\t{}".format(
+                _b64(event.get("message", "")),
+                _b64(event.get("room", "")),
+                int(event.get("timestamp", 0)),
+            ))
     return "\n".join(lines)
 
 

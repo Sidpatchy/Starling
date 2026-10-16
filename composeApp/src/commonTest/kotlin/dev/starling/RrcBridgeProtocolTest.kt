@@ -72,6 +72,42 @@ class RrcBridgeProtocolTest {
     }
 
     @Test
+    fun noticesKeepTheirSystemFlagAndMayBeDeliveredWithoutARoom() {
+        val line = listOf(
+            "MESSAGE", encodeBridgeBase64("notice-1"), "", encodeBridgeBase64("hub"),
+            encodeBridgeBase64("RRC Hub"), encodeBridgeBase64("Room is unregistered"),
+            "123456", "0", "1", "0", "",
+        ).joinToString("\t")
+
+        assertEquals(
+            RrcRoomMessage(
+                id = "notice-1",
+                roomId = "",
+                senderId = "hub",
+                senderName = "RRC Hub",
+                body = "Room is unregistered",
+                timestampMillis = 123456,
+                isNotice = true,
+            ),
+            (parseRrcBridgeEvent(line)?.event as ReticulumEvent.RoomMessageReceived).message,
+        )
+    }
+
+    @Test
+    fun membershipAndCommandErrorsPreserveRoomAndTimestamp() {
+        assertEquals(
+            ReticulumEvent.MemberJoined("general", ChatMember("member", "Moss"), 123456),
+            parseRrcBridgeEvent(
+                "MEMBER_JOINED\t${encodeBridgeBase64("general")}\t${encodeBridgeBase64("member")}\t${encodeBridgeBase64("Moss")}\t\t123456",
+            )?.event,
+        )
+        assertEquals(
+            ReticulumEvent.Error("not authorized", "general", 123456),
+            parseRrcBridgeEvent("ERROR\t${encodeBridgeBase64("not authorized")}\t${encodeBridgeBase64("general")}\t123456")?.event,
+        )
+    }
+
+    @Test
     fun directMessagesPreserveDeliveryStateAndInvalidTimestampsFallBackToZero() {
         val fields = listOf("DIRECT_MESSAGE", "bWVzc2FnZQ==", "YWRkcmVzcw==", "TW9zcw==", "aGVsbG8=", "invalid")
 

@@ -200,13 +200,25 @@ sealed interface ReticulumEvent {
     data class RoomsChanged(val rooms: List<RrcRoom>) : ReticulumEvent
     data class RoomJoined(val roomId: String) : ReticulumEvent
     data class RoomLeft(val roomId: String) : ReticulumEvent
-    data class MemberJoined(val roomId: String, val member: ChatMember) : ReticulumEvent
-    data class MemberLeft(val roomId: String, val memberId: String) : ReticulumEvent
+    data class MemberJoined(
+        val roomId: String,
+        val member: ChatMember,
+        val timestampMillis: Long = 0,
+    ) : ReticulumEvent
+    data class MemberLeft(
+        val roomId: String,
+        val memberId: String,
+        val timestampMillis: Long = 0,
+    ) : ReticulumEvent
     data class RoomMessageReceived(val message: RrcRoomMessage) : ReticulumEvent
     data class DirectMessage(val message: LxmfDirectMessage) : ReticulumEvent
     data class DeliveryStatus(val messageId: String, val address: String, val state: String) : ReticulumEvent
     data class MembersChanged(val roomId: String, val members: List<ChatMember>) : ReticulumEvent
-    data class Error(val message: String) : ReticulumEvent
+    data class Error(
+        val message: String,
+        val roomId: String? = null,
+        val timestampMillis: Long = 0,
+    ) : ReticulumEvent
 }
 
 /**

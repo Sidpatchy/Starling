@@ -27,10 +27,13 @@ import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -42,29 +45,30 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DrawerValue
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.RadioButton
-import androidx.compose.material3.Switch
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardReturn
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.ChevronLeft
+import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.ErrorOutline
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.KeyboardHide
+import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -72,9 +76,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.saveable.listSaver
-import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -83,7 +86,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.preferredFrameRate
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.ui.layout.FirstBaseline
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.AnnotatedString
@@ -91,59 +93,30 @@ import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.font.FontStyle
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.isSecondaryPressed
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeoutOrNull
 
-private data class StarlingPalette(
-    val ink: Color,
-    val canvas: Color,
-    val paper: Color,
-    val muted: Color,
-    val line: Color,
-    val accent: Color,
-    val paleAccent: Color,
-)
-
-private enum class ThemePreference(val label: String) {
-    SYSTEM("System"),
-    LIGHT("Light"),
-    DARK("Dark"),
-}
-
-private val LightPalette = StarlingPalette(
-    ink = Color(0xFF383A42), canvas = Color(0xFFFAFAFA), paper = Color.White,
-    muted = Color(0xFFA0A1A7), line = Color(0xFFE5E5E6), accent = Color(0xFF7056C5),
-    paleAccent = Color(0xFFEFEBFA),
-)
-private val DarkPalette = StarlingPalette(
-    ink = Color(0xFFABB2BF), canvas = Color(0xFF282C34), paper = Color(0xFF21252B),
-    muted = Color(0xFF7F848E), line = Color(0xFF3E4451), accent = Color(0xFFB4A0F5),
-    paleAccent = Color(0xFF393248),
-)
-private val LocalStarlingPalette = staticCompositionLocalOf { LightPalette }
-
-private val Ink: Color @Composable get() = LocalStarlingPalette.current.ink
-private val Canvas: Color @Composable get() = LocalStarlingPalette.current.canvas
-private val Paper: Color @Composable get() = LocalStarlingPalette.current.paper
-private val Muted: Color @Composable get() = LocalStarlingPalette.current.muted
-private val Line: Color @Composable get() = LocalStarlingPalette.current.line
-private val Accent: Color @Composable get() = LocalStarlingPalette.current.accent
-private val PaleAccent: Color @Composable get() = LocalStarlingPalette.current.paleAccent
 private val EMPTY_CHAT_ROOM = ChatRoom("empty", "", "", "", 0)
 private val SidebarEdgeInset = 12.dp
 private val SidebarActionSize = 30.dp
@@ -236,6 +209,9 @@ fun StarlingApp(
     var showMembersDrawer by rememberSaveable { mutableStateOf(false) }
     var showDesktopNavigation by rememberSaveable { mutableStateOf(true) }
     var showSettings by rememberSaveable { mutableStateOf(false) }
+    var settingsSection by rememberSaveable { mutableStateOf(SettingsSection.APPEARANCE) }
+    var showSettingsIndex by rememberSaveable { mutableStateOf(true) }
+    var returnToSettingsAfterIdentity by rememberSaveable { mutableStateOf(false) }
     var showIdentityPage by rememberSaveable { mutableStateOf(false) }
     var showContactRequests by rememberSaveable { mutableStateOf(false) }
     var showAddContact by rememberSaveable { mutableStateOf(false) }
@@ -249,6 +225,31 @@ fun StarlingApp(
     var roomToManage by remember { mutableStateOf<ChatRoom?>(null) }
     var networkToInspect by remember { mutableStateOf<ChatNetwork?>(null) }
     var autoConnectAttempted by remember(liveChatRepository) { mutableStateOf(false) }
+    val hasBackDestination = showAddContact || showAddNetwork || addChannelToNetworkId != null ||
+        roomToManage != null || networkToInspect != null || selectedMember != null || showMembersDrawer ||
+        showContactRequests || showIdentityPage || showSettings || selectedDirectMessageId != null
+    PlatformBackHandler(enabled = hasBackDestination) {
+        when {
+            selectedMember != null -> selectedMember = null
+            roomToManage != null -> roomToManage = null
+            addChannelToNetworkId != null -> addChannelToNetworkId = null
+            showAddNetwork -> showAddNetwork = false
+            showAddContact -> showAddContact = false
+            networkToInspect != null -> networkToInspect = null
+            showMembersDrawer -> showMembersDrawer = false
+            showContactRequests -> showContactRequests = false
+            showIdentityPage -> {
+                showIdentityPage = false
+                if (returnToSettingsAfterIdentity) {
+                    showSettings = true
+                }
+                returnToSettingsAfterIdentity = false
+            }
+            showSettings && !showSettingsIndex -> showSettingsIndex = true
+            showSettings -> showSettings = false
+            selectedDirectMessageId != null -> selectedDirectMessageId = null
+        }
+    }
     val changePreviewMode: (Boolean) -> Unit = { enabled ->
         if (enabled) {
             selectedDirectMessageId = null
@@ -342,38 +343,7 @@ fun StarlingApp(
         selectedDirectMessageId?.let(repository::directMessages) ?: flowOf(emptyList())
     }.collectAsState(initial = emptyList())
 
-    val useDarkPalette = when (themePreference) {
-        ThemePreference.SYSTEM -> isSystemInDarkTheme()
-        ThemePreference.LIGHT -> false
-        ThemePreference.DARK -> true
-    }
-    val palette = when (themePreference) {
-        ThemePreference.LIGHT -> LightPalette
-        ThemePreference.DARK -> DarkPalette
-        ThemePreference.SYSTEM -> if (useDarkPalette) DarkPalette else LightPalette
-    }
-    val materialColors = if (useDarkPalette) {
-        darkColorScheme(
-            primary = palette.accent,
-            onPrimary = palette.canvas,
-            background = palette.canvas,
-            onBackground = palette.ink,
-            surface = palette.paper,
-            onSurface = palette.ink,
-        )
-    } else {
-        lightColorScheme(
-            primary = palette.accent,
-            onPrimary = Color.White,
-            background = palette.canvas,
-            onBackground = palette.ink,
-            surface = palette.paper,
-            onSurface = palette.ink,
-        )
-    }
-
-    MaterialTheme(colorScheme = materialColors) {
-        CompositionLocalProvider(LocalStarlingPalette provides palette) {
+    StarlingTheme(themePreference) {
         Surface(modifier = Modifier.fillMaxSize(), color = Canvas) {
             BoxWithConstraints(Modifier.fillMaxSize().safeDrawingPadding().imePadding()) {
                 val isWide = maxWidth >= 1000.dp
@@ -406,16 +376,29 @@ fun StarlingApp(
                             onNetworkDetails = { networkToInspect = it },
                             canHideNavigation = true,
                             onHideNavigation = { showDesktopNavigation = false },
-                            onSettingsClick = { showSettings = true; showIdentityPage = false },
+                            onSettingsClick = {
+                                showSettings = true
+                                showSettingsIndex = true
+                                showIdentityPage = false
+                                returnToSettingsAfterIdentity = false
+                            },
                             onIdentityClick = {
                                 showIdentityPage = true
                                 showSettings = false
+                                returnToSettingsAfterIdentity = false
                                 showContactRequests = false
                                 selectedDirectMessageId = null
                             },
                         )
                         if (showSettings) {
                             SettingsPage(
+                                selectedSection = settingsSection,
+                                onSectionSelected = { section ->
+                                    settingsSection = section
+                                    showSettingsIndex = false
+                                },
+                                showSectionIndex = showSettingsIndex,
+                                onShowSectionIndex = { showSettingsIndex = true },
                                 themePreference = themePreference,
                                 onThemeChange = { themePreference = it },
                                 bubbleStyle = bubbleStyle,
@@ -434,7 +417,11 @@ fun StarlingApp(
                                 nodeSupported = nodeController.isSupported,
                                 identityAvailable = managedIdentity != null,
                                 identityBusy = identityBusy,
-                                onManageIdentity = { showSettings = false; showIdentityPage = true },
+                                onManageIdentity = {
+                                    returnToSettingsAfterIdentity = true
+                                    showSettings = false
+                                    showIdentityPage = true
+                                },
                                 supportsReticulumProtocol = nodeController.supportsReticulumProtocol,
                                 supportsRNodeInterfaces = nodeController.supportsRNodeInterfaces,
                                 rrcState = visibleConnectionState,
@@ -451,7 +438,7 @@ fun StarlingApp(
                                 },
                                 onConnectHub = { config -> scope.launch { liveChatRepository?.connectToHub(config) } },
                                 onDisconnectHub = { scope.launch { liveChatRepository?.disconnectFromHub() } },
-                                onBack = { showSettings = false },
+                                onBack = { showSettings = false; showSettingsIndex = true },
                             )
                         } else if (showContactRequests) {
                             ContactRequestsPage(
@@ -485,7 +472,21 @@ fun StarlingApp(
                                 onNetworkNicknameChange = { id, nickname -> repository.updateNetworkNickname(id, nickname) },
                                 showNavigationButton = !showDesktopNavigation,
                                 onOpenNavigation = { showDesktopNavigation = true },
-                                onManageNetwork = { showIdentityPage = false; showSettings = true },
+                                showBackButton = returnToSettingsAfterIdentity,
+                                onBack = {
+                                    showIdentityPage = false
+                                    if (returnToSettingsAfterIdentity) {
+                                        showSettings = true
+                                    }
+                                    returnToSettingsAfterIdentity = false
+                                },
+                                onManageNetwork = {
+                                    showIdentityPage = false
+                                    settingsSection = SettingsSection.NETWORK
+                                    showSettingsIndex = false
+                                    returnToSettingsAfterIdentity = false
+                                    showSettings = true
+                                },
                             )
                         } else if (selectedDirectMessage != null) {
                             DirectMessageContent(
@@ -502,7 +503,10 @@ fun StarlingApp(
                             )
                         } else if (rooms.isEmpty()) {
                             Box(Modifier.weight(1f).fillMaxHeight()) {
-                                EmptyNetworkContent(onAddNetwork = { showAddNetwork = true }, onSettings = { showSettings = true })
+                                EmptyNetworkContent(
+                                    onAddNetwork = { showAddNetwork = true },
+                                    onSettings = { showSettings = true; showSettingsIndex = true },
+                                )
                                 if (!showDesktopNavigation) {
                                     NavigationToggle(Modifier.align(Alignment.TopStart)) { showDesktopNavigation = true }
                                 }
@@ -520,6 +524,7 @@ fun StarlingApp(
                                 compact = false,
                                 membersVisible = showMembersPanel,
                                 isLive = visibleConnectionState is ReticulumConnectionState.Connected && visibleHubNetworkId == selectedRoom.networkId,
+                                error = visibleConnectionError,
                                 onToggleMembers = { showMembersPanel = !showMembersPanel },
                                 showNavigationButton = !showDesktopNavigation,
                                 onOpenNavigation = { showDesktopNavigation = true },
@@ -590,13 +595,16 @@ fun StarlingApp(
                                     },
                                     onSettingsClick = {
                                         showSettings = true
+                                        showSettingsIndex = true
                                         showIdentityPage = false
+                                        returnToSettingsAfterIdentity = false
                                         showMembersDrawer = false
                                         scope.launch { drawerState.close() }
                                     },
                                     onIdentityClick = {
                                         showIdentityPage = true
                                         showSettings = false
+                                        returnToSettingsAfterIdentity = false
                                         showContactRequests = false
                                         selectedDirectMessageId = null
                                         scope.launch { drawerState.close() }
@@ -607,6 +615,13 @@ fun StarlingApp(
                     ) {
                         if (showSettings) {
                             SettingsPage(
+                                selectedSection = settingsSection,
+                                onSectionSelected = { section ->
+                                    settingsSection = section
+                                    showSettingsIndex = false
+                                },
+                                showSectionIndex = showSettingsIndex,
+                                onShowSectionIndex = { showSettingsIndex = true },
                                 themePreference = themePreference,
                                 onThemeChange = { themePreference = it },
                                 bubbleStyle = bubbleStyle,
@@ -625,7 +640,12 @@ fun StarlingApp(
                                 nodeSupported = nodeController.isSupported,
                                 identityAvailable = managedIdentity != null,
                                 identityBusy = identityBusy,
-                                onManageIdentity = { showSettings = false; showIdentityPage = true },
+                                onManageIdentity = {
+                                    returnToSettingsAfterIdentity = true
+                                    showSettings = false
+                                    showIdentityPage = true
+                                    scope.launch { drawerState.close() }
+                                },
                                 supportsReticulumProtocol = nodeController.supportsReticulumProtocol,
                                 supportsRNodeInterfaces = nodeController.supportsRNodeInterfaces,
                                 rrcState = visibleConnectionState,
@@ -640,7 +660,7 @@ fun StarlingApp(
                                 },
                                 onConnectHub = { config -> scope.launch { liveChatRepository?.connectToHub(config) } },
                                 onDisconnectHub = { scope.launch { liveChatRepository?.disconnectFromHub() } },
-                                onBack = { showSettings = false },
+                                onBack = { showSettings = false; showSettingsIndex = true },
                             )
                         } else if (showContactRequests) {
                             ContactRequestsPage(
@@ -674,7 +694,21 @@ fun StarlingApp(
                                 onNetworkNicknameChange = { id, nickname -> repository.updateNetworkNickname(id, nickname) },
                                 compact = true,
                                 onOpenNavigation = { scope.launch { drawerState.open() } },
-                                onManageNetwork = { showIdentityPage = false; showSettings = true },
+                                showBackButton = returnToSettingsAfterIdentity,
+                                onBack = {
+                                    showIdentityPage = false
+                                    if (returnToSettingsAfterIdentity) {
+                                        showSettings = true
+                                    }
+                                    returnToSettingsAfterIdentity = false
+                                },
+                                onManageNetwork = {
+                                    showIdentityPage = false
+                                    settingsSection = SettingsSection.NETWORK
+                                    showSettingsIndex = false
+                                    returnToSettingsAfterIdentity = false
+                                    showSettings = true
+                                },
                             )
                         } else if (selectedDirectMessage != null) {
                             DirectMessageContent(
@@ -692,7 +726,7 @@ fun StarlingApp(
                         } else if (rooms.isEmpty()) {
                             EmptyNetworkContent(
                                 onAddNetwork = { showAddNetwork = true },
-                                onSettings = { showSettings = true },
+                                onSettings = { showSettings = true; showSettingsIndex = true },
                                 modifier = Modifier.fillMaxSize(),
                             )
                         } else Box(Modifier.fillMaxSize()) {
@@ -707,6 +741,7 @@ fun StarlingApp(
                                 compact = true,
                                 membersVisible = false,
                                 isLive = visibleConnectionState is ReticulumConnectionState.Connected && visibleHubNetworkId == selectedRoom.networkId,
+                                error = visibleConnectionError,
                                 onToggleMembers = { showMembersDrawer = true },
                                 onOpenNavigation = { scope.launch { drawerState.open() } },
                                 onMemberClick = { selectedMember = it },
@@ -836,7 +871,6 @@ fun StarlingApp(
             }
         }
     }
-    }
 }
 
 @Composable
@@ -852,12 +886,21 @@ private fun ChatContent(
     compact: Boolean,
     membersVisible: Boolean,
     isLive: Boolean = false,
+    error: String? = null,
     onToggleMembers: () -> Unit,
     showNavigationButton: Boolean = false,
     onOpenNavigation: () -> Unit = {},
     onMemberClick: (ChatMember) -> Unit,
     onSend: (String) -> Unit,
 ) {
+    var systemExpansionScrollRequest by remember { mutableStateOf(0) }
+    val listState = rememberLazyListState()
+    LaunchedEffect(systemExpansionScrollRequest) {
+        if (systemExpansionScrollRequest > 0) {
+            withFrameNanos { }
+            listState.animateScrollToItem(messages.size)
+        }
+    }
     Column(modifier.fillMaxSize()) {
         ChatHeader(
             room = room,
@@ -870,8 +913,15 @@ private fun ChatContent(
             onToggleMembers = onToggleMembers,
         )
         if (isLive) LiveNotice("Connected to an RRC hub. Messages are live and are not stored by RRC.") else PreviewNotice()
+        error?.let {
+            Text(
+                it,
+                modifier = Modifier.fillMaxWidth().background(Color(0x22C44545)).padding(horizontal = 18.dp, vertical = 8.dp),
+                color = Color(0xFFC44545),
+                fontSize = 11.sp,
+            )
+        }
 
-        val listState = rememberLazyListState()
         LaunchedEffect(room.id, messages.size) {
             if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size)
         }
@@ -895,6 +945,9 @@ private fun ChatContent(
                     bubbleStyle = bubbleStyle,
                     denseMessages = denseMessages,
                     onMemberClick = { author?.let(onMemberClick) },
+                    onSystemExpansion = {
+                        if (!listState.canScrollForward) systemExpansionScrollRequest++
+                    },
                 )
             }
         }
@@ -917,6 +970,14 @@ private fun DirectMessageContent(
     onMemberClick: () -> Unit,
     onSend: (String) -> Unit,
 ) {
+    var systemExpansionScrollRequest by remember { mutableStateOf(0) }
+    val listState = rememberLazyListState()
+    LaunchedEffect(systemExpansionScrollRequest) {
+        if (systemExpansionScrollRequest > 0 && messages.isNotEmpty()) {
+            withFrameNanos { }
+            listState.animateScrollToItem(messages.size)
+        }
+    }
     Column(Modifier.fillMaxSize().background(Canvas)) {
         Row(
             modifier = Modifier.fillMaxWidth().height(68.dp).background(Paper)
@@ -924,10 +985,7 @@ private fun DirectMessageContent(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (compact || showNavigationButton) {
-                Box(
-                    Modifier.size(42.dp).clip(RoundedCornerShape(10.dp)).clickable(onClick = onOpenNavigation),
-                    contentAlignment = Alignment.Center,
-                ) { Text("☰", color = Accent, fontSize = 20.sp) }
+                NavigationToggle(onClick = onOpenNavigation)
                 Spacer(Modifier.width(6.dp))
             }
             MemberAvatar(member, size = 34.dp)
@@ -956,7 +1014,6 @@ private fun DirectMessageContent(
                 }
             }
         } else {
-            val listState = rememberLazyListState()
             LaunchedEffect(messages.size) {
                 listState.animateScrollToItem(messages.size)
             }
@@ -979,11 +1036,14 @@ private fun DirectMessageContent(
                         bubbleStyle = bubbleStyle,
                         denseMessages = denseMessages,
                         onMemberClick = onMemberClick,
+                        onSystemExpansion = {
+                            if (!listState.canScrollForward) systemExpansionScrollRequest++
+                        },
                     )
                 }
             }
         }
-        MessageComposer(onSend = onSend)
+        MessageComposer(onSend = onSend, supportsSlashCommands = false)
     }
 }
 
@@ -1004,10 +1064,7 @@ private fun ContactRequestsPage(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (compact || showNavigationButton) {
-                Box(
-                    Modifier.size(42.dp).clip(RoundedCornerShape(10.dp)).clickable(onClick = onOpenNavigation),
-                    contentAlignment = Alignment.Center,
-                ) { Text("☰", color = Accent, fontSize = 20.sp) }
+                NavigationToggle(onClick = onOpenNavigation)
                 Spacer(Modifier.width(6.dp))
             }
             Text("Message requests", color = Ink, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
@@ -1142,12 +1199,9 @@ private fun AddNetworkDialog(previewMode: Boolean, onAdd: (String, String) -> Un
 }
 
 @Composable
-private fun NavigationToggle(modifier: Modifier = Modifier, onClick: () -> Unit) {
-    Box(
-        modifier.size(42.dp).clip(RoundedCornerShape(10.dp)).clickable(onClick = onClick),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text("☰", color = Accent, fontSize = 20.sp, fontWeight = FontWeight.Medium)
+internal fun NavigationToggle(modifier: Modifier = Modifier, onClick: () -> Unit) {
+    IconButton(onClick = onClick, modifier = modifier.size(42.dp)) {
+        Icon(Icons.Filled.Menu, contentDescription = "Open navigation", tint = Accent)
     }
 }
 
@@ -1257,309 +1311,6 @@ private fun ManageChannelDialog(
 }
 
 @Composable
-private fun IdentityPage(
-    previewMode: Boolean,
-    nodeState: ReticulumNodeState,
-    rrcState: ReticulumConnectionState,
-    identityHash: String?,
-    localDeliveryAddress: String?,
-    identityState: ReticulumIdentityState,
-    identityBusy: Boolean,
-    identityError: String?,
-    identityNotice: String?,
-    identitySupported: Boolean,
-    onCreateIdentity: () -> Unit,
-    onImportIdentity: () -> Unit,
-    onExportIdentity: () -> Unit,
-    onDeleteIdentity: () -> Unit,
-    onDisconnectNode: () -> Unit,
-    globalNickname: String,
-    networks: List<ChatNetwork>,
-    onGlobalNicknameChange: (String) -> Unit,
-    onNetworkNicknameChange: (String, String?) -> Unit,
-    compact: Boolean = false,
-    showNavigationButton: Boolean = false,
-    onOpenNavigation: () -> Unit = {},
-    onManageNetwork: () -> Unit,
-) {
-    var globalNicknameDraft by rememberSaveable { mutableStateOf(globalNickname) }
-    LaunchedEffect(globalNickname) { globalNicknameDraft = globalNickname }
-    var identityConfirmation by remember { mutableStateOf<String?>(null) }
-    val identityAvailable = identityState is ReticulumIdentityState.Available
-    val identityMutable = identitySupported && !identityBusy && nodeState == ReticulumNodeState.Stopped
-    val identityActionHeight = 56.dp
-
-    Column(Modifier.fillMaxSize().background(Canvas)) {
-        Row(
-            modifier = Modifier.fillMaxWidth().height(68.dp).background(Paper)
-                .padding(horizontal = if (compact) 8.dp else 20.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            if (compact || showNavigationButton) {
-                NavigationToggle(onClick = onOpenNavigation)
-                Spacer(Modifier.width(6.dp))
-            }
-            Text("Identity", color = Ink, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
-        }
-        Column(
-            modifier = Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState())
-                .preferredFrameRate(120f).padding(horizontal = 24.dp, vertical = 26.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
-        ) {
-            Text("DEVICE IDENTITY", color = Muted, fontSize = 10.sp, letterSpacing = 1.3.sp, fontWeight = FontWeight.Bold)
-            Column(
-                modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Paper)
-                    .border(1.dp, Line, RoundedCornerShape(14.dp)).padding(18.dp),
-                verticalArrangement = Arrangement.spacedBy(9.dp),
-            ) {
-                Text("Reticulum identity", color = Ink, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-                if (previewMode) {
-                    Text(
-                        "Live identity details are hidden while isolated preview is active.",
-                        color = Muted,
-                        fontSize = 12.sp,
-                        lineHeight = 18.sp,
-                    )
-                } else {
-                    Text("IDENTITY HASH", color = Muted, fontSize = 9.sp, letterSpacing = 1.sp, fontWeight = FontWeight.Bold)
-                    if (identityHash.isNullOrBlank()) {
-                        Text(
-                            when (identityState) {
-                                ReticulumIdentityState.Loading -> "Checking for a saved identity…"
-                                is ReticulumIdentityState.Failed -> identityState.message
-                                else -> "No identity is configured. Create one or import an existing Reticulum identity."
-                            },
-                            color = Muted, fontSize = 12.sp,
-                        )
-                    } else {
-                        SelectionContainer {
-                            Text(identityHash, color = Accent, fontSize = 13.sp, fontFamily = FontFamily.Monospace)
-                        }
-                        Text(
-                            "This is your public identity hash. The private key stays in app-private storage unless you explicitly export a backup; it is never displayed here.",
-                            color = Muted,
-                            fontSize = 11.sp,
-                            lineHeight = 16.sp,
-                        )
-                    }
-                    Spacer(Modifier.height(4.dp))
-                    Text("LXMF DELIVERY ADDRESS", color = Muted, fontSize = 9.sp, letterSpacing = 1.sp, fontWeight = FontWeight.Bold)
-                    if (localDeliveryAddress.isNullOrBlank()) {
-                        Text("Available after creating or importing an identity.", color = Muted, fontSize = 12.sp)
-                    } else {
-                        SelectionContainer {
-                            Text("lxmf://$localDeliveryAddress", color = Accent, fontSize = 13.sp, fontFamily = FontFamily.Monospace)
-                        }
-                    }
-                    if (identitySupported) {
-                        Spacer(Modifier.height(6.dp))
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(
-                                onClick = onCreateIdentity,
-                                modifier = Modifier.weight(1f).height(identityActionHeight),
-                                enabled = identityMutable && identityState == ReticulumIdentityState.Missing,
-                                colors = ButtonDefaults.buttonColors(containerColor = Accent),
-                            ) { Text("Create identity", textAlign = TextAlign.Center) }
-                            OutlinedButton(
-                                onClick = { identityConfirmation = "import" },
-                                modifier = Modifier.weight(1f).height(identityActionHeight),
-                                enabled = identityMutable,
-                            ) { Text("Import", textAlign = TextAlign.Center) }
-                        }
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            OutlinedButton(
-                                onClick = { identityConfirmation = "export" },
-                                modifier = Modifier.weight(1f).height(identityActionHeight),
-                                enabled = !identityBusy && identityAvailable,
-                            ) { Text("Export backup", textAlign = TextAlign.Center) }
-                            OutlinedButton(
-                                onClick = { identityConfirmation = "delete" },
-                                modifier = Modifier.weight(1f).height(identityActionHeight),
-                                enabled = identityMutable && identityState != ReticulumIdentityState.Missing && identityState != ReticulumIdentityState.Loading,
-                                colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFC44545)),
-                            ) { Text("Delete identity", textAlign = TextAlign.Center) }
-                        }
-                        if (nodeState != ReticulumNodeState.Stopped) {
-                            Text("Disconnect the node before creating, importing, or deleting an identity.", color = Muted, fontSize = 11.sp)
-                            TextButton(onClick = onDisconnectNode, enabled = !identityBusy) { Text("Disconnect node") }
-                        }
-                        if (identityBusy) Text("Identity operation in progress…", color = Muted, fontSize = 11.sp)
-                        identityError?.let { Text(it, color = Color(0xFFC44545), fontSize = 12.sp) }
-                        identityNotice?.let { Text(it, color = Muted, fontSize = 12.sp) }
-                        Text(
-                            "Identity backups are standard, unencrypted Reticulum private-key files. Anyone with a copy can use your identity. No identity is created automatically.",
-                            color = Muted, fontSize = 11.sp, lineHeight = 16.sp,
-                        )
-                    }
-                }
-            }
-
-            Text("NICKNAMES", color = Muted, fontSize = 10.sp, letterSpacing = 1.3.sp, fontWeight = FontWeight.Bold)
-            Column(
-                modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Paper)
-                    .border(1.dp, Line, RoundedCornerShape(14.dp)).padding(18.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                Text("Global nickname", color = Ink, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-                Text(
-                    "Used for your LXMF identity in direct messages and as the default nickname for RRC hubs.",
-                    color = Muted,
-                    fontSize = 12.sp,
-                    lineHeight = 18.sp,
-                )
-                OutlinedTextField(
-                    value = globalNicknameDraft,
-                    onValueChange = { globalNicknameDraft = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text("Global nickname") },
-                    singleLine = true,
-                )
-                Button(
-                    enabled = globalNicknameDraft != globalNickname,
-                    onClick = { onGlobalNicknameChange(normalizeStarlingNickname(globalNicknameDraft)) },
-                    colors = ButtonDefaults.buttonColors(containerColor = Accent),
-                ) {
-                    Text("Save global nickname")
-                }
-                if (previewMode) {
-                    Text(
-                        "This preference is saved locally and applied when Local preview is turned off. Live hub nicknames are hidden in preview.",
-                        color = Muted,
-                        fontSize = 11.sp,
-                        lineHeight = 16.sp,
-                    )
-                } else {
-                    val configuredHubs = networks.filterNot { it.isPreview }
-                    Text("RRC hub nicknames", color = Ink, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-                    Text(
-                        "Set an override for a specific hub. Leave it blank to use the global nickname. Changing an active hub's nickname reconnects it and rejoins your channels.",
-                        color = Muted,
-                        fontSize = 11.sp,
-                        lineHeight = 16.sp,
-                    )
-                    if (configuredHubs.isEmpty()) {
-                        Text("Add an RRC hub in Network settings to configure a hub-specific nickname.", color = Muted, fontSize = 11.sp)
-                    } else {
-                        configuredHubs.forEach { network ->
-                            HubNicknameEditor(
-                                network = network,
-                                globalNickname = globalNickname,
-                                onSave = { onNetworkNicknameChange(network.id, it) },
-                            )
-                        }
-                    }
-                }
-            }
-
-            Text("CONNECTION STATUS", color = Muted, fontSize = 10.sp, letterSpacing = 1.3.sp, fontWeight = FontWeight.Bold)
-            Column(
-                modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Paper)
-                    .border(1.dp, Line, RoundedCornerShape(14.dp)).padding(18.dp),
-                verticalArrangement = Arrangement.spacedBy(9.dp),
-            ) {
-                Text("Reticulum node", color = Ink, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-                Text(if (previewMode) "Stopped in isolated preview" else reticulumNodeSummary(nodeState), color = Muted, fontSize = 12.sp, lineHeight = 18.sp)
-                Text("RRC hub", color = Ink, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-                Text(if (previewMode) "Live hub status is hidden in preview" else rrcConnectionSummary(rrcState), color = Muted, fontSize = 12.sp, lineHeight = 18.sp)
-            }
-
-            Text(
-                "Manage identity keys here. Node interfaces and hub selection are managed in Network settings.",
-                color = Muted,
-                fontSize = 12.sp,
-                lineHeight = 18.sp,
-            )
-            Button(onClick = onManageNetwork, colors = ButtonDefaults.buttonColors(containerColor = Accent)) {
-                Text("Network settings")
-            }
-        }
-    }
-    identityConfirmation?.let { action ->
-        AlertDialog(
-            onDismissRequest = { identityConfirmation = null },
-            title = { Text(when (action) { "delete" -> "Delete identity?"; "export" -> "Export private identity?"; else -> "Import identity?" }) },
-            text = {
-                Text(when (action) {
-                    "delete" -> "This removes the private identity from this app. Without a backup it cannot be recovered. Contacts and chat history are kept, and existing backups remain usable."
-                    "export" -> "The exported file contains your unencrypted private keys. Anyone with it can impersonate you. Save it somewhere secure, not in a public or shared folder."
-                    else -> "Choose a standard Reticulum private identity file. This replaces any identity currently saved in this app and changes your delivery address. Export the current identity first if you need a backup."
-                })
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    identityConfirmation = null
-                    when (action) { "delete" -> onDeleteIdentity(); "export" -> onExportIdentity(); else -> onImportIdentity() }
-                }, enabled = !identityBusy) { Text(when (action) { "delete" -> "Delete"; "export" -> "Export"; else -> "Choose file" }) }
-            },
-            dismissButton = { TextButton(onClick = { identityConfirmation = null }) { Text("Cancel") } },
-        )
-    }
-}
-
-private fun reticulumNodeSummary(state: ReticulumNodeState): String = when (state) {
-    ReticulumNodeState.Stopped -> "Stopped."
-    is ReticulumNodeState.Starting -> "Starting the ${state.mode.name.lowercase().replace('_', ' ')} node…"
-    is ReticulumNodeState.PreparingRuntime -> state.detail
-    is ReticulumNodeState.Failed -> state.message
-    is ReticulumNodeState.Unavailable -> state.reason
-    is ReticulumNodeState.Running -> when {
-        state.sharedInstanceConnected -> "Attached to the existing local RNS shared instance."
-        else -> {
-            val online = state.onlineTcpPeerIds.size + state.onlineRNodePorts.size
-            val total = state.tcpPeers.size + state.rnodeInterfaces.size
-            if (total == 0) "Running without a configured interface."
-            else "$online of $total configured interfaces online."
-        }
-    }
-}
-
-private fun rrcConnectionSummary(state: ReticulumConnectionState): String = when (state) {
-    ReticulumConnectionState.Disconnected -> "Disconnected from an RRC hub."
-    ReticulumConnectionState.Starting -> "Preparing the RRC session…"
-    ReticulumConnectionState.Connecting -> "Connecting to the selected RRC hub…"
-    is ReticulumConnectionState.Connected -> "Connected${state.hubName?.takeIf(String::isNotBlank)?.let { " to $it" }.orEmpty()}."
-    is ReticulumConnectionState.Failed -> state.message
-}
-
-@Composable
-private fun HubNicknameEditor(
-    network: ChatNetwork,
-    globalNickname: String,
-    onSave: (String?) -> Unit,
-) {
-    var nicknameDraft by rememberSaveable(network.id) { mutableStateOf(network.rrcNickname.orEmpty()) }
-    LaunchedEffect(network.rrcNickname) { nicknameDraft = network.rrcNickname.orEmpty() }
-    val normalizedNickname = nicknameDraft.trim().takeIf(String::isNotEmpty)?.let(::normalizeStarlingNickname)
-
-    Column(
-        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(Canvas).padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(7.dp),
-    ) {
-        Text(network.name, color = Ink, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-        Text(
-            if (normalizedNickname == null) "Using global nickname · $globalNickname" else "Hub nickname · $normalizedNickname",
-            color = Muted,
-            fontSize = 10.sp,
-        )
-        OutlinedTextField(
-            value = nicknameDraft,
-            onValueChange = { nicknameDraft = it },
-            modifier = Modifier.fillMaxWidth(),
-            label = { Text("Hub-specific nickname") },
-            placeholder = { Text("$globalNickname (global)") },
-            singleLine = true,
-        )
-        Button(
-            enabled = normalizedNickname != network.rrcNickname,
-            onClick = { onSave(normalizedNickname) },
-            colors = ButtonDefaults.buttonColors(containerColor = Accent),
-        ) {
-            Text(if (normalizedNickname == null) "Use global nickname" else "Save hub nickname")
-        }
-    }
-}
-
-@Composable
 private fun RoomSidebar(
     networks: List<ChatNetwork>,
     rooms: List<ChatRoom>,
@@ -1639,7 +1390,7 @@ private fun RoomSidebar(
             if (canHideNavigation) {
                 Spacer(Modifier.weight(1f))
                 IconButton(onClick = onHideNavigation) {
-                    Text("‹", color = Accent, fontSize = 25.sp)
+                    Icon(Icons.Filled.ChevronLeft, contentDescription = "Hide navigation", tint = Accent)
                 }
             }
         }
@@ -1698,7 +1449,9 @@ private fun RoomSidebar(
                                 .padding(vertical = 7.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Text("+ Add a channel", color = Muted, fontSize = 11.sp)
+                            Icon(Icons.Filled.Add, contentDescription = "Add a channel", tint = Muted, modifier = Modifier.size(14.dp))
+                            Spacer(Modifier.width(3.dp))
+                            Text("Add a channel", color = Muted, fontSize = 11.sp)
                         }
                     }
                 }
@@ -1792,765 +1545,6 @@ private fun RoomSidebar(
                 )
             }
         }
-    }
-}
-
-@Composable
-private fun RuntimeModeSelection(
-    selected: ReticulumRuntimeMode,
-    enabled: Boolean,
-    onSelect: (ReticulumRuntimeMode) -> Unit,
-) {
-    listOf(ReticulumRuntimeMode.EMBEDDED, ReticulumRuntimeMode.EXISTING_SHARED_INSTANCE).forEach { mode ->
-        Row(
-            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
-                .clickable(enabled = enabled) { onSelect(mode) }
-                .padding(vertical = 1.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            RadioButton(selected = selected == mode, onClick = { onSelect(mode) }, enabled = enabled)
-            Column {
-                Text(
-                    if (mode == ReticulumRuntimeMode.EMBEDDED) "Embedded Starling node" else "Existing local RNS instance",
-                    color = Ink,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Medium,
-                )
-                if (mode == ReticulumRuntimeMode.EXISTING_SHARED_INSTANCE) {
-                    Text("Advanced", color = Muted, fontSize = 10.sp)
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun NetworkHubPicker(
-    networks: List<ChatNetwork>,
-    selectedNetwork: ChatNetwork?,
-    enabled: Boolean,
-    onSelected: (ChatNetwork) -> Unit,
-) {
-    var expanded by remember { mutableStateOf(false) }
-    Box {
-        Row(
-            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(Canvas)
-                .border(1.dp, Line, RoundedCornerShape(8.dp))
-                .clickable(enabled = enabled && networks.isNotEmpty()) { expanded = true }
-                .padding(horizontal = 12.dp, vertical = 13.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(selectedNetwork?.name ?: "No RRC network configured", modifier = Modifier.weight(1f), color = Ink, fontSize = 13.sp)
-            Text("▾", color = if (enabled && networks.isNotEmpty()) Accent else Muted)
-        }
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            networks.forEach { network ->
-                DropdownMenuItem(
-                    text = { Text(network.name) },
-                    onClick = { onSelected(network); expanded = false },
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun SettingsPage(
-    themePreference: ThemePreference,
-    onThemeChange: (ThemePreference) -> Unit,
-    bubbleStyle: Boolean,
-    onBubbleStyleChange: (Boolean) -> Unit,
-    denseMessages: Boolean,
-    onDenseMessagesChange: (Boolean) -> Unit,
-    previewMode: Boolean,
-    onPreviewModeChange: (Boolean) -> Unit,
-    networks: List<ChatNetwork>,
-    nodeConfig: ReticulumNodeConfig?,
-    onNodeConfigChange: (ReticulumNodeConfig) -> Unit,
-    globalNickname: String,
-    preferredHubNetworkId: String?,
-    onPreferredHubNetworkChange: (String?) -> Unit,
-    nodeState: ReticulumNodeState,
-    nodeSupported: Boolean,
-    identityAvailable: Boolean,
-    identityBusy: Boolean,
-    onManageIdentity: () -> Unit,
-    supportsReticulumProtocol: Boolean,
-    supportsRNodeInterfaces: Boolean,
-    rrcState: ReticulumConnectionState,
-    rrcError: String?,
-    localDeliveryAddress: String?,
-    showNavigationButton: Boolean = false,
-    onOpenNavigation: () -> Unit = {},
-    onStartNode: (ReticulumNodeConfig) -> Unit,
-    onDisconnectNode: () -> Unit,
-    onConnectHub: (ReticulumConnectionConfig) -> Unit,
-    onDisconnectHub: () -> Unit,
-    onBack: () -> Unit,
-) {
-    var runtimeModeName by rememberSaveable {
-        mutableStateOf(nodeConfig?.mode?.name ?: ReticulumRuntimeMode.EMBEDDED.name)
-    }
-    var tcpPeers by rememberSaveable(
-        stateSaver = listSaver(
-            save = { peers: List<ReticulumTcpPeer> ->
-                peers.flatMap { peer ->
-                    listOf(peer.host, peer.port.toString(), peer.ifacNetworkName.orEmpty(), peer.ifacPassphrase.orEmpty())
-                }
-            },
-            restore = { saved: List<String> ->
-                saved.chunked(4).mapNotNull { fields ->
-                    if (fields.size < 4) null else ReticulumTcpPeer(
-                        host = fields[0],
-                        port = fields[1].toIntOrNull() ?: 0,
-                        ifacNetworkName = fields[2].ifBlank { null },
-                        ifacPassphrase = fields[3].ifBlank { null },
-                    )
-                }
-            },
-        ),
-    ) { mutableStateOf(nodeConfig?.tcpPeers ?: listOf(ReticulumTcpPeer("", 4242))) }
-    var rnodeInterfaces by rememberSaveable(
-        stateSaver = listSaver(
-            save = { radios: List<ReticulumRNodeInterface> ->
-                radios.flatMap { radio ->
-                    listOf(
-                        radio.port,
-                        radio.frequencyHz.toString(),
-                        radio.bandwidthHz.toString(),
-                        radio.txPowerDbm.toString(),
-                        radio.spreadingFactor.toString(),
-                        radio.codingRate.toString(),
-                    )
-                }
-            },
-            restore = { saved: List<String> ->
-                saved.chunked(6).mapNotNull { fields ->
-                    if (fields.size != 6) null else ReticulumRNodeInterface(
-                        port = fields[0],
-                        frequencyHz = fields[1].toLongOrNull() ?: 0L,
-                        bandwidthHz = fields[2].toIntOrNull() ?: 0,
-                        txPowerDbm = fields[3].toIntOrNull() ?: -1,
-                        spreadingFactor = fields[4].toIntOrNull() ?: 0,
-                        codingRate = fields[5].toIntOrNull() ?: 0,
-                    )
-                }
-            },
-        ),
-    ) { mutableStateOf(nodeConfig?.rnodeInterfaces.orEmpty()) }
-    var existingRpcKey by remember { mutableStateOf("") }
-    var selectedHubNetworkId by rememberSaveable { mutableStateOf(preferredHubNetworkId.orEmpty()) }
-    var connectionInputError by rememberSaveable { mutableStateOf<String?>(null) }
-    val configuredNetworks = networks.filter { !it.isPreview && !it.hubDestination.isNullOrBlank() }
-    val selectedHubNetwork = configuredNetworks.firstOrNull { it.id == selectedHubNetworkId } ?: configuredNetworks.firstOrNull()
-    val selectedRrcNickname = selectedHubNetwork?.rrcNickname?.takeIf(String::isNotBlank) ?: globalNickname
-    LaunchedEffect(preferredHubNetworkId, configuredNetworks) {
-        val selectedId = preferredHubNetworkId?.takeIf { id -> configuredNetworks.any { it.id == id } }
-            ?: configuredNetworks.firstOrNull()?.id.orEmpty()
-        if (selectedHubNetworkId != selectedId) selectedHubNetworkId = selectedId
-        if (preferredHubNetworkId == null && selectedId.isNotBlank()) onPreferredHubNetworkChange(selectedId)
-    }
-    val runtimeMode = runCatching { ReticulumRuntimeMode.valueOf(runtimeModeName) }
-        .getOrDefault(ReticulumRuntimeMode.EMBEDDED)
-    val isRunning = nodeState is ReticulumNodeState.Running
-    val isStarting = nodeState is ReticulumNodeState.Starting || nodeState is ReticulumNodeState.PreparingRuntime
-    LaunchedEffect(nodeState) {
-        when (val state = nodeState) {
-            is ReticulumNodeState.Running -> {
-                runtimeModeName = state.mode.name
-                if (tcpPeers.all { it.host.isBlank() } && state.tcpPeers.isNotEmpty()) {
-                    tcpPeers = state.tcpPeers
-                }
-                if (rnodeInterfaces.isEmpty() && state.rnodeInterfaces.isNotEmpty()) {
-                    rnodeInterfaces = state.rnodeInterfaces
-                }
-            }
-            is ReticulumNodeState.Starting -> runtimeModeName = state.mode.name
-            is ReticulumNodeState.PreparingRuntime -> Unit
-            else -> Unit
-        }
-    }
-    LaunchedEffect(runtimeModeName, tcpPeers, rnodeInterfaces) {
-        onNodeConfigChange(
-            ReticulumNodeConfig(
-                mode = runCatching { ReticulumRuntimeMode.valueOf(runtimeModeName) }
-                    .getOrDefault(ReticulumRuntimeMode.EMBEDDED),
-                tcpPeers = tcpPeers,
-                rnodeInterfaces = rnodeInterfaces,
-            ),
-        )
-    }
-
-    Column(Modifier.fillMaxSize().background(Canvas)) {
-        Row(
-            modifier = Modifier.fillMaxWidth().height(68.dp).background(Paper)
-                .padding(horizontal = 20.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Box(
-                Modifier.size(40.dp).clip(RoundedCornerShape(10.dp)).clickable(onClick = onBack),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text("‹", color = Accent, fontSize = 26.sp)
-            }
-            Spacer(Modifier.width(10.dp))
-            Text("Settings", color = Ink, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
-            if (showNavigationButton) {
-                Spacer(Modifier.weight(1f))
-                NavigationToggle { onOpenNavigation() }
-            }
-        }
-
-        Column(
-            modifier = Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState())
-                .preferredFrameRate(120f)
-                .padding(horizontal = 24.dp, vertical = 26.dp),
-            verticalArrangement = Arrangement.spacedBy(18.dp),
-        ) {
-            Text("APPEARANCE", color = Muted, fontSize = 10.sp, letterSpacing = 1.3.sp, fontWeight = FontWeight.Bold)
-            Column(
-                modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Paper)
-                    .border(1.dp, Line, RoundedCornerShape(14.dp)).padding(18.dp),
-            ) {
-                Text("Color theme", color = Ink, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-                Spacer(Modifier.height(8.dp))
-                ThemePreference.values().forEach { option ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
-                            .clickable { onThemeChange(option) }.padding(vertical = 2.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        RadioButton(selected = themePreference == option, onClick = { onThemeChange(option) })
-                        Text(option.label, color = Ink, fontSize = 13.sp)
-                    }
-                }
-                Spacer(Modifier.height(8.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text("Bubble messages", color = Ink, fontSize = 13.sp, fontWeight = FontWeight.Medium)
-                        Text("Use a chat-bubble layout instead of the IRC-style timeline.", color = Muted, fontSize = 11.sp)
-                    }
-                    Switch(checked = bubbleStyle, onCheckedChange = onBubbleStyleChange)
-                }
-                Spacer(Modifier.height(8.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text("Dense messages", color = Ink, fontSize = 13.sp, fontWeight = FontWeight.Medium)
-                        Text("Reduce vertical spacing in room and direct-message history.", color = Muted, fontSize = 11.sp)
-                    }
-                    Switch(checked = denseMessages, onCheckedChange = onDenseMessagesChange)
-                }
-            }
-            Text("NETWORK", color = Muted, fontSize = 10.sp, letterSpacing = 1.3.sp, fontWeight = FontWeight.Bold)
-            Column(
-                modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Paper)
-                    .border(1.dp, Line, RoundedCornerShape(14.dp)).padding(18.dp),
-                verticalArrangement = Arrangement.spacedBy(9.dp),
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        if (supportsReticulumProtocol) "Reticulum node" else "TCP connectivity",
-                        modifier = Modifier.weight(1f),
-                        color = Ink,
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                    Text(
-                        if (previewMode) "ISOLATED PREVIEW" else when (nodeState) {
-                                is ReticulumNodeState.Running -> if (nodeState.interfaceOnline) "CONNECTED" else "RETRYING"
-                                is ReticulumNodeState.Starting -> "STARTING"
-                                is ReticulumNodeState.PreparingRuntime -> "PREPARING"
-                                is ReticulumNodeState.Failed -> "ERROR"
-                                is ReticulumNodeState.Unavailable -> "UNAVAILABLE"
-                                ReticulumNodeState.Stopped -> "DISCONNECTED"
-                            },
-                        color = if (!previewMode && nodeState is ReticulumNodeState.Failed) Color(0xFFC44545) else Accent,
-                        fontSize = 9.sp,
-                        fontWeight = FontWeight.Bold,
-                        letterSpacing = 0.8.sp,
-                    )
-                }
-                Text(
-                    if (previewMode) {
-                        "Preview mode is isolated. It shows sample data only and stops live Reticulum connections."
-                    } else {
-                        if (supportsReticulumProtocol) {
-                            "Starting RNS manages the network node; RRC room traffic is a separate connection below."
-                        } else {
-                            "iOS can open a TCP connection to a configured peer. Reticulum packets, IFAC, RRC, and LXMF are not implemented on iOS yet."
-                        }
-                    },
-                    color = Muted,
-                    fontSize = 12.sp,
-                    lineHeight = 18.sp,
-                )
-
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text("Local preview", color = Ink, fontSize = 13.sp, fontWeight = FontWeight.Medium)
-                        Text("Isolated sample data; live identity and connections are hidden.", color = Muted, fontSize = 11.sp)
-                    }
-                    Switch(
-                        checked = previewMode,
-                        onCheckedChange = {
-                            connectionInputError = null
-                            onPreviewModeChange(it)
-                        },
-                    )
-                }
-
-                if (previewMode) {
-                    Text(
-                        "Live interfaces, shared-instance keys, and RRC/LXMF addresses are hidden while preview is on.",
-                        color = Muted,
-                        fontSize = 11.sp,
-                        lineHeight = 16.sp,
-                    )
-                } else {
-                    Text(
-                        if (!supportsReticulumProtocol) {
-                            "TCP peer settings are temporary and are not retained after the app closes."
-                        } else if (runtimeMode == ReticulumRuntimeMode.EMBEDDED) {
-                            "Interface settings are saved and the node starts automatically in live mode on next launch."
-                        } else {
-                            "The shared-instance RPC key is session-only; re-enter it after restarting the app."
-                        },
-                        color = Muted,
-                        fontSize = 11.sp,
-                        lineHeight = 16.sp,
-                    )
-                if (supportsReticulumProtocol) {
-                    RuntimeModeSelection(
-                        selected = runtimeMode,
-                        enabled = !isRunning && !isStarting && nodeSupported,
-                        onSelect = { runtimeModeName = it.name; connectionInputError = null },
-                    )
-                }
-
-                if (runtimeMode == ReticulumRuntimeMode.EMBEDDED) {
-                    Text(
-                        if (!supportsReticulumProtocol) {
-                            "This opens a plain TCP socket only; it does not exchange Reticulum traffic."
-                        } else if (supportsRNodeInterfaces) {
-                            "Configure TCP peers and/or an RNode serial radio. Starling stays a client; Reticulum transport routing remains disabled."
-                        } else {
-                            "Manage outbound TCP client interfaces. Starling stays a client; Reticulum transport routing remains disabled."
-                        },
-                        color = Muted,
-                        fontSize = 11.sp,
-                    )
-                    tcpPeers.forEachIndexed { index, peer ->
-                        Column(
-                            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(Canvas)
-                                .border(1.dp, Line, RoundedCornerShape(10.dp)).padding(12.dp),
-                            verticalArrangement = Arrangement.spacedBy(7.dp),
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text("TCP connection ${index + 1}", modifier = Modifier.weight(1f), color = Ink, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                                if ((tcpPeers.size > 1 || rnodeInterfaces.isNotEmpty()) && !isRunning && !isStarting) {
-                                    TextButton(onClick = { tcpPeers = tcpPeers.filterIndexed { i, _ -> i != index }; connectionInputError = null }) {
-                                        Text("Remove", color = Color(0xFFC44545))
-                                    }
-                                }
-                            }
-                            OutlinedTextField(
-                                value = peer.host,
-                                onValueChange = { value -> tcpPeers = tcpPeers.mapIndexed { i, old -> if (i == index) old.copy(host = value) else old }; connectionInputError = null },
-                                modifier = Modifier.fillMaxWidth(),
-                                label = { Text("Peer host or IP") },
-                                singleLine = true,
-                                enabled = !isRunning && !isStarting,
-                            )
-                            OutlinedTextField(
-                                value = if (peer.port > 0) peer.port.toString() else "",
-                                onValueChange = { value ->
-                                    if (value.all(Char::isDigit)) {
-                                        tcpPeers = tcpPeers.mapIndexed { i, old -> if (i == index) old.copy(port = value.toIntOrNull() ?: 0) else old }
-                                        connectionInputError = null
-                                    }
-                                },
-                                modifier = Modifier.fillMaxWidth(),
-                                label = { Text("TCP port") },
-                                singleLine = true,
-                                enabled = !isRunning && !isStarting,
-                            )
-                            if (supportsReticulumProtocol) {
-                                OutlinedTextField(
-                                    value = peer.ifacNetworkName.orEmpty(),
-                                    onValueChange = { value -> tcpPeers = tcpPeers.mapIndexed { i, old -> if (i == index) old.copy(ifacNetworkName = value.takeIf(String::isNotBlank)) else old }; connectionInputError = null },
-                                    modifier = Modifier.fillMaxWidth(),
-                                    label = { Text("IFAC network name (optional)") },
-                                    singleLine = true,
-                                    enabled = !isRunning && !isStarting,
-                                )
-                                OutlinedTextField(
-                                    value = peer.ifacPassphrase.orEmpty(),
-                                    onValueChange = { value -> tcpPeers = tcpPeers.mapIndexed { i, old -> if (i == index) old.copy(ifacPassphrase = value.takeIf(String::isNotBlank)) else old }; connectionInputError = null },
-                                    modifier = Modifier.fillMaxWidth(),
-                                    label = { Text("IFAC passphrase (optional)") },
-                                    singleLine = true,
-                                    visualTransformation = PasswordVisualTransformation(),
-                                    enabled = !isRunning && !isStarting,
-                                )
-                            }
-                        }
-                    }
-                    if (supportsReticulumProtocol) {
-                        Text("IFAC values are per connection and must match that peer. Leave both blank to disable IFAC.", color = Muted, fontSize = 10.sp)
-                    }
-                    if (!isRunning && !isStarting) {
-                        TextButton(onClick = { tcpPeers = tcpPeers + ReticulumTcpPeer("", 4242) }) {
-                            Text("+ Add TCP connection", color = Accent)
-                        }
-                    }
-                    if (supportsRNodeInterfaces) {
-                        rnodeInterfaces.forEachIndexed { index, radio ->
-                            Column(
-                                modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(Canvas)
-                                    .border(1.dp, Line, RoundedCornerShape(10.dp)).padding(12.dp),
-                                verticalArrangement = Arrangement.spacedBy(7.dp),
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Text("RNode radio ${index + 1}", modifier = Modifier.weight(1f), color = Ink, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                                    if (!isRunning && !isStarting) {
-                                        TextButton(onClick = {
-                                            rnodeInterfaces = rnodeInterfaces.filterIndexed { radioIndex, _ -> radioIndex != index }
-                                            connectionInputError = null
-                                        }) {
-                                            Text("Remove", color = Color(0xFFC44545))
-                                        }
-                                    }
-                                }
-                                OutlinedTextField(
-                                    value = radio.port,
-                                    onValueChange = { value ->
-                                        rnodeInterfaces = rnodeInterfaces.mapIndexed { radioIndex, old ->
-                                            if (radioIndex == index) old.copy(port = value) else old
-                                        }
-                                        connectionInputError = null
-                                    },
-                                    modifier = Modifier.fillMaxWidth(),
-                                    label = { Text("Serial port (e.g. COM3, /dev/cu.* or /dev/ttyUSB0)") },
-                                    singleLine = true,
-                                    enabled = !isRunning && !isStarting,
-                                )
-                                OutlinedTextField(
-                                    value = radio.frequencyHz.takeIf { it > 0 }?.toString().orEmpty(),
-                                    onValueChange = { value ->
-                                        if (value.all(Char::isDigit)) {
-                                            rnodeInterfaces = rnodeInterfaces.mapIndexed { radioIndex, old ->
-                                                if (radioIndex == index) old.copy(frequencyHz = value.toLongOrNull() ?: 0L) else old
-                                            }
-                                            connectionInputError = null
-                                        }
-                                    },
-                                    modifier = Modifier.fillMaxWidth(),
-                                    label = { Text("Radio frequency (Hz)") },
-                                    singleLine = true,
-                                    enabled = !isRunning && !isStarting,
-                                )
-                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    OutlinedTextField(
-                                        value = radio.bandwidthHz.toString(),
-                                        onValueChange = { value ->
-                                            if (value.all(Char::isDigit)) {
-                                                rnodeInterfaces = rnodeInterfaces.mapIndexed { radioIndex, old ->
-                                                    if (radioIndex == index) old.copy(bandwidthHz = value.toIntOrNull() ?: 0) else old
-                                                }
-                                                connectionInputError = null
-                                            }
-                                        },
-                                        modifier = Modifier.weight(1f),
-                                        label = { Text("Bandwidth (Hz)") },
-                                        singleLine = true,
-                                        enabled = !isRunning && !isStarting,
-                                    )
-                                    OutlinedTextField(
-                                        value = radio.txPowerDbm.toString(),
-                                        onValueChange = { value ->
-                                            if (value.all(Char::isDigit)) {
-                                                rnodeInterfaces = rnodeInterfaces.mapIndexed { radioIndex, old ->
-                                                    if (radioIndex == index) old.copy(txPowerDbm = value.toIntOrNull() ?: 0) else old
-                                                }
-                                                connectionInputError = null
-                                            }
-                                        },
-                                        modifier = Modifier.weight(1f),
-                                        label = { Text("TX power (dBm)") },
-                                        singleLine = true,
-                                        enabled = !isRunning && !isStarting,
-                                    )
-                                }
-                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    OutlinedTextField(
-                                        value = radio.spreadingFactor.toString(),
-                                        onValueChange = { value ->
-                                            if (value.all(Char::isDigit)) {
-                                                rnodeInterfaces = rnodeInterfaces.mapIndexed { radioIndex, old ->
-                                                    if (radioIndex == index) old.copy(spreadingFactor = value.toIntOrNull() ?: 0) else old
-                                                }
-                                                connectionInputError = null
-                                            }
-                                        },
-                                        modifier = Modifier.weight(1f),
-                                        label = { Text("Spreading factor") },
-                                        singleLine = true,
-                                        enabled = !isRunning && !isStarting,
-                                    )
-                                    OutlinedTextField(
-                                        value = radio.codingRate.toString(),
-                                        onValueChange = { value ->
-                                            if (value.all(Char::isDigit)) {
-                                                rnodeInterfaces = rnodeInterfaces.mapIndexed { radioIndex, old ->
-                                                    if (radioIndex == index) old.copy(codingRate = value.toIntOrNull() ?: 0) else old
-                                                }
-                                                connectionInputError = null
-                                            }
-                                        },
-                                        modifier = Modifier.weight(1f),
-                                        label = { Text("Coding rate (5–8)") },
-                                        singleLine = true,
-                                        enabled = !isRunning && !isStarting,
-                                    )
-                                }
-                                radio.validationError()?.let { validationError ->
-                                    Text(validationError, color = Color(0xFFC44545), fontSize = 10.sp)
-                                }
-                            }
-                        }
-                        Text(
-                            "Set frequency, bandwidth, power, and spreading factor to match your RNode network and local radio rules. These settings control the radio itself.",
-                            color = Muted,
-                            fontSize = 10.sp,
-                            lineHeight = 14.sp,
-                        )
-                        if (!isRunning && !isStarting) {
-                            TextButton(onClick = {
-                                if (tcpPeers.size == 1 && tcpPeers.single().host.isBlank()) {
-                                    tcpPeers = emptyList()
-                                }
-                                rnodeInterfaces = rnodeInterfaces + ReticulumRNodeInterface(
-                                    port = "",
-                                    frequencyHz = 0L,
-                                    bandwidthHz = 125_000,
-                                    txPowerDbm = 0,
-                                    spreadingFactor = 7,
-                                    codingRate = 5,
-                                )
-                                connectionInputError = null
-                            }) {
-                                Text("+ Add RNode serial interface", color = Accent)
-                            }
-                        }
-                    }
-                } else {
-                    Text(
-                        "Advanced: attach to an RNS shared instance already running on this device. Its RPC key must match; default ports are 37428/37429.",
-                        color = Muted,
-                        fontSize = 11.sp,
-                        lineHeight = 16.sp,
-                    )
-                    OutlinedTextField(
-                        value = existingRpcKey,
-                        onValueChange = { value -> existingRpcKey = value.filter { it.digitToIntOrNull(16) != null }; connectionInputError = null },
-                        modifier = Modifier.fillMaxWidth(),
-                        label = { Text("Shared instance RPC key (hex)") },
-                        singleLine = true,
-                        visualTransformation = PasswordVisualTransformation(),
-                        enabled = !isRunning && !isStarting,
-                    )
-                }
-
-                val stateMessage = when (val state = nodeState) {
-                    is ReticulumNodeState.Running -> when {
-                        state.sharedInstanceConnected -> "Using the existing local Reticulum shared instance."
-                        state.rnodeInterfaces.isNotEmpty() && state.tcpPeers.isNotEmpty() ->
-                            "${state.onlineTcpPeerIds.size} of ${state.tcpPeers.size} TCP connections online; " +
-                                "${state.onlineRNodePorts.size} of ${state.rnodeInterfaces.size} RNode radios online."
-                        state.rnodeInterfaces.isNotEmpty() -> "${state.onlineRNodePorts.size} of ${state.rnodeInterfaces.size} RNode radios online. " +
-                            state.rnodeInterfaces.joinToString { radio -> "${radio.port} ${if (radio.id in state.onlineRNodePorts) "(online)" else "(retrying)"}" }
-                        state.tcpPeers.isNotEmpty() -> "${state.onlineTcpPeerIds.size} of ${state.tcpPeers.size} TCP connections online. " +
-                            (if (supportsReticulumProtocol) "" else "Socket check only; RNS traffic is not implemented on iOS. ") +
-                            state.tcpPeers.joinToString {
-                                "${it.host}:${it.port} ${if (it.id in state.onlineTcpPeerIds) "(online)" else if (supportsReticulumProtocol) "(retrying)" else "(offline)"}"
-                            }
-                        else -> "RNS node is running without a configured interface."
-                    }
-                    is ReticulumNodeState.Starting -> "Starting the Reticulum node…"
-                    is ReticulumNodeState.PreparingRuntime -> state.detail
-                    is ReticulumNodeState.Failed -> state.message
-                    is ReticulumNodeState.Unavailable -> state.reason
-                    ReticulumNodeState.Stopped -> if (nodeSupported) {
-                        if (supportsReticulumProtocol) "No Reticulum node is running. The app remains in local preview."
-                        else "No TCP connection is open. Turn off local preview to test a peer."
-                    } else "Embedded RNS is not available on this platform yet."
-                }
-                Text(stateMessage, color = if (nodeState is ReticulumNodeState.Failed) Color(0xFFC44545) else Muted, fontSize = 11.sp)
-                connectionInputError?.let { Text(it, color = Color(0xFFC44545), fontSize = 11.sp) }
-
-                if (!identityAvailable) {
-                    Text("Create or import an identity before starting live networking.", color = Muted, fontSize = 12.sp)
-                    TextButton(onClick = onManageIdentity) { Text("Open Identity settings") }
-                }
-
-                Button(
-                    enabled = nodeSupported && !isStarting && !identityBusy && (isRunning || (identityAvailable && if (runtimeMode == ReticulumRuntimeMode.EMBEDDED) {
-                        (tcpPeers.isNotEmpty() || rnodeInterfaces.isNotEmpty()) &&
-                            tcpPeers.all { it.validationError() == null } &&
-                            rnodeInterfaces.all { it.validationError() == null }
-                    } else isValidReticulumRpcKey(existingRpcKey))),
-                    onClick = {
-                        if (isRunning) {
-                            onDisconnectNode()
-                        } else {
-                            val config = when (runtimeMode) {
-                                ReticulumRuntimeMode.EMBEDDED -> ReticulumNodeConfig(
-                                    mode = runtimeMode,
-                                    tcpPeers = tcpPeers.map { peer -> peer.copy(
-                                        host = peer.host.trim(),
-                                        ifacNetworkName = peer.ifacNetworkName?.trim()?.ifBlank { null },
-                                        ifacPassphrase = peer.ifacPassphrase?.takeIf { it.isNotBlank() },
-                                    ) },
-                                    rnodeInterfaces = rnodeInterfaces.map { radio -> radio.copy(port = radio.port.trim()) },
-                                )
-                                ReticulumRuntimeMode.EXISTING_SHARED_INSTANCE -> ReticulumNodeConfig(
-                                    mode = runtimeMode,
-                                    existingInstanceRpcKeyHex = existingRpcKey,
-                                )
-                            }
-                            val error = config.validationError()
-                            connectionInputError = error
-                            if (error == null) onStartNode(config)
-                        }
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = Accent),
-                ) {
-                    Text(
-                        if (isRunning) {
-                            if (supportsReticulumProtocol) "Disconnect node" else "Disconnect TCP"
-                        } else if (isStarting) "Connecting…" else if (supportsReticulumProtocol) "Start node" else "Connect TCP",
-                    )
-                }
-                }
-            }
-            if (!supportsReticulumProtocol) {
-                Text("MESSAGING", color = Muted, fontSize = 10.sp, letterSpacing = 1.3.sp, fontWeight = FontWeight.Bold)
-                Text(
-                    "RRC room chat and LXMF direct messaging are not implemented on iOS yet. The TCP check above only opens a socket.",
-                    color = Muted,
-                    fontSize = 12.sp,
-                    lineHeight = 18.sp,
-                )
-            } else if (previewMode) {
-                Text("MESSAGING", color = Muted, fontSize = 10.sp, letterSpacing = 1.3.sp, fontWeight = FontWeight.Bold)
-                Text(
-                    "Preview messages are simulated locally. RRC hub details and the LXMF delivery address are hidden.",
-                    color = Muted,
-                    fontSize = 12.sp,
-                    lineHeight = 18.sp,
-                )
-            } else {
-            Text("MESSAGING", color = Muted, fontSize = 10.sp, letterSpacing = 1.3.sp, fontWeight = FontWeight.Bold)
-            Column(
-                modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Paper)
-                    .border(1.dp, Line, RoundedCornerShape(14.dp)).padding(18.dp),
-                verticalArrangement = Arrangement.spacedBy(9.dp),
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Room chat", modifier = Modifier.weight(1f), color = Ink, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-                    Text(
-                        when (rrcState) {
-                            ReticulumConnectionState.Disconnected -> "DISCONNECTED"
-                            ReticulumConnectionState.Starting -> "STARTING"
-                            ReticulumConnectionState.Connecting -> "CONNECTING"
-                            is ReticulumConnectionState.Connected -> "CONNECTED"
-                            is ReticulumConnectionState.Failed -> "ERROR"
-                        },
-                        color = if (rrcState is ReticulumConnectionState.Failed) Color(0xFFC44545) else Accent,
-                        fontSize = 9.sp,
-                        fontWeight = FontWeight.Bold,
-                        letterSpacing = 0.8.sp,
-                    )
-                }
-                Text("Choose one of your configured RRC networks. Starling joins its channel names; RRC does not provide room enumeration or history.", color = Muted, fontSize = 12.sp, lineHeight = 18.sp)
-                NetworkHubPicker(
-                    networks = configuredNetworks,
-                    selectedNetwork = selectedHubNetwork,
-                    enabled = rrcState !is ReticulumConnectionState.Connected && rrcState !is ReticulumConnectionState.Connecting,
-                    onSelected = {
-                        selectedHubNetworkId = it.id
-                        onPreferredHubNetworkChange(it.id)
-                    },
-                )
-                if (selectedHubNetwork != null) {
-                    Text("Destination · ${selectedHubNetwork.hubDestination}", color = Muted, fontSize = 10.sp)
-                } else {
-                    Text("Add a network with an RRC hub destination using + in the Networks list.", color = Muted, fontSize = 11.sp)
-                }
-                Text("Your nickname on this hub: $selectedRrcNickname", color = Muted, fontSize = 11.sp)
-                val rrcStatusText = when (val state = rrcState) {
-                    ReticulumConnectionState.Disconnected -> "Room messages stay in local preview until an RRC hub welcomes this client."
-                    ReticulumConnectionState.Starting -> "Preparing the RRC session…"
-                    ReticulumConnectionState.Connecting -> "Establishing a Reticulum Link and waiting for WELCOME…"
-                    is ReticulumConnectionState.Connected -> "Connected${state.hubName?.takeIf { it.isNotBlank() }?.let { " to $it" }.orEmpty()}. Room messages now use RRC."
-                    is ReticulumConnectionState.Failed -> state.message
-                }
-                Text(rrcStatusText, color = if (rrcState is ReticulumConnectionState.Failed) Color(0xFFC44545) else Muted, fontSize = 11.sp)
-                rrcError?.let { Text(it, color = Color(0xFFC44545), fontSize = 11.sp) }
-                val rrcBusy = rrcState is ReticulumConnectionState.Starting || rrcState is ReticulumConnectionState.Connecting
-                val rrcActive = rrcState is ReticulumConnectionState.Connected
-                Button(
-                    enabled = if (rrcActive || rrcBusy) true else nodeState is ReticulumNodeState.Running && selectedHubNetwork != null,
-                    onClick = {
-                        if (rrcActive || rrcBusy) onDisconnectHub()
-                        else selectedHubNetwork?.hubDestination?.let { destination ->
-                            onConnectHub(ReticulumConnectionConfig(destination, selectedRrcNickname, selectedHubNetwork.id))
-                        }
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = Accent),
-                ) {
-                    Text(if (rrcActive) "Disconnect from hub" else if (rrcBusy) "Cancel connection" else "Connect to hub")
-                }
-            }
-            SettingsCard(
-                title = "Direct messages",
-                subtitle = "LXMF",
-                description = if (localDeliveryAddress == null) {
-                    "Start the Reticulum node to receive a shareable LXMF address and use direct delivery. Unknown senders appear in Requests."
-                } else {
-                    "Your LXMF delivery destination is active. Messages from contacts open in their conversation; unknown senders go to Requests."
-                },
-            )
-            if (localDeliveryAddress != null) {
-                Column(
-                    modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Paper)
-                        .border(1.dp, Line, RoundedCornerShape(12.dp)).padding(14.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    Text("YOUR LXMF ADDRESS · SELECT TO COPY", color = Muted, fontSize = 9.sp, letterSpacing = 1.sp, fontWeight = FontWeight.Bold)
-                    SelectionContainer {
-                        Text("lxmf://$localDeliveryAddress", color = Accent, fontSize = 13.sp)
-                    }
-                }
-            }
-            }
-        }
-    }
-}
-
-@Composable
-private fun SettingsCard(title: String, subtitle: String, description: String, status: String? = null) {
-    Column(
-        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Paper)
-            .border(1.dp, Line, RoundedCornerShape(14.dp)).padding(18.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(title, modifier = Modifier.weight(1f), color = Ink, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-            status?.let { Text(it, color = Accent, fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.8.sp) }
-        }
-        Text(subtitle, color = Accent, fontSize = 12.sp, fontWeight = FontWeight.Medium)
-        Text(description, color = Muted, fontSize = 12.sp, lineHeight = 18.sp)
     }
 }
 
@@ -2665,7 +1659,12 @@ private fun NetworkRow(
                 .padding(start = 10.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(if (expanded) "⌄" else "›", color = Muted, fontSize = 15.sp)
+            Icon(
+                imageVector = if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                contentDescription = if (expanded) "Collapse network" else "Expand network",
+                tint = Muted,
+                modifier = Modifier.size(18.dp),
+            )
             Spacer(Modifier.width(7.dp))
             Box(Modifier.size(7.dp).clip(CircleShape).background(connectionColor))
             Spacer(Modifier.width(8.dp))
@@ -2733,13 +1732,7 @@ private fun ChatHeader(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (compact || showNavigationButton) {
-            Box(
-                modifier = Modifier.size(42.dp).clip(RoundedCornerShape(10.dp))
-                    .clickable(onClick = onOpenNavigation),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text("☰", color = Accent, fontSize = 20.sp, fontWeight = FontWeight.Medium)
-            }
+            NavigationToggle(onClick = onOpenNavigation)
             Spacer(Modifier.width(6.dp))
         }
         Column(Modifier.weight(1f)) {
@@ -2773,7 +1766,12 @@ private fun ChatHeader(
             Text("$memberCount here", color = if (membersVisible || compact) Ink else Muted, fontSize = 12.sp)
             if (!compact) {
                 Spacer(Modifier.width(6.dp))
-                Text(if (membersVisible) "›" else "‹", color = Muted, fontSize = 15.sp)
+                Icon(
+                    imageVector = if (membersVisible) Icons.Filled.ChevronRight else Icons.Filled.ChevronLeft,
+                    contentDescription = if (membersVisible) "Hide member list" else "Show member list",
+                    tint = Muted,
+                    modifier = Modifier.size(18.dp),
+                )
             }
         }
     }
@@ -2987,11 +1985,14 @@ private fun MessageRow(
     bubbleStyle: Boolean,
     denseMessages: Boolean,
     onMemberClick: () -> Unit,
+    onSystemExpansion: () -> Unit = {},
 ) {
     val authorName = member?.displayName ?: message.author
     val palette = LocalStarlingPalette.current
     val authorColor = ircNickTextColor(authorName, darkTheme = palette == DarkPalette)
-    if (bubbleStyle) {
+    if (message.isSystem) {
+        SystemMessageRow(message, denseMessages, bubbleStyle, onSystemExpansion)
+    } else if (bubbleStyle) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(vertical = if (denseMessages) 0.dp else 1.dp),
             horizontalArrangement = if (message.isMine) Arrangement.End else Arrangement.Start,
@@ -3072,15 +2073,129 @@ private fun MessageRow(
 }
 
 @Composable
+private fun SystemMessageRow(
+    message: ChatMessage,
+    denseMessages: Boolean,
+    bubbleStyle: Boolean,
+    onSystemExpansion: () -> Unit,
+) {
+    var expanded by rememberSaveable(message.id) { mutableStateOf(false) }
+    val isErrorMessage = message.systemEvents.any {
+        it.kind == ChatSystemEventKind.ERROR || it.kind == ChatSystemEventKind.COMMAND_ERROR
+    }
+    val isStandaloneSystemMessage = isErrorMessage || message.systemEvents.any { it.kind == ChatSystemEventKind.HELP }
+    val canExpand = message.systemEvents.size > 1 && !isStandaloneSystemMessage
+    val summaryMaxLines = if (expanded || isStandaloneSystemMessage) Int.MAX_VALUE else 2
+    val textColor = if (isErrorMessage) Color(0xFFC44545) else Muted
+    val verticalPadding = if (denseMessages) 1.dp else 4.dp
+
+    if (bubbleStyle) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(vertical = verticalPadding),
+            horizontalArrangement = Arrangement.Center,
+        ) {
+            Column(
+                modifier = Modifier.widthIn(max = 720.dp).clip(RoundedCornerShape(10.dp))
+                    .background(if (isErrorMessage) Color(0x22C44545) else PaleAccent.copy(alpha = 0.55f))
+                    .padding(horizontal = 14.dp, vertical = 7.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        message.text,
+                        modifier = Modifier.weight(1f),
+                        color = textColor,
+                        fontSize = 11.sp,
+                        lineHeight = 15.sp,
+                        textAlign = TextAlign.Center,
+                        maxLines = summaryMaxLines,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    if (canExpand) SystemEventExpandButton(expanded) {
+                        onSystemExpansion()
+                        expanded = !expanded
+                    }
+                }
+                if (expanded && canExpand) {
+                    SystemEventDetails(message.systemEvents)
+                } else {
+                    Text(
+                        if (canExpand) "${message.systemEvents.size} events · last at ${message.time}" else message.time,
+                        color = textColor,
+                        fontSize = 9.sp,
+                    )
+                }
+            }
+        }
+    } else {
+        Column(Modifier.fillMaxWidth().padding(vertical = verticalPadding)) {
+            Row(verticalAlignment = Alignment.Top) {
+                Text(message.time, modifier = Modifier.width(40.dp).padding(top = 1.dp), color = Muted, fontSize = 10.sp)
+                Text(
+                    message.text,
+                    modifier = Modifier.weight(1f).padding(top = 1.dp),
+                    color = textColor,
+                    fontSize = 12.sp,
+                    lineHeight = 16.sp,
+                    fontStyle = FontStyle.Italic,
+                    maxLines = summaryMaxLines,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (canExpand) SystemEventExpandButton(expanded) {
+                    onSystemExpansion()
+                    expanded = !expanded
+                }
+            }
+            if (expanded && canExpand) {
+                SystemEventDetails(message.systemEvents, modifier = Modifier.padding(start = 40.dp, top = 4.dp))
+            }
+        }
+    }
+}
+
+@Composable
+private fun SystemEventExpandButton(expanded: Boolean, onClick: () -> Unit) {
+    IconButton(onClick = onClick, modifier = Modifier.size(28.dp)) {
+        Icon(
+            imageVector = if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+            contentDescription = if (expanded) "Collapse system events" else "Expand system events",
+            tint = Muted,
+        )
+    }
+}
+
+@Composable
+private fun SystemEventDetails(events: List<ChatSystemEvent>, modifier: Modifier = Modifier) {
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(3.dp),
+    ) {
+        events.forEach { event ->
+            Row(verticalAlignment = Alignment.Top) {
+                Text(event.time, modifier = Modifier.width(40.dp), color = Muted, fontSize = 9.sp)
+                Text(event.text, modifier = Modifier.weight(1f), color = Muted, fontSize = 10.sp, lineHeight = 14.sp)
+            }
+        }
+    }
+}
+
+@Composable
 private fun deliveryMarker(state: String?) {
     if (state == null) return
-    val (label, color) = when (state) {
-        "queued", "sending" -> "◷" to Muted
-        "sent", "delivered" -> "✓" to Accent
-        "failed", "rejected" -> "!" to Color(0xFFC44545)
+    val (icon, description, color) = when (state) {
+        "queued" -> Triple(Icons.Filled.Schedule, "Queued", Muted)
+        "sending" -> Triple(Icons.Filled.Schedule, "Sending", Muted)
+        "sent" -> Triple(Icons.Filled.Check, "Sent", Accent)
+        "delivered" -> Triple(Icons.Filled.Check, "Delivered", Accent)
+        "failed", "rejected" -> Triple(Icons.Filled.ErrorOutline, "Delivery failed", Color(0xFFC44545))
         else -> return
     }
-    Text(label, modifier = Modifier.padding(start = 4.dp), color = color, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+    Icon(
+        imageVector = icon,
+        contentDescription = description,
+        modifier = Modifier.padding(start = 4.dp).size(12.dp),
+        tint = color,
+    )
 }
 
 private fun markdown(source: String, palette: StarlingPalette): AnnotatedString {
@@ -3108,54 +2223,158 @@ private fun markdown(source: String, palette: StarlingPalette): AnnotatedString 
 }
 
 @Composable
-private fun MessageComposer(onSend: (String) -> Unit) {
+private fun MessageComposer(
+    onSend: (String) -> Unit,
+    supportsSlashCommands: Boolean = true,
+) {
     var draft by rememberSaveable { mutableStateOf("") }
+    var selectedSlashSuggestionIndex by rememberSaveable { mutableStateOf(0) }
+    val slashSuggestions = remember(draft, supportsSlashCommands) {
+        if (supportsSlashCommands) slashCommandSuggestions(draft) else emptyList()
+    }
+    val slashSuggestionListState = rememberLazyListState()
+    LaunchedEffect(selectedSlashSuggestionIndex, slashSuggestions.size) {
+        if (slashSuggestions.isNotEmpty() &&
+            slashSuggestionListState.layoutInfo.visibleItemsInfo.none { it.index == selectedSlashSuggestionIndex }
+        ) {
+            slashSuggestionListState.animateScrollToItem(selectedSlashSuggestionIndex.coerceIn(slashSuggestions.indices))
+        }
+    }
+    val keyboardVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
+    val focusManager = LocalFocusManager.current
+    LaunchedEffect(draft) {
+        val limitedDraft = limitChatMessageLength(draft)
+        if (limitedDraft != draft) draft = limitedDraft
+        selectedSlashSuggestionIndex = 0
+    }
+    val characterCount = countChatMessageCharacters(draft)
     fun send() {
         val text = draft.trim()
-        if (text.isNotEmpty()) {
+        if (parseOutgoingChatMessage(text) != null) {
             onSend(text)
             draft = ""
         }
     }
+    fun completeSelectedSlashCommand(): Boolean {
+        val command = slashSuggestions.getOrNull(selectedSlashSuggestionIndex) ?: return false
+        val completedDraft = completeSlashCommand(draft, command)
+        if (completedDraft == draft) return false
+        draft = completedDraft
+        return true
+    }
 
-    Row(
+    Column(
         modifier = Modifier.fillMaxWidth().background(Canvas).padding(horizontal = 18.dp, vertical = 14.dp),
-        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Row(
-            modifier = Modifier
-                .weight(1f)
-                .clip(RoundedCornerShape(14.dp))
-                .background(Paper)
-                .border(1.dp, Line, RoundedCornerShape(14.dp))
-                .padding(horizontal = 16.dp, vertical = 14.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            BasicTextField(
-                value = draft,
-                onValueChange = { draft = it },
-                modifier = Modifier.weight(1f),
-                textStyle = TextStyle(color = Ink, fontSize = 14.sp),
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                keyboardActions = KeyboardActions(onSend = { send() }),
-                decorationBox = { innerTextField ->
-                    Box {
-                        if (draft.isEmpty()) Text("Write a message…", color = Muted, fontSize = 14.sp)
-                        innerTextField()
+        if (slashSuggestions.isNotEmpty()) {
+            LazyColumn(
+                modifier = Modifier.fillMaxWidth().heightIn(max = 190.dp).clip(RoundedCornerShape(12.dp))
+                    .background(Paper).border(1.dp, Line, RoundedCornerShape(12.dp))
+                    .padding(6.dp),
+                state = slashSuggestionListState,
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 2.dp),
+                verticalArrangement = Arrangement.spacedBy(3.dp),
+            ) {
+                itemsIndexed(slashSuggestions, key = { _, command -> command.name }) { index, command ->
+                    Column(
+                        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
+                            .background(if (index == selectedSlashSuggestionIndex) PaleAccent else Color.Transparent)
+                            .clickable { draft = completeSlashCommand(draft, command) }
+                            .padding(horizontal = 10.dp, vertical = 7.dp),
+                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                    ) {
+                        Text(
+                            command.usage,
+                            color = if (index == selectedSlashSuggestionIndex) Accent else Ink,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Text(command.description, color = Muted, fontSize = 10.sp, lineHeight = 14.sp)
                     }
-                },
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+        }
+
+        Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Row(
+                modifier = Modifier.fillMaxWidth()
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(Paper)
+                    .border(1.dp, Line, RoundedCornerShape(14.dp))
+                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                BasicTextField(
+                    value = draft,
+                    onValueChange = { draft = limitChatMessageLength(it) },
+                    modifier = Modifier.weight(1f).onPreviewKeyEvent { event ->
+                        if (event.type != KeyEventType.KeyDown || slashSuggestions.isEmpty()) {
+                            false
+                        } else {
+                            when (event.key) {
+                                Key.Tab -> {
+                                    slashSuggestions.getOrNull(selectedSlashSuggestionIndex)?.let { command ->
+                                        draft = completeSlashCommand(draft, command)
+                                        true
+                                    } ?: false
+                                }
+                                Key.DirectionDown -> {
+                                    selectedSlashSuggestionIndex = (selectedSlashSuggestionIndex + 1) % slashSuggestions.size
+                                    true
+                                }
+                                Key.DirectionUp -> {
+                                    selectedSlashSuggestionIndex =
+                                        (selectedSlashSuggestionIndex - 1 + slashSuggestions.size) % slashSuggestions.size
+                                    true
+                                }
+                                else -> false
+                            }
+                        }
+                    },
+                    textStyle = TextStyle(color = Ink, fontSize = 14.sp),
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                    keyboardActions = KeyboardActions(onSend = {
+                        if (!completeSelectedSlashCommand()) send()
+                    }),
+                    decorationBox = { innerTextField ->
+                        Box {
+                            if (draft.isEmpty()) Text("Write a message…", color = Muted, fontSize = 14.sp)
+                            innerTextField()
+                        }
+                    },
+                )
+                if (keyboardVisible) {
+                    IconButton(onClick = { focusManager.clearFocus() }, modifier = Modifier.size(32.dp)) {
+                        Icon(Icons.Filled.KeyboardHide, contentDescription = "Hide keyboard", tint = Muted)
+                    }
+                } else {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.KeyboardReturn,
+                        contentDescription = "Press Enter to send",
+                        modifier = Modifier.padding(start = 8.dp).size(16.dp),
+                        tint = Muted,
+                    )
+                }
+            }
+            Text(
+                "$characterCount / $MAX_CHAT_MESSAGE_CHARACTERS characters",
+                modifier = Modifier.align(Alignment.End).padding(top = 4.dp, end = 4.dp),
+                color = if (characterCount >= MAX_CHAT_MESSAGE_CHARACTERS) Color(0xFFC44545) else Muted,
+                fontSize = 10.sp,
             )
-            Text("↵", color = Muted, fontSize = 16.sp)
         }
         Spacer(Modifier.width(10.dp))
         Button(
             onClick = { send() },
-            enabled = draft.isNotBlank(),
+            enabled = parseOutgoingChatMessage(draft) != null,
             shape = RoundedCornerShape(12.dp),
             colors = ButtonDefaults.buttonColors(containerColor = Accent, disabledContainerColor = Line),
         ) {
             Text("Send", modifier = Modifier.padding(horizontal = 5.dp), fontWeight = FontWeight.SemiBold)
+        }
         }
     }
 }
