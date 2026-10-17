@@ -43,6 +43,15 @@ for secret, destination in zip(
         output.write(base64.b64decode(os.environ[secret], validate=False))
 PY
 
+if ! openssl pkcs12 \
+  -in "$WORK_DIR/distribution.p12" \
+  -noout \
+  -passin env:IOS_DISTRIBUTION_CERTIFICATE_PASSWORD \
+  >/dev/null 2>&1; then
+  echo "The P12 certificate and password secrets do not match." >&2
+  exit 1
+fi
+
 security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
 security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
 security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
