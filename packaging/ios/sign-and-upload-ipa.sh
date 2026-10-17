@@ -119,11 +119,9 @@ cp "$WORK_DIR/profile.mobileprovision" "$APP_PATH/embedded.mobileprovision"
 /usr/libexec/PlistBuddy -x -c 'Print :Entitlements' "$WORK_DIR/profile.plist" > "$WORK_DIR/entitlements.plist"
 
 # Re-sign nested code first, deepest paths first, then sign the containing app.
-while IFS= read -r -d '' code_path; do
-  codesign --force --sign "$SIGNING_IDENTITY" --timestamp=none "$code_path"
-done < <(python3 - "$APP_PATH" <<'PY'
+NESTED_CODE_PATHS="$WORK_DIR/nested-code-paths.txt"
+python3 - "$APP_PATH" > "$NESTED_CODE_PATHS" <<'PY'
 import pathlib
-import os
 import sys
 
 app = pathlib.Path(sys.argv[1])
@@ -136,9 +134,12 @@ for path in app.rglob("*"):
     elif path.is_file() and path.suffix == ".dylib":
         code.append(path)
 for path in sorted(code, key=lambda item: len(item.parts), reverse=True):
-    sys.stdout.buffer.write(os.fsencode(path) + b"\0")
+    print(path)
 PY
-)
+while IFS= read -r code_path; do
+  [[ -n "$code_path" ]] || continue
+  codesign --force --sign "$SIGNING_IDENTITY" --timestamp=none "$code_path"
+done < "$NESTED_CODE_PATHS"
 
 codesign --force \
   --sign "$SIGNING_IDENTITY" \
@@ -157,7 +158,7 @@ mkdir -p "$API_KEY_DIRECTORY"
 printf '%s' "$ASC_PRIVATE_KEY" > "$API_KEY_DIRECTORY/AuthKey_${ASC_KEY_ID}.p8"
 chmod 600 "$API_KEY_DIRECTORY/AuthKey_${ASC_KEY_ID}.p8"
 
-xcrun altool --upload-app \
+xcrun altool --use-old-altool --upload-app \
   --type ios \
   --file "$OUTPUT_IPA" \
   --apiKey "$ASC_KEY_ID" \
