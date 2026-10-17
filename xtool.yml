@@ -1,4 +1,4 @@
 version: 1
 bundleID: com.sidpatchy.Starling
 infoPath: iosApp/Info.plist
-iconPath: iosApp/Resources/StarlingAppIcon.png
+iconPath: iosApp/Resources/Assets.xcassets/StarlingAppIcon.appiconset/StarlingAppIcon.png
