@@ -23,18 +23,23 @@ frameworks. RNS identities and config live in app-private Application Support;
 chat preferences and history use the shared persisted-state codec. iOS does not
 provide an Android-style background service, so live networking is foreground-only.
 
-The unsigned IPA workflow prepares the pinned Python support framework, builds
-the Compose framework, lets xtool create the IPA, then installs Python's standard
-library and extension frameworks into the app bundle. It also cross-builds PyCA
-cryptography wheels for iOS device and simulator using cibuildwheel and Rust. To
-run it manually on a Mac with full Xcode and rustup installed:
+The unsigned release IPA workflow prepares the pinned Python support framework,
+builds the release Compose framework, lets xtool create the IPA, then installs
+Python's standard library and extension frameworks into the app bundle. It also
+cross-builds PyCA cryptography wheels for iOS device and simulator using
+cibuildwheel and Rust. To run it manually on a Mac with full Xcode and rustup
+installed:
 
 ```sh
 bash packaging/ios/prepare-python-runtime.sh
-./gradlew :composeApp:assembleComposeAppDebugXCFramework
-xtool dev build --configuration debug --ipa --triple arm64-apple-ios
+./gradlew :composeApp:assembleComposeAppReleaseXCFramework
+STARLING_COMPOSE_CONFIGURATION=release xtool dev build --configuration release --ipa --triple arm64-apple-ios
 # Then run packaging/ios/package-python-ipa.sh on the generated IPA.
 ```
+
+GitHub Actions can also sign this IPA and upload it to App Store Connect. The
+signed IPA is sent directly to Apple and is not published as a GitHub artifact
+or release asset. See [the App Store Connect setup guide](../docs/IOS_APP_STORE_CONNECT.md).
 
 The app starts in local preview. Turn preview off in Settings to configure TCP
 peers and optional per-peer IFAC credentials, or attach to an existing local RNS

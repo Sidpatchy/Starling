@@ -3,7 +3,11 @@
 import Foundation
 import PackageDescription
 
-let composeFrameworkPath = "composeApp/build/XCFrameworks/debug/ComposeApp.xcframework"
+let composeConfiguration = ProcessInfo.processInfo.environment["STARLING_COMPOSE_CONFIGURATION"] ?? "debug"
+guard ["debug", "release"].contains(composeConfiguration) else {
+    fatalError("STARLING_COMPOSE_CONFIGURATION must be either 'debug' or 'release'.")
+}
+let composeFrameworkPath = "composeApp/build/XCFrameworks/\(composeConfiguration)/ComposeApp.xcframework"
 let pythonFrameworkPath = "iosApp/Vendor/Python.xcframework"
 let packageTargets: [Target] = {
     guard FileManager.default.fileExists(atPath: composeFrameworkPath) else {

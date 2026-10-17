@@ -13,6 +13,11 @@ on:
           - android-and-ios
         default: ios-only
         required: true
+      upload_ios_to_app_store_connect:
+        description: Sign the iOS IPA and upload it to App Store Connect
+        type: boolean
+        default: false
+        required: true
 
 permissions:
   contents: read
@@ -112,14 +117,16 @@ jobs:
       - name: Prepare embedded iOS Python runtime
         run: bash packaging/ios/prepare-python-runtime.sh
 
-      - name: Build Compose iOS framework
-        run: ./gradlew --no-daemon "-PstarlingVersion=${{ needs.resolve-version.outputs.app_version }}" :composeApp:assembleComposeAppDebugXCFramework
+      - name: Build release Compose iOS framework
+        run: ./gradlew --no-daemon "-PstarlingVersion=${{ needs.resolve-version.outputs.app_version }}" :composeApp:assembleComposeAppReleaseXCFramework
 
       - name: Verify shared Compose framework
-        run: test -f composeApp/build/XCFrameworks/debug/ComposeApp.xcframework/Info.plist
+        run: test -f composeApp/build/XCFrameworks/release/ComposeApp.xcframework/Info.plist
 
-      - name: Build unsigned device IPA
-        run: xtool dev build --configuration debug --ipa --triple arm64-apple-ios
+      - name: Build unsigned release device IPA
+        env:
+          STARLING_COMPOSE_CONFIGURATION: release
+        run: xtool dev build --configuration release --ipa --triple arm64-apple-ios
 
       - name: Package unsigned IPA with embedded Python
         shell: bash
@@ -140,6 +147,39 @@ jobs:
           name: starling-ios-unsigned-ipa
           path: artifacts/Starling-${{ needs.resolve-version.outputs.app_version }}-ios-unsigned.ipa
           if-no-files-found: error
+
+  ios-app-store-connect:
+    name: Sign and upload iOS build to App Store Connect
+    if: github.event_name == 'release' || inputs.upload_ios_to_app_store_connect
+    needs: [resolve-version, ios-ipa]
+    runs-on: macos-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Download unsigned IPA
+        uses: actions/download-artifact@v7
+        with:
+          name: starling-ios-unsigned-ipa
+          path: artifacts
+
+      - name: Sign IPA and upload to App Store Connect
+        env:
+          IOS_DISTRIBUTION_CERTIFICATE_BASE64: ${{ secrets.IOS_DISTRIBUTION_CERTIFICATE_BASE64 }}
+          IOS_DISTRIBUTION_CERTIFICATE_PASSWORD: ${{ secrets.IOS_DISTRIBUTION_CERTIFICATE_PASSWORD }}
+          IOS_APP_STORE_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_APP_STORE_PROVISIONING_PROFILE_BASE64 }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_PRIVATE_KEY: ${{ secrets.ASC_PRIVATE_KEY }}
+          IOS_MARKETING_VERSION: ${{ needs.resolve-version.outputs.package_version }}
+          IOS_BUILD_NUMBER: ${{ github.run_number }}
+        run: |
+          ipa_path="artifacts/Starling-${{ needs.resolve-version.outputs.app_version }}-ios-unsigned.ipa"
+          test -f "$ipa_path"
+          bash packaging/ios/sign-and-upload-ipa.sh \
+            "$ipa_path" \
+            "$RUNNER_TEMP/Starling-${{ needs.resolve-version.outputs.app_version }}-ios-signed.ipa"
 
   publish-release-assets:
     name: Attach mobile builds to release
