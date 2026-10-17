@@ -27,7 +27,7 @@ kotlin {
     }
 
     android {
-        namespace = "dev.starling.shared"
+        namespace = "com.sidpatchy.Starling.shared"
         compileSdk = 37
         minSdk = 24
         androidResources {
@@ -79,12 +79,12 @@ kotlin {
 
 compose.resources {
     publicResClass = true
-    packageOfResClass = "dev.starling.generated.resources"
+    packageOfResClass = "com.sidpatchy.Starling.generated.resources"
 }
 
 compose.desktop {
     application {
-        mainClass = "dev.starling.MainKt"
+        mainClass = "com.sidpatchy.Starling.MainKt"
 
         nativeDistributions {
             targetFormats(TargetFormat.Deb, TargetFormat.Rpm, TargetFormat.Msi, TargetFormat.Dmg)

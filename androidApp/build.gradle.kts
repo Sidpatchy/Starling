@@ -5,7 +5,7 @@ plugins {
 }
 
 android {
-    namespace = "dev.starling"
+    namespace = "com.sidpatchy.Starling"
     compileSdk = 37
 
     buildTypes {
@@ -15,7 +15,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "dev.starling"
+        applicationId = "com.sidpatchy.Starling"
         minSdk = 24
         targetSdk = 36
         versionCode = providers.gradleProperty("starlingVersionCode").get().toInt()
