@@ -218,9 +218,26 @@ fun StarlingApp(
     var showAddNetwork by rememberSaveable { mutableStateOf(false) }
     var addChannelToNetworkId by rememberSaveable { mutableStateOf<String?>(null) }
     var selectedDirectMessageId by rememberSaveable { mutableStateOf<String?>(null) }
-    var themePreference by rememberSaveable { mutableStateOf(ThemePreference.SYSTEM) }
-    var bubbleStyle by rememberSaveable { mutableStateOf(false) }
-    var denseMessages by rememberSaveable { mutableStateOf(false) }
+    var localThemePreference by rememberSaveable { mutableStateOf(ThemePreference.SYSTEM) }
+    var localBubbleStyle by rememberSaveable { mutableStateOf(false) }
+    var localDenseMessages by rememberSaveable { mutableStateOf(false) }
+    val repositoryUiSettings by remember(liveChatRepository) {
+        liveChatRepository?.uiSettings ?: flowOf(StarlingUiSettings())
+    }.collectAsState(initial = liveChatRepository?.uiSettings?.value ?: StarlingUiSettings())
+    val uiSettings = if (liveChatRepository == null) {
+        StarlingUiSettings(localThemePreference, localBubbleStyle, localDenseMessages)
+    } else {
+        repositoryUiSettings
+    }
+    val updateUiSettings: (StarlingUiSettings) -> Unit = { settings ->
+        if (liveChatRepository == null) {
+            localThemePreference = settings.themePreference
+            localBubbleStyle = settings.bubbleStyle
+            localDenseMessages = settings.denseMessages
+        } else {
+            liveChatRepository.saveUiSettings(settings)
+        }
+    }
     var selectedMember by remember { mutableStateOf<ChatMember?>(null) }
     var roomToManage by remember { mutableStateOf<ChatRoom?>(null) }
     var networkToInspect by remember { mutableStateOf<ChatNetwork?>(null) }
@@ -343,7 +360,7 @@ fun StarlingApp(
         selectedDirectMessageId?.let(repository::directMessages) ?: flowOf(emptyList())
     }.collectAsState(initial = emptyList())
 
-    StarlingTheme(themePreference) {
+    StarlingTheme(uiSettings.themePreference) {
         Surface(modifier = Modifier.fillMaxSize(), color = Canvas) {
             BoxWithConstraints(Modifier.fillMaxSize().safeDrawingPadding().imePadding()) {
                 val isWide = maxWidth >= 1000.dp
@@ -399,12 +416,12 @@ fun StarlingApp(
                                 },
                                 showSectionIndex = showSettingsIndex,
                                 onShowSectionIndex = { showSettingsIndex = true },
-                                themePreference = themePreference,
-                                onThemeChange = { themePreference = it },
-                                bubbleStyle = bubbleStyle,
-                                onBubbleStyleChange = { bubbleStyle = it },
-                                denseMessages = denseMessages,
-                                onDenseMessagesChange = { denseMessages = it },
+                                themePreference = uiSettings.themePreference,
+                                onThemeChange = { updateUiSettings(uiSettings.copy(themePreference = it)) },
+                                bubbleStyle = uiSettings.bubbleStyle,
+                                onBubbleStyleChange = { updateUiSettings(uiSettings.copy(bubbleStyle = it)) },
+                                denseMessages = uiSettings.denseMessages,
+                                onDenseMessagesChange = { updateUiSettings(uiSettings.copy(denseMessages = it)) },
                                 previewMode = previewMode,
                                 onPreviewModeChange = changePreviewMode,
                                 networks = networks,
@@ -492,8 +509,8 @@ fun StarlingApp(
                             DirectMessageContent(
                                 member = selectedDirectMessage,
                                 messages = directMessages,
-                                bubbleStyle = bubbleStyle,
-                                denseMessages = denseMessages,
+                                bubbleStyle = uiSettings.bubbleStyle,
+                                denseMessages = uiSettings.denseMessages,
                                 isLive = visibleDeliveryAddress != null,
                                 error = visibleConnectionError,
                                 onMemberClick = { selectedMember = selectedDirectMessage },
@@ -519,8 +536,8 @@ fun StarlingApp(
                                 messages = messages,
                                 members = members,
                                 contactMemberIds = contactMemberIds,
-                                bubbleStyle = bubbleStyle,
-                                denseMessages = denseMessages,
+                                bubbleStyle = uiSettings.bubbleStyle,
+                                denseMessages = uiSettings.denseMessages,
                                 compact = false,
                                 membersVisible = showMembersPanel,
                                 isLive = visibleConnectionState is ReticulumConnectionState.Connected && visibleHubNetworkId == selectedRoom.networkId,
@@ -622,12 +639,12 @@ fun StarlingApp(
                                 },
                                 showSectionIndex = showSettingsIndex,
                                 onShowSectionIndex = { showSettingsIndex = true },
-                                themePreference = themePreference,
-                                onThemeChange = { themePreference = it },
-                                bubbleStyle = bubbleStyle,
-                                onBubbleStyleChange = { bubbleStyle = it },
-                                denseMessages = denseMessages,
-                                onDenseMessagesChange = { denseMessages = it },
+                                themePreference = uiSettings.themePreference,
+                                onThemeChange = { updateUiSettings(uiSettings.copy(themePreference = it)) },
+                                bubbleStyle = uiSettings.bubbleStyle,
+                                onBubbleStyleChange = { updateUiSettings(uiSettings.copy(bubbleStyle = it)) },
+                                denseMessages = uiSettings.denseMessages,
+                                onDenseMessagesChange = { updateUiSettings(uiSettings.copy(denseMessages = it)) },
                                 previewMode = previewMode,
                                 onPreviewModeChange = changePreviewMode,
                                 networks = networks,
@@ -714,8 +731,8 @@ fun StarlingApp(
                             DirectMessageContent(
                                 member = selectedDirectMessage,
                                 messages = directMessages,
-                                bubbleStyle = bubbleStyle,
-                                denseMessages = denseMessages,
+                                bubbleStyle = uiSettings.bubbleStyle,
+                                denseMessages = uiSettings.denseMessages,
                                 isLive = visibleDeliveryAddress != null,
                                 error = visibleConnectionError,
                                 compact = true,
@@ -736,8 +753,8 @@ fun StarlingApp(
                                 messages = messages,
                                 members = members,
                                 contactMemberIds = contactMemberIds,
-                                bubbleStyle = bubbleStyle,
-                                denseMessages = denseMessages,
+                                bubbleStyle = uiSettings.bubbleStyle,
+                                denseMessages = uiSettings.denseMessages,
                                 compact = true,
                                 membersVisible = false,
                                 isLive = visibleConnectionState is ReticulumConnectionState.Connected && visibleHubNetworkId == selectedRoom.networkId,

@@ -43,6 +43,8 @@ class ReticulumChatRepository(
     private val restoredPreviewMode = (restoredState?.previewMode ?: true).also(preview::setPreviewMode)
     private val _nodeConfig = MutableStateFlow(restoredState?.nodeConfig)
     val nodeConfig: StateFlow<ReticulumNodeConfig?> = _nodeConfig.asStateFlow()
+    private val _uiSettings = MutableStateFlow(restoredState?.uiSettings ?: StarlingUiSettings())
+    val uiSettings: StateFlow<StarlingUiSettings> = _uiSettings.asStateFlow()
     private val _globalNickname = MutableStateFlow(normalizeStarlingNickname(restoredState?.globalNickname ?: "Starling"))
     val globalNickname: StateFlow<String> = _globalNickname.asStateFlow()
     private val _preferredHubNetworkId = MutableStateFlow(restoredState?.preferredHubNetworkId)
@@ -636,6 +638,12 @@ class ReticulumChatRepository(
         persistState()
     }
 
+    fun saveUiSettings(settings: StarlingUiSettings) {
+        if (_uiSettings.value == settings) return
+        _uiSettings.value = settings
+        persistState()
+    }
+
     fun saveGlobalNickname(value: String) {
         val nickname = normalizeStarlingNickname(value)
         if (_globalNickname.value == nickname) return
@@ -930,6 +938,7 @@ class ReticulumChatRepository(
             contactRequests = _contactRequests.value.filterNot { it.isPreview },
             roomMessages = liveMessages.value,
             directMessages = liveDirectMessages.value,
+            uiSettings = _uiSettings.value,
         )
         runCatching { stateStore.write(ChatStateCodec.encode(state)) }
             .onFailure { _lastError.value = "Could not save chat data: ${it.message ?: "storage error"}" }

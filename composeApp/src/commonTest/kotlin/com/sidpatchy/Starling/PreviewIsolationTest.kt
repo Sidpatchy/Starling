@@ -172,6 +172,21 @@ class PreviewIsolationTest {
     }
 
     @Test
+    fun appearanceSettingsPersistAndRestoreAcrossRepositoryRestart() = runBlocking {
+        val store = MemoryChatStateStore(ChatStateCodec.encode(PersistedChatState()))
+        val repository = ReticulumChatRepository(LocalPreviewChatRepository(), FakeReticulumTransport(), store)
+        val settings = StarlingUiSettings(ThemePreference.DARK, bubbleStyle = true, denseMessages = true)
+
+        repository.saveUiSettings(settings)
+        repository.close()
+
+        assertEquals(settings, ChatStateCodec.decode(store.value!!)!!.uiSettings)
+        val restored = ReticulumChatRepository(LocalPreviewChatRepository(), FakeReticulumTransport(), store)
+        assertEquals(settings, restored.uiSettings.value)
+        restored.close()
+    }
+
+    @Test
     fun receivedIdentityHashAppearsInIdentityStateAndPersists() = runBlocking {
         val store = MemoryChatStateStore(ChatStateCodec.encode(PersistedChatState(previewMode = false)))
         val transport = FakeReticulumTransport()

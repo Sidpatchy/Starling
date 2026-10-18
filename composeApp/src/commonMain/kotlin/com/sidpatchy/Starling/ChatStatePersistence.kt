@@ -6,6 +6,12 @@ interface ChatStateStore {
     fun write(value: String)
 }
 
+data class StarlingUiSettings(
+    val themePreference: ThemePreference = ThemePreference.SYSTEM,
+    val bubbleStyle: Boolean = false,
+    val denseMessages: Boolean = false,
+)
+
 data class PersistedChatState(
     val previewMode: Boolean = true,
     val networks: List<ChatNetwork> = emptyList(),
@@ -21,15 +27,19 @@ data class PersistedChatState(
     val activeHubNetworkId: String? = null,
     val localIdentityHash: String? = null,
     val globalNickname: String = "Starling",
+    val uiSettings: StarlingUiSettings = StarlingUiSettings(),
 )
 
 /** Small versioned text codec to avoid platform-specific serialization APIs. */
 object ChatStateCodec {
-    private const val HEADER = "STARLING_CHAT_STATE_V9"
+    private const val HEADER = "STARLING_CHAT_STATE_V10"
+    private const val PREVIOUS_HEADER = "STARLING_CHAT_STATE_V9"
     private val LEGACY_HEADERS = setOf(
         "STARLING_CHAT_STATE_V1", "STARLING_CHAT_STATE_V2", "STARLING_CHAT_STATE_V3", "STARLING_CHAT_STATE_V4",
         "STARLING_CHAT_STATE_V5", "STARLING_CHAT_STATE_V6", "STARLING_CHAT_STATE_V7", "STARLING_CHAT_STATE_V8",
+        PREVIOUS_HEADER,
     )
+    private val SYSTEM_EVENT_HEADERS = setOf(PREVIOUS_HEADER, HEADER)
 
     fun encode(state: PersistedChatState): String = buildString {
         appendLine(HEADER)
@@ -38,6 +48,12 @@ object ChatStateCodec {
         state.activeHubNetworkId?.let { appendRecord("L", it) }
         state.localIdentityHash?.let { appendRecord("J", it) }
         appendRecord("G", state.globalNickname)
+        appendRecord(
+            "A",
+            state.uiSettings.themePreference.name,
+            state.uiSettings.bubbleStyle.bit(),
+            state.uiSettings.denseMessages.bit(),
+        )
         state.nodeConfig?.let { config ->
             appendRecord("V", config.mode.name)
             config.tcpPeers.forEach { peer ->
@@ -96,6 +112,7 @@ object ChatStateCodec {
         var activeHubNetworkId: String? = null
         var localIdentityHash: String? = null
         var globalNickname = "Starling"
+        var uiSettings = StarlingUiSettings()
         var previewMode = true
 
         while (lines.hasNext()) {
@@ -107,6 +124,14 @@ object ChatStateCodec {
                 "L" -> activeHubNetworkId = decoded.firstOrNull()?.ifBlank { null }
                 "J" -> localIdentityHash = decoded.firstOrNull()?.ifBlank { null }
                 "G" -> globalNickname = decoded.firstOrNull()?.let(::normalizeStarlingNickname) ?: "Starling"
+                "A" -> if (decoded.size >= 3) {
+                    uiSettings = StarlingUiSettings(
+                        themePreference = runCatching { ThemePreference.valueOf(decoded[0]) }
+                            .getOrDefault(ThemePreference.SYSTEM),
+                        bubbleStyle = decoded[1] == "1",
+                        denseMessages = decoded[2] == "1",
+                    )
+                }
                 "V" -> nodeMode = decoded.firstOrNull()?.let { name ->
                     runCatching { ReticulumRuntimeMode.valueOf(name) }.getOrNull()
                 }
@@ -161,7 +186,7 @@ object ChatStateCodec {
                     val isSystem = decoded.getOrNull(9) == "1"
                     val systemEvents = when {
                         !isSystem -> emptyList()
-                        header == HEADER -> {
+                        header in SYSTEM_EVENT_HEADERS -> {
                             val eventCount = decoded.getOrNull(10)?.toIntOrNull()?.coerceAtLeast(0) ?: 0
                             decoded.drop(11).chunked(3).take(eventCount).mapNotNull { event ->
                                 if (event.size < 3) null else runCatching {
@@ -178,7 +203,7 @@ object ChatStateCodec {
                             ChatSystemEvent(kind, decoded[3], decoded[4])
                         }
                     }
-                    val messageText = if (header != HEADER && systemEvents.size > 1) {
+                    val messageText = if (header !in SYSTEM_EVENT_HEADERS && systemEvents.size > 1) {
                         summarizeSystemEvents(systemEvents)
                     } else {
                         decoded[3]
@@ -217,6 +242,7 @@ object ChatStateCodec {
             activeHubNetworkId = activeHubNetworkId,
             localIdentityHash = localIdentityHash,
             globalNickname = globalNickname,
+            uiSettings = uiSettings,
         )
     }
 

@@ -11,7 +11,7 @@ class ChatStateCodecTest {
         val state = PersistedChatState(previewMode = false, preferredHubNetworkId = "hub")
 
         assertEquals(
-            "STARLING_CHAT_STATE_V9\nP\tMA==\nU\taHVi\nG\tU3Rhcmxpbmc=\n",
+            "STARLING_CHAT_STATE_V10\nP\tMA==\nU\taHVi\nG\tU3Rhcmxpbmc=\nA\tU1lTVEVN\tMA==\tMA==\n",
             ChatStateCodec.encode(state),
         )
     }
@@ -53,6 +53,7 @@ class ChatStateCodecTest {
             activeHubNetworkId = "hub",
             localIdentityHash = "11223344556677889900aabbccddeeff",
             globalNickname = "Mesh 🌍",
+            uiSettings = StarlingUiSettings(ThemePreference.DARK, bubbleStyle = true, denseMessages = true),
         )
 
         assertEquals(state, ChatStateCodec.decode(ChatStateCodec.encode(state)))
@@ -111,7 +112,7 @@ class ChatStateCodecTest {
 
     @Test
     fun legacyHeadersAndMessagesWithoutAuthorIdsRemainReadable() {
-        for (version in 1..8) {
+        for (version in 1..9) {
             val state = ChatStateCodec.decode(
                 "STARLING_CHAT_STATE_V$version\n" +
                     "P\tMA==\n" +
@@ -140,12 +141,16 @@ class ChatStateCodecTest {
     fun unpaddedFieldsRemainReadableButInvalidCharactersAreRejected() {
         assertEquals("abc", ChatStateCodec.decode("STARLING_CHAT_STATE_V9\nJ\tYWJj\n")?.localIdentityHash)
         assertNull(ChatStateCodec.decode("STARLING_CHAT_STATE_V9\nJ\tYW!Jj\n")?.localIdentityHash)
+        assertEquals(
+            StarlingUiSettings(),
+            ChatStateCodec.decode("STARLING_CHAT_STATE_V9\nP\tMA==\n")?.uiSettings,
+        )
     }
 
     @Test
     fun unknownHeadersAreRejectedAndUnknownOrIncompleteRecordsAreIgnored() {
         assertNull(ChatStateCodec.decode(""))
-        assertNull(ChatStateCodec.decode("STARLING_CHAT_STATE_V10\n"))
+        assertNull(ChatStateCodec.decode("STARLING_CHAT_STATE_V11\n"))
         assertNull(ChatStateCodec.decode("not a chat state"))
         assertEquals(
             PersistedChatState(),

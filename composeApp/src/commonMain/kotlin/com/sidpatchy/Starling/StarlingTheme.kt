@@ -19,7 +19,7 @@ internal data class StarlingPalette(
     val paleAccent: Color,
 )
 
-internal enum class ThemePreference(val label: String) {
+enum class ThemePreference(val label: String) {
     SYSTEM("System"),
     LIGHT("Light"),
     DARK("Dark"),
