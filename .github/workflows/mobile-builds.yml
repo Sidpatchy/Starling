@@ -136,10 +136,11 @@ jobs:
           derived_data="$RUNNER_TEMP/StarlingDerivedData"
           xcodebuild \
             -project xtool/.xtool-tmp/Starling.xcodeproj \
-            -target Starling-App \
+            -scheme Starling-App \
             -configuration Release \
             -sdk iphoneos \
             -arch arm64 \
+            -destination 'generic/platform=iOS' \
             -derivedDataPath "$derived_data" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \

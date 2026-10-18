@@ -37,10 +37,11 @@ bash packaging/ios/prepare-python-runtime.sh
 STARLING_COMPOSE_CONFIGURATION=release xtool dev generate-xcode-project
 STARLING_COMPOSE_CONFIGURATION=release xcodebuild \
   -project xtool/.xtool-tmp/Starling.xcodeproj \
-  -target Starling-App \
+  -scheme Starling-App \
   -configuration Release \
   -sdk iphoneos \
   -arch arm64 \
+  -destination 'generic/platform=iOS' \
   -derivedDataPath .build/StarlingDerivedData \
   CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
 app_path="$(find .build/StarlingDerivedData/Build/Products/Release-iphoneos -maxdepth 1 -type d -name '*.app' -print -quit)"
