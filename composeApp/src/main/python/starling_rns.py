@@ -398,13 +398,17 @@ def _install_android_tcp_rnode_compat():
 
 def stop_node():
     global _reticulum, _mode, _tcp_peers, _rnode_interfaces, _rpc_key_hex, _config_dir
-    if _reticulum is not None:
-        import RNS
-        RNS.Reticulum.exit_handler()
-    _reticulum = None
-    _mode = None
-    _tcp_peers = []
-    _rnode_interfaces = []
-    _rpc_key_hex = None
-    _config_dir = None
+    try:
+        if _reticulum is not None:
+            import RNS
+            RNS.Reticulum.exit_handler()
+    finally:
+        # Keep the bridge reusable even if RNS reports a shutdown error. The
+        # caller still receives that exception and can surface it to the user.
+        _reticulum = None
+        _mode = None
+        _tcp_peers = []
+        _rnode_interfaces = []
+        _rpc_key_hex = None
+        _config_dir = None
     return True

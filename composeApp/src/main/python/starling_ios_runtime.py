@@ -79,38 +79,67 @@ def _start(fields):
     _rns = starling_rns
     _rrc = starling_rrc
     _lxmf = starling_lxmf
-    json.loads(_rns.start_node(data_dir, mode, peers, rpc_key_hex, radios, allow_reconfigure=True))
-
-    lxmf_error = None
     try:
-        _lxmf.start(data_dir)
-    except Exception as error:
-        lxmf_error = str(error) or "Could not start LXMF."
+        json.loads(_rns.start_node(data_dir, mode, peers, rpc_key_hex, radios, allow_reconfigure=True))
 
-    _last_self_event = None
-    ready = status_line(_rns).replace("STATUS\t", "READY\t", 1)
-    response = [ready]
-    if lxmf_error:
-        response.append("EVENT\tLXMF_ERROR\t{}\t".format(_encode(lxmf_error)))
-    events = _emit_events(include_current=True)
-    if events:
-        response.append(events)
-    return "\n".join(response)
+        lxmf_error = None
+        try:
+            _lxmf.start(data_dir)
+        except Exception as error:
+            lxmf_error = str(error) or "Could not start LXMF."
+
+        _last_self_event = None
+        ready = status_line(_rns).replace("STATUS\t", "READY\t", 1)
+        response = [ready]
+        if lxmf_error:
+            response.append("EVENT\tLXMF_ERROR\t{}\t".format(_encode(lxmf_error)))
+        events = _emit_events(include_current=True)
+        if events:
+            response.append(events)
+        return "\n".join(response)
+    except Exception as error:
+        # Native startup can partially initialize Reticulum before failing.
+        # Release every imported component, but preserve the startup error as
+        # the response so cleanup problems do not hide the actionable cause.
+        for module, method in (
+            (starling_rrc, "disconnect"),
+            (starling_lxmf, "stop"),
+            (starling_rns, "disconnect_node"),
+        ):
+            cleanup = getattr(module, method, None)
+            if cleanup is None:
+                continue
+            try:
+                cleanup()
+            except Exception:
+                pass
+        _rns = _rrc = _lxmf = None
+        _last_self_event = None
+        raise error
 
 
 def _stop():
     global _rns, _rrc, _lxmf, _last_self_event
+    errors = []
     try:
-        if _rrc is not None:
-            _rrc.disconnect()
-        if _lxmf is not None:
-            _lxmf.stop()
-        if _rns is not None:
-            _rns.disconnect_node()
+        for label, stop in (
+            ("RRC", _rrc.disconnect if _rrc is not None else None),
+            ("LXMF", _lxmf.stop if _lxmf is not None else None),
+            ("Reticulum", _rns.disconnect_node if _rns is not None else None),
+        ):
+            if stop is None:
+                continue
+            try:
+                stop()
+            except Exception as error:
+                errors.append("{} shutdown failed: {}".format(
+                    label, str(error) or error.__class__.__name__))
     finally:
         _rns = _rrc = _lxmf = None
         _last_self_event = None
-    return "STOPPED"
+    response = ["EVENT\tERROR\t{}\t".format(_encode(message)) for message in errors]
+    response.append("STOPPED")
+    return "\n".join(response)
 
 
 def invoke(command):

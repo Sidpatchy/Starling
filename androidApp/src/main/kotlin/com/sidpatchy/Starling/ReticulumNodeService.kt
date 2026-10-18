@@ -32,7 +32,7 @@ class ReticulumNodeService : Service() {
     private var tcpPeersJson = "[]"
     private var rnodeInterfacesJson = "[]"
     private var rpcKeyHex = ""
-    private val rnodeBluetoothBridge by lazy { AndroidRNodeBluetoothBridge(this) }
+    private val rnodeBluetoothBridge = AndroidRNodeBluetoothBridge(this)
     private var pythonModule: com.chaquo.python.PyObject? = null
     private var rrcModule: com.chaquo.python.PyObject? = null
     private var lxmfModule: com.chaquo.python.PyObject? = null
@@ -43,6 +43,7 @@ class ReticulumNodeService : Service() {
     private var lastNodeTcpStatusJson = "[]"
     private var lastNodeRNodeStatusJson = "[]"
     @Volatile private var stopping = false
+    @Volatile private var lifecycleGeneration = 0L
 
     private val pollStatus = object : Runnable {
         override fun run() {
@@ -92,17 +93,24 @@ class ReticulumNodeService : Service() {
         rnodeInterfacesJson = intent.getStringExtra(EXTRA_RNODE_INTERFACES).orEmpty().ifBlank { "[]" }
         rpcKeyHex = intent.getStringExtra(EXTRA_RPC_KEY).orEmpty()
 
+        val generation = lifecycleGeneration + 1
+        lifecycleGeneration = generation
+        stopping = false
         startForegroundCompat()
         publish(STATE_STARTING)
 
         rrcWorker.execute {
             try {
+                if (generation != lifecycleGeneration) return@execute
                 startBleRNodeBridgeIfNeeded()
+                if (generation != lifecycleGeneration) return@execute
                 if (!Python.isStarted()) Python.start(AndroidPlatform(this))
+                if (generation != lifecycleGeneration) return@execute
                 val module = Python.getInstance().getModule("starling_rns")
                 pythonModule = module
                 rrcModule = Python.getInstance().getModule("starling_rrc")
                 lxmfModule = Python.getInstance().getModule("starling_lxmf")
+                if (generation != lifecycleGeneration) return@execute
                 val result = module.callAttr(
                     "start_node",
                     noBackupFilesDir.resolve("reticulum").absolutePath,
@@ -111,6 +119,7 @@ class ReticulumNodeService : Service() {
                     rpcKeyHex,
                     rnodeInterfacesJson,
                 ).toString()
+                if (generation != lifecycleGeneration) return@execute
                 try {
                     lxmfModule?.callAttr("start", noBackupFilesDir.resolve("reticulum").absolutePath)
                 } catch (error: Exception) {
@@ -119,6 +128,7 @@ class ReticulumNodeService : Service() {
                 }
                 val runtimeStatus = JSONObject(result)
                 handler.post {
+                    if (generation != lifecycleGeneration) return@post
                     publishRuntimeStatus(runtimeStatus)
                     handler.removeCallbacks(pollStatus)
                     handler.removeCallbacks(pollRrcEvents)
@@ -129,6 +139,7 @@ class ReticulumNodeService : Service() {
                 Log.e(TAG, "Reticulum startup failed", error)
                 rnodeBluetoothBridge.stop()
                 handler.post {
+                    if (generation != lifecycleGeneration) return@post
                     publish(STATE_FAILED, message = error.message ?: error.javaClass.simpleName)
                     handler.removeCallbacks(pollStatus)
                     stopForegroundCompat()
@@ -139,21 +150,28 @@ class ReticulumNodeService : Service() {
     }
 
     private fun stopNode(startId: Int) {
+        lifecycleGeneration += 1
         stopping = true
         handler.removeCallbacks(pollStatus)
         handler.removeCallbacks(pollRrcEvents)
+        // Interrupt a blocking BLE discovery wait immediately. The RNS worker
+        // will finish its current startup step and then run the queued cleanup.
+        rnodeBluetoothBridge.stop()
         rrcWorker.execute {
-            try {
-                rrcModule?.callAttr("disconnect")
-                drainRrcEvents()
-                lxmfModule?.callAttr("stop")
-                drainLxmfEvents()
-                pythonModule?.callAttr("stop_node")
-            } catch (error: Exception) {
-                Log.w(TAG, "Error while shutting down Reticulum", error)
-            } finally {
-                rnodeBluetoothBridge.stop()
+            listOf(
+                "RRC" to { rrcModule?.callAttr("disconnect"); drainRrcEvents(); Unit },
+                "LXMF" to { lxmfModule?.callAttr("stop"); drainLxmfEvents(); Unit },
+                "Reticulum" to { pythonModule?.callAttr("stop_node"); Unit },
+            ).forEach { (component, stop) ->
+                try {
+                    stop()
+                } catch (error: Exception) {
+                    Log.w(TAG, "$component shutdown failed", error)
+                    publishRrcError("$component shutdown failed: ${error.message ?: error.javaClass.simpleName}")
+                }
             }
+            runCatching { rnodeBluetoothBridge.stop() }
+                .onFailure { Log.w(TAG, "BLE RNode bridge shutdown failed", it) }
             handler.post {
                 publish(STATE_STOPPED)
                 publishRrcEventLine("LOCAL_ADDRESS\t")

@@ -269,6 +269,16 @@ internal class AndroidRNodeBluetoothBridge(context: Context) {
 
     fun stop() {
         synchronized(lock) {
+            // A service stop can arrive while start() is waiting for discovery,
+            // service inspection, or notification subscription. Wake that
+            // caller with a failure so it cannot mistake cancellation for a
+            // successfully initialized bridge.
+            if (!startupResolved) {
+                startupResolved = true
+                startupError = "BLE RNode startup was cancelled."
+                startupLatch?.countDown()
+                startupLatch = null
+            }
             running = false
             runCatching { scanner?.stopScan(scanCallback) }
             scanner = null
@@ -284,8 +294,6 @@ internal class AndroidRNodeBluetoothBridge(context: Context) {
             pendingBleWrites.clear()
             pendingTcpWrites.clear()
             writeInProgress = false
-            startupLatch?.countDown()
-            startupLatch = null
         }
     }
 

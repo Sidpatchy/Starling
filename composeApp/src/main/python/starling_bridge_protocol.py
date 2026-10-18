@@ -5,7 +5,7 @@ import json
 
 
 def decode(value):
-    return base64.b64decode(value.encode("ascii")).decode("utf-8")
+    return base64.b64decode(value.encode("ascii"), validate=True).decode("utf-8")
 
 
 def encode(value):
@@ -49,7 +49,12 @@ def parse_start_request(fields, platform="desktop"):
             "coding_rate": int(fields[offset + 5]),
         })
 
-    mode = "embedded" if fields[1] == "EMBEDDED" else "existing_shared_instance"
+    if fields[1] == "EMBEDDED":
+        mode = "embedded"
+    elif fields[1] == "EXISTING_SHARED_INSTANCE":
+        mode = "existing_shared_instance"
+    else:
+        raise ValueError("Unsupported Reticulum runtime mode.")
     return mode, decode(fields[2]), peers, radios
 
 
@@ -87,6 +92,8 @@ def dispatch_rrc(command, rrc):
     elif action == "RRC_PART" and len(fields) == 2:
         rrc.part(decode(fields[1]))
     elif action == "RRC_SEND" and len(fields) == 4:
+        if fields[3] not in ("0", "1"):
+            raise ValueError("Invalid RRC action flag")
         rrc.send(decode(fields[1]), decode(fields[2]), fields[3] == "1")
     else:
         raise ValueError("Invalid RRC command")

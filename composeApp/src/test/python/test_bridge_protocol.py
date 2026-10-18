@@ -17,6 +17,35 @@ import starling_rrc as rrc
 
 
 class BridgeProtocolTest(unittest.TestCase):
+    def test_reticulum_shutdown_clears_cached_state_even_when_exit_handler_fails(self):
+        reticulum = Mock()
+        reticulum.exit_handler.side_effect = RuntimeError("shutdown failed")
+        rns = types.ModuleType("RNS")
+        rns.Reticulum = reticulum
+        previous_state = (
+            rns_bridge._reticulum, rns_bridge._mode, rns_bridge._tcp_peers,
+            rns_bridge._rnode_interfaces, rns_bridge._rpc_key_hex, rns_bridge._config_dir,
+        )
+        rns_bridge._reticulum = object()
+        rns_bridge._mode = "embedded"
+        rns_bridge._tcp_peers = [{"host": "localhost", "port": 4242}]
+        rns_bridge._rnode_interfaces = [{"port": "radio"}]
+        rns_bridge._rpc_key_hex = "private"
+        rns_bridge._config_dir = "/private/data"
+        try:
+            with patch.dict(sys.modules, {"RNS": rns}):
+                with self.assertRaisesRegex(RuntimeError, "shutdown failed"):
+                    rns_bridge.stop_node()
+            self.assertEqual(
+                (rns_bridge._reticulum, rns_bridge._mode, rns_bridge._tcp_peers,
+                 rns_bridge._rnode_interfaces, rns_bridge._rpc_key_hex, rns_bridge._config_dir),
+                (None, None, [], [], None, None),
+            )
+            reticulum.exit_handler.assert_called_once_with()
+        finally:
+            (rns_bridge._reticulum, rns_bridge._mode, rns_bridge._tcp_peers,
+             rns_bridge._rnode_interfaces, rns_bridge._rpc_key_hex, rns_bridge._config_dir) = previous_state
+
     def test_ios_ble_rnode_uses_native_tcp_proxy_and_preserves_configured_port(self):
         radios = [{
             "port": "ble://RNode Field Unit", "frequency_hz": 915000000,
@@ -150,6 +179,11 @@ class BridgeProtocolTest(unittest.TestCase):
         text = "Hello 🌍\twith tabs\nand lines"
         self.assertEqual(protocol.decode(protocol.encode(text)), text)
 
+    def test_base64_decoder_rejects_invalid_characters_padding_and_utf8(self):
+        for value in ["%%%", "YQ", "/w=="]:
+            with self.subTest(value=value), self.assertRaises((ValueError, UnicodeDecodeError)):
+                protocol.decode(value)
+
     def test_start_request_parses_tcp_ifac_and_radio_fields(self):
         mode, key, peers, radios = protocol.parse_start_request(self.mixed_start_fields())
         self.assertEqual(mode, "embedded")
@@ -167,6 +201,11 @@ class BridgeProtocolTest(unittest.TestCase):
         key = "0123456789abcdef" * 2
         fields = ["START", "EXISTING_SHARED_INSTANCE", protocol.encode(key), "4", "0", "0"]
         self.assertEqual(protocol.parse_start_request(fields), ("existing_shared_instance", key, [], []))
+
+    def test_start_request_rejects_unknown_runtime_mode(self):
+        fields = ["START", "SHARED", "", "4", "0", "0"]
+        with self.assertRaisesRegex(ValueError, "Unsupported Reticulum runtime mode"):
+            protocol.parse_start_request(fields)
 
     def test_invalid_start_headers_versions_counts_and_field_lengths_are_rejected(self):
         base = ["START", "EMBEDDED", "", "4", "0", "0"]
@@ -220,13 +259,18 @@ class BridgeProtocolTest(unittest.TestCase):
         protocol.dispatch_rrc("RRC_JOIN\t" + protocol.encode("general"), rrc)
         protocol.dispatch_rrc("RRC_PART\t" + protocol.encode("general"), rrc)
         protocol.dispatch_rrc("RRC_SEND\t{}\t{}\t1".format(protocol.encode("general"), protocol.encode(body)), rrc)
+        protocol.dispatch_rrc("RRC_SEND\t{}\t{}\t0".format(protocol.encode("general"), protocol.encode(body)), rrc)
         protocol.dispatch_rrc("RRC_DISCONNECT", rrc)
         rrc.connect.assert_called_once_with("hub", "Mesh 🌍")
         rrc.join.assert_called_once_with("general")
         rrc.part.assert_called_once_with("general")
-        rrc.send.assert_called_once_with("general", body, True)
+        self.assertEqual(rrc.send.call_args_list, [
+            unittest.mock.call("general", body, True),
+            unittest.mock.call("general", body, False),
+        ])
         rrc.disconnect.assert_called_once_with()
-        for command in ["UNKNOWN", "RRC_CONNECT", "RRC_SEND\tZg=="]:
+        for command in ["UNKNOWN", "RRC_CONNECT", "RRC_SEND\tZg==",
+                        "RRC_SEND\tZg==\tYQ==\ttrue", "RRC_SEND\tZg==\tYQ==\t2"]:
             with self.subTest(command=command), self.assertRaises(ValueError):
                 protocol.dispatch_rrc(command, rrc)
 
@@ -270,6 +314,42 @@ class BridgeProtocolTest(unittest.TestCase):
         self.assertEqual(response, "ERROR\t" + protocol.encode("Unsupported iOS bridge protocol version."))
         rns.start_node.assert_not_called()
 
+    def test_ios_startup_failure_cleans_up_partial_runtime_and_preserves_start_error(self):
+        rns, rrc, lxmf = self.fake_runtime_modules()
+        rns.start_node.side_effect = RuntimeError("radio initialization failed")
+        rrc.disconnect.side_effect = RuntimeError("room cleanup failed")
+        lxmf.stop.side_effect = RuntimeError("LXMF cleanup failed")
+        command = "\t".join(["IOS_START", protocol.encode("/private/data")] + self.mixed_start_fields()[1:])
+        with patch.dict(sys.modules, {"starling_rns": rns, "starling_rrc": rrc, "starling_lxmf": lxmf}), \
+                patch.multiple(ios_runtime, _rns=None, _rrc=None, _lxmf=None, _last_self_event="stale"):
+            response = ios_runtime.invoke(command)
+            self.assertEqual(response, "ERROR\t" + protocol.encode("radio initialization failed"))
+            self.assertIsNone(ios_runtime._rns)
+            self.assertIsNone(ios_runtime._rrc)
+            self.assertIsNone(ios_runtime._lxmf)
+            self.assertIsNone(ios_runtime._last_self_event)
+
+        rrc.disconnect.assert_called_once_with()
+        lxmf.stop.assert_called_once_with()
+        rns.disconnect_node.assert_called_once_with()
+
+    def test_ios_shutdown_attempts_every_component_after_an_earlier_failure(self):
+        rns, rrc, lxmf = self.fake_runtime_modules()
+        rrc.disconnect.side_effect = RuntimeError("room close failed")
+        lxmf.stop.side_effect = RuntimeError("LXMF close failed")
+        with patch.dict(sys.modules, {"starling_rns": rns, "starling_rrc": rrc, "starling_lxmf": lxmf}), \
+                patch.multiple(ios_runtime, _rns=rns, _rrc=rrc, _lxmf=lxmf, _last_self_event="stale"):
+            response = ios_runtime.invoke("STOP")
+
+        self.assertTrue(response.endswith("STOPPED"))
+        self.assertIn(protocol.encode("RRC shutdown failed: room close failed"), response)
+        self.assertIn(protocol.encode("LXMF shutdown failed: LXMF close failed"), response)
+        rns.disconnect_node.assert_called_once_with()
+        self.assertIsNone(ios_runtime._rns)
+        self.assertIsNone(ios_runtime._rrc)
+        self.assertIsNone(ios_runtime._lxmf)
+        self.assertIsNone(ios_runtime._last_self_event)
+
     def test_desktop_adapter_preserves_trailing_empty_start_and_command_fields(self):
         script = """
 import json, sys
@@ -277,6 +357,8 @@ from unittest.mock import Mock
 rns, rrc, lxmf = Mock(), Mock(), Mock()
 rns.status.return_value = json.dumps({"running": True, "mode": "EMBEDDED"})
 rrc.poll_event_lines.return_value = lxmf.poll_event_lines.return_value = ""
+rrc.disconnect.side_effect = RuntimeError("room close failed")
+lxmf.stop.side_effect = RuntimeError("LXMF close failed")
 sys.modules.update(starling_rns=rns, starling_rrc=rrc, starling_lxmf=lxmf)
 import starling_rns_service
 code = starling_rns_service.main()
@@ -285,6 +367,8 @@ rns.start_node.assert_called_once_with(sys.argv[1], "embedded", [
 ], "", [])
 lxmf.set_display_name.assert_called_once_with("")
 rns.stop_node.assert_called_once_with()
+rrc.disconnect.assert_called_once_with()
+lxmf.stop.assert_called_once_with()
 raise SystemExit(code)
 """
         command = "\t".join(["START", "EMBEDDED", "", "4", "1", "0", protocol.encode("localhost"), "4242", "", ""])
@@ -299,7 +383,39 @@ raise SystemExit(code)
                 diagnostics = result.stdout + result.stderr + log.read()
         self.assertEqual(result.returncode, 0, diagnostics)
         self.assertTrue(result.stdout.startswith("READY\tRUNNING\t"), diagnostics)
+        shutdown_events = [line.split("\t") for line in result.stdout.splitlines() if line.startswith("EVENT\tERROR\t")]
+        self.assertEqual([protocol.decode(fields[2]) for fields in shutdown_events], [
+            "RRC shutdown failed: room close failed",
+            "LXMF shutdown failed: LXMF close failed",
+        ], diagnostics)
         self.assertTrue(result.stdout.endswith("STOPPED\n"), diagnostics)
+
+    def test_desktop_startup_failure_cleans_up_initialized_runtime_modules(self):
+        script = """
+import sys
+from unittest.mock import Mock
+rns, rrc, lxmf = Mock(), Mock(), Mock()
+rns.start_node.side_effect = RuntimeError("interface initialization failed")
+sys.modules.update(starling_rns=rns, starling_rrc=rrc, starling_lxmf=lxmf)
+import starling_rns_service
+code = starling_rns_service.main()
+rns.stop_node.assert_called_once_with()
+rrc.disconnect.assert_called_once_with()
+lxmf.stop.assert_called_once_with()
+raise SystemExit(code)
+"""
+        command = "\t".join(["START", "EMBEDDED", "", "4", "0", "0"])
+        environment = os.environ.copy()
+        environment["PYTHONPATH"] = os.path.dirname(protocol.__file__)
+        with tempfile.TemporaryDirectory(prefix="starling-bridge-test-") as data_dir:
+            result = subprocess.run(
+                [sys.executable, "-c", script, data_dir], input=command + "\n",
+                text=True, capture_output=True, env=environment, timeout=10,
+            )
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        fields = result.stdout.strip().split("\t")
+        self.assertEqual(fields[:1], ["ERROR"])
+        self.assertEqual(protocol.decode(fields[1]), "interface initialization failed")
 
 
 if __name__ == "__main__":

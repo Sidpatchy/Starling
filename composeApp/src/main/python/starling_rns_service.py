@@ -41,6 +41,7 @@ def main():
         emit("ERROR\t" + encode(str(error)))
         return 2
 
+    starling_rns = starling_rrc = starling_lxmf = None
     try:
         import starling_rns
         import starling_rrc
@@ -52,6 +53,22 @@ def main():
         except Exception as error:
             lxmf_start_error = str(error) or "Could not start LXMF"
     except Exception as error:
+        # RNS can allocate interfaces or worker threads before reporting a
+        # startup error. Tear down every module that imported successfully so
+        # a failed launch does not leave a half-running sidecar behind.
+        for label, module, method in (
+            ("RRC", starling_rrc, "disconnect"),
+            ("LXMF", starling_lxmf, "stop"),
+            ("Reticulum", starling_rns, "stop_node"),
+        ):
+            cleanup = getattr(module, method, None) if module is not None else None
+            if cleanup is None:
+                continue
+            try:
+                cleanup()
+            except Exception as cleanup_error:
+                log_file.write("{} startup cleanup failed: {}\n".format(
+                    label, str(cleanup_error) or cleanup_error.__class__.__name__))
         emit("ERROR\t" + encode(str(error) or error.__class__.__name__))
         return 1
 
@@ -68,12 +85,19 @@ def main():
             command = None
 
         if command in ("STOP", "EOF"):
-            try:
-                starling_rrc.disconnect()
-                starling_lxmf.stop()
-                starling_rns.stop_node()
-            finally:
-                emit("STOPPED")
+            # A failure to close the optional room or LXMF client must not leave
+            # Reticulum running after the host has asked the sidecar to stop.
+            for label, stop in (
+                ("RRC", starling_rrc.disconnect),
+                ("LXMF", starling_lxmf.stop),
+                ("Reticulum", starling_rns.stop_node),
+            ):
+                try:
+                    stop()
+                except Exception as error:
+                    emit("EVENT\tERROR\t{}\t".format(encode("{} shutdown failed: {}".format(
+                        label, str(error) or error.__class__.__name__))))
+            emit("STOPPED")
             return 0
         if command and command != "STATUS":
             try:
