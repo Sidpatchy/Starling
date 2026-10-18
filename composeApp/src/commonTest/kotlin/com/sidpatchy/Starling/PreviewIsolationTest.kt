@@ -175,7 +175,12 @@ class PreviewIsolationTest {
     fun appearanceSettingsPersistAndRestoreAcrossRepositoryRestart() = runBlocking {
         val store = MemoryChatStateStore(ChatStateCodec.encode(PersistedChatState()))
         val repository = ReticulumChatRepository(LocalPreviewChatRepository(), FakeReticulumTransport(), store)
-        val settings = StarlingUiSettings(ThemePreference.DARK, bubbleStyle = true, denseMessages = true)
+        val settings = StarlingUiSettings(
+            ThemePreference.DARK,
+            bubbleStyle = true,
+            denseMessages = true,
+            timestampTimeZone = TimestampTimeZonePreference.UTC,
+        )
 
         repository.saveUiSettings(settings)
         repository.close()

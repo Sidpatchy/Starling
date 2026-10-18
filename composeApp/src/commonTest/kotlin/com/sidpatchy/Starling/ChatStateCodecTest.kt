@@ -11,7 +11,7 @@ class ChatStateCodecTest {
         val state = PersistedChatState(previewMode = false, preferredHubNetworkId = "hub")
 
         assertEquals(
-            "STARLING_CHAT_STATE_V10\nP\tMA==\nU\taHVi\nG\tU3Rhcmxpbmc=\nA\tU1lTVEVN\tMA==\tMA==\n",
+            "STARLING_CHAT_STATE_V11\nP\tMA==\nU\taHVi\nG\tU3Rhcmxpbmc=\nA\tU1lTVEVN\tMA==\tMA==\tU1lTVEVN\n",
             ChatStateCodec.encode(state),
         )
     }
@@ -31,9 +31,10 @@ class ChatStateCodecTest {
             authorId = member.id,
             isSystem = true,
             systemEvents = listOf(
-                ChatSystemEvent(ChatSystemEventKind.NOTICE, "Hub message", "12:33"),
-                ChatSystemEvent(ChatSystemEventKind.NOTICE, text, "12:34"),
+                ChatSystemEvent(ChatSystemEventKind.NOTICE, "Hub message", "12:33", 45_180_000L),
+                ChatSystemEvent(ChatSystemEventKind.NOTICE, text, "12:34", 45_240_000L),
             ),
+            timestampMillis = 45_240_000L,
         )
         val state = PersistedChatState(
             previewMode = false,
@@ -42,7 +43,9 @@ class ChatStateCodecTest {
             members = listOf(member, ChatMember("self", "You", isSelf = true)),
             contacts = setOf(member.id),
             blockedMembers = setOf("blocked"),
-            contactRequests = listOf(ChatContactRequest("request", member, text, "12:35", isPreview = true)),
+            contactRequests = listOf(
+                ChatContactRequest("request", member, text, "12:35", isPreview = true, timestampMillis = 45_300_000L),
+            ),
             roomMessages = mapOf("room" to listOf(message)),
             directMessages = mapOf(member.id to listOf(message.copy(id = "direct", deliveryState = null, authorId = null))),
             nodeConfig = ReticulumNodeConfig(
@@ -53,7 +56,12 @@ class ChatStateCodecTest {
             activeHubNetworkId = "hub",
             localIdentityHash = "11223344556677889900aabbccddeeff",
             globalNickname = "Mesh 🌍",
-            uiSettings = StarlingUiSettings(ThemePreference.DARK, bubbleStyle = true, denseMessages = true),
+            uiSettings = StarlingUiSettings(
+                ThemePreference.DARK,
+                bubbleStyle = true,
+                denseMessages = true,
+                timestampTimeZone = TimestampTimeZonePreference.UTC,
+            ),
         )
 
         assertEquals(state, ChatStateCodec.decode(ChatStateCodec.encode(state)))
@@ -78,12 +86,14 @@ class ChatStateCodecTest {
         val firstSystem = ChatMessage(
             id = "system-1", author = "System", text = "Room is unregistered", time = "20:00",
             authorId = "hub", isSystem = true,
-            systemEvents = listOf(ChatSystemEvent(ChatSystemEventKind.NOTICE, "Room is unregistered", "20:00")),
+            systemEvents = listOf(ChatSystemEvent(ChatSystemEventKind.NOTICE, "Room is unregistered", "20:00", 72_000_000L)),
+            timestampMillis = 72_000_000L,
         )
         val secondSystem = ChatMessage(
             id = "system-2", author = "System", text = "Alice joined #general", time = "20:01",
             authorId = "alice", isSystem = true,
-            systemEvents = listOf(ChatSystemEvent(ChatSystemEventKind.JOIN, "Alice joined #general", "20:01")),
+            systemEvents = listOf(ChatSystemEvent(ChatSystemEventKind.JOIN, "Alice joined #general", "20:01", 72_060_000L)),
+            timestampMillis = 72_060_000L,
         )
 
         val collapsed = collapseRepeatedSystemMessage(listOf(firstSystem), secondSystem)
@@ -91,6 +101,7 @@ class ChatStateCodecTest {
         assertEquals(1, collapsed.size)
         assertEquals("1 user has joined, and 1 server notice", collapsed.single().text)
         assertEquals(listOf("Room is unregistered", "Alice joined #general"), collapsed.single().systemEvents.map { it.text })
+        assertEquals(72_060_000L, collapsed.single().timestampMillis)
     }
 
     @Test
@@ -112,7 +123,7 @@ class ChatStateCodecTest {
 
     @Test
     fun legacyHeadersAndMessagesWithoutAuthorIdsRemainReadable() {
-        for (version in 1..9) {
+        for (version in 1..10) {
             val state = ChatStateCodec.decode(
                 "STARLING_CHAT_STATE_V$version\n" +
                     "P\tMA==\n" +
@@ -150,7 +161,7 @@ class ChatStateCodecTest {
     @Test
     fun unknownHeadersAreRejectedAndUnknownOrIncompleteRecordsAreIgnored() {
         assertNull(ChatStateCodec.decode(""))
-        assertNull(ChatStateCodec.decode("STARLING_CHAT_STATE_V11\n"))
+        assertNull(ChatStateCodec.decode("STARLING_CHAT_STATE_V12\n"))
         assertNull(ChatStateCodec.decode("not a chat state"))
         assertEquals(
             PersistedChatState(),

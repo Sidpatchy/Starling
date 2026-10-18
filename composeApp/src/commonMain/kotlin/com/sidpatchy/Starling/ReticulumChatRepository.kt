@@ -498,6 +498,7 @@ class ReticulumChatRepository(
                 author = request.sender.displayName,
                 text = request.message,
                 time = request.time,
+                timestampMillis = request.timestampMillis,
             )
             val current = liveDirectMessages.value[request.sender.id].orEmpty()
             if (current.none { it.id == acceptedMessage.id }) {
@@ -755,15 +756,16 @@ class ReticulumChatRepository(
         kind: ChatSystemEventKind = ChatSystemEventKind.OTHER,
     ) {
         val timeMillis = timestampMillis.takeIf { it > 0 } ?: Clock.System.now().toEpochMilliseconds()
-        val time = formatTimeUtc(timeMillis)
+        val time = formatChatTimestamp(timeMillis, _uiSettings.value.timestampTimeZone)
         val message = ChatMessage(
             id = "system-$timeMillis-${systemMessageSequence++}",
             author = "System",
             text = text,
             time = time,
+            timestampMillis = timeMillis,
             authorId = authorId,
             isSystem = true,
-            systemEvents = listOf(ChatSystemEvent(kind, text, time)),
+            systemEvents = listOf(ChatSystemEvent(kind, text, time, timeMillis)),
         )
         appendLiveMessage(room.id, message)
     }
@@ -804,19 +806,22 @@ class ReticulumChatRepository(
             lastServerCommandText.value = null
             lastServerCommandName.value = null
         }
+        val timestampMillis = message.timestampMillis.takeIf { it > 0 }
+            ?: Clock.System.now().toEpochMilliseconds()
         val sender = message.senderName.ifBlank { message.senderId.take(12) }
-        val time = formatTimeUtc(message.timestampMillis)
+        val time = formatChatTimestamp(timestampMillis, _uiSettings.value.timestampTimeZone)
         val chatMessage = ChatMessage(
-            id = message.id.ifBlank { "rrc-${message.timestampMillis}-${message.senderId}" },
+            id = message.id.ifBlank { "rrc-$timestampMillis-${message.senderId}" },
             author = sender,
             text = message.body,
             time = time,
+            timestampMillis = timestampMillis,
             isAction = message.isAction,
             isMine = message.isMine,
             authorId = message.senderId,
             isSystem = message.isNotice,
             systemEvents = if (message.isNotice) {
-                listOf(ChatSystemEvent(classifySystemNotice(message.body), message.body, time))
+                listOf(ChatSystemEvent(classifySystemNotice(message.body), message.body, time, timestampMillis))
             } else {
                 emptyList()
             },
@@ -843,6 +848,8 @@ class ReticulumChatRepository(
 
     private fun receiveDirect(message: LxmfDirectMessage) {
         val address = normalizeLxmfAddress(message.address) ?: return
+        val timestampMillis = message.timestampMillis.takeIf { it > 0 }
+            ?: Clock.System.now().toEpochMilliseconds()
         val known = knownMembers.value.firstOrNull { normalizeLxmfAddress(it.address.orEmpty()) == address }
         val member = known ?: ChatMember(
             id = "lxmf-$address",
@@ -863,10 +870,11 @@ class ReticulumChatRepository(
             id = requestId,
             sender = member,
             message = message.body,
-            time = formatTimeUtc(message.timestampMillis),
+            time = formatChatTimestamp(timestampMillis, _uiSettings.value.timestampTimeZone),
+            timestampMillis = timestampMillis,
         )
         val previous = _contactRequests.value.firstOrNull { it.sender.id == member.id }
-        messageByRequestId[requestId] = message
+        messageByRequestId[requestId] = message.copy(timestampMillis = timestampMillis)
         _contactRequests.value = if (previous == null) {
             _contactRequests.value + request
         } else {
@@ -877,14 +885,17 @@ class ReticulumChatRepository(
     }
 
     private fun receiveAcceptedDirect(member: ChatMember, message: LxmfDirectMessage) {
+        val timestampMillis = message.timestampMillis.takeIf { it > 0 }
+            ?: Clock.System.now().toEpochMilliseconds()
         val chatMessage = ChatMessage(
             id = message.id,
             author = if (message.isMine) "you" else member.displayName,
             text = message.body,
-            time = formatTimeUtc(message.timestampMillis),
+            time = formatChatTimestamp(timestampMillis, _uiSettings.value.timestampTimeZone),
             isMine = message.isMine,
             deliveryState = message.deliveryState.takeIf { message.isMine && it.isNotBlank() } ?: if (message.isMine) "queued" else null,
             authorId = member.id.takeUnless { message.isMine },
+            timestampMillis = timestampMillis,
         )
         val current = liveDirectMessages.value[member.id].orEmpty()
         if (current.none { it.id == chatMessage.id }) {
@@ -980,9 +991,4 @@ class ReticulumChatRepository(
         return if (isUnrecognizedRrcCommandReply(text)) ChatSystemEventKind.COMMAND_ERROR else null
     }
 
-    private fun formatTimeUtc(timestampMillis: Long): String {
-        val minuteOfDay = ((timestampMillis / 60_000L) % (24 * 60)).toInt().coerceAtLeast(0)
-        return minuteOfDay.div(60).toString().padStart(2, '0') + ":" +
-            minuteOfDay.rem(60).toString().padStart(2, '0')
-    }
 }

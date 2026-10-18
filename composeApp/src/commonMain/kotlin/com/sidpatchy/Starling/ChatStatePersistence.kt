@@ -6,10 +6,16 @@ interface ChatStateStore {
     fun write(value: String)
 }
 
+enum class TimestampTimeZonePreference(val label: String) {
+    SYSTEM("System time zone"),
+    UTC("UTC"),
+}
+
 data class StarlingUiSettings(
     val themePreference: ThemePreference = ThemePreference.SYSTEM,
     val bubbleStyle: Boolean = false,
     val denseMessages: Boolean = false,
+    val timestampTimeZone: TimestampTimeZonePreference = TimestampTimeZonePreference.SYSTEM,
 )
 
 data class PersistedChatState(
@@ -32,14 +38,15 @@ data class PersistedChatState(
 
 /** Small versioned text codec to avoid platform-specific serialization APIs. */
 object ChatStateCodec {
-    private const val HEADER = "STARLING_CHAT_STATE_V10"
-    private const val PREVIOUS_HEADER = "STARLING_CHAT_STATE_V9"
+    private const val HEADER = "STARLING_CHAT_STATE_V11"
+    private const val PREVIOUS_HEADER = "STARLING_CHAT_STATE_V10"
     private val LEGACY_HEADERS = setOf(
         "STARLING_CHAT_STATE_V1", "STARLING_CHAT_STATE_V2", "STARLING_CHAT_STATE_V3", "STARLING_CHAT_STATE_V4",
         "STARLING_CHAT_STATE_V5", "STARLING_CHAT_STATE_V6", "STARLING_CHAT_STATE_V7", "STARLING_CHAT_STATE_V8",
+        "STARLING_CHAT_STATE_V9",
         PREVIOUS_HEADER,
     )
-    private val SYSTEM_EVENT_HEADERS = setOf(PREVIOUS_HEADER, HEADER)
+    private val SYSTEM_EVENT_HEADERS = setOf("STARLING_CHAT_STATE_V9", PREVIOUS_HEADER, HEADER)
 
     fun encode(state: PersistedChatState): String = buildString {
         appendLine(HEADER)
@@ -53,6 +60,7 @@ object ChatStateCodec {
             state.uiSettings.themePreference.name,
             state.uiSettings.bubbleStyle.bit(),
             state.uiSettings.denseMessages.bit(),
+            state.uiSettings.timestampTimeZone.name,
         )
         state.nodeConfig?.let { config ->
             appendRecord("V", config.mode.name)
@@ -81,7 +89,7 @@ object ChatStateCodec {
             appendRecord(
                 "Q", request.id, request.sender.id, request.sender.displayName,
                 request.sender.isSelf.bit(), request.sender.address.orEmpty(), request.message, request.time,
-                request.isPreview.bit(),
+                request.isPreview.bit(), request.timestampMillis?.toString().orEmpty(),
             )
         }
         state.roomMessages.forEach { (roomId, messages) ->
@@ -130,6 +138,9 @@ object ChatStateCodec {
                             .getOrDefault(ThemePreference.SYSTEM),
                         bubbleStyle = decoded[1] == "1",
                         denseMessages = decoded[2] == "1",
+                        timestampTimeZone = runCatching {
+                            TimestampTimeZonePreference.valueOf(decoded.getOrNull(3).orEmpty())
+                        }.getOrDefault(TimestampTimeZonePreference.SYSTEM),
                     )
                 }
                 "V" -> nodeMode = decoded.firstOrNull()?.let { name ->
@@ -179,18 +190,27 @@ object ChatStateCodec {
                         message = decoded[5],
                         time = decoded[6],
                         isPreview = decoded.getOrNull(7) == "1",
+                        timestampMillis = decoded.getOrNull(8)?.toLongOrNull()?.takeIf { it > 0 },
                     )
                     requests[request.id] = request
                 }
                 "R", "D" -> if (decoded.size >= 8) {
                     val isSystem = decoded.getOrNull(9) == "1"
+                    val eventStride = if (header == HEADER) 4 else 3
+                    val availableEventFields = (decoded.size - 11).coerceAtLeast(0)
+                    val maxEventCount = availableEventFields / eventStride
+                    val eventCount = decoded.getOrNull(10)?.toIntOrNull()?.coerceIn(0, maxEventCount) ?: 0
                     val systemEvents = when {
                         !isSystem -> emptyList()
                         header in SYSTEM_EVENT_HEADERS -> {
-                            val eventCount = decoded.getOrNull(10)?.toIntOrNull()?.coerceAtLeast(0) ?: 0
-                            decoded.drop(11).chunked(3).take(eventCount).mapNotNull { event ->
+                            decoded.drop(11).take(eventCount * eventStride).chunked(eventStride).mapNotNull { event ->
                                 if (event.size < 3) null else runCatching {
-                                    ChatSystemEvent(ChatSystemEventKind.valueOf(event[0]), event[2], event[1])
+                                    ChatSystemEvent(
+                                        kind = ChatSystemEventKind.valueOf(event[0]),
+                                        text = event[2],
+                                        time = event[1],
+                                        timestampMillis = event.getOrNull(3)?.toLongOrNull()?.takeIf { it > 0 },
+                                    )
                                 }.getOrNull()
                             }
                         }
@@ -219,6 +239,11 @@ object ChatStateCodec {
                         authorId = decoded.getOrNull(8)?.ifBlank { null },
                         isSystem = isSystem,
                         systemEvents = systemEvents,
+                        timestampMillis = if (header == HEADER) {
+                            decoded.getOrNull(11 + eventCount * eventStride)?.toLongOrNull()?.takeIf { it > 0 }
+                        } else {
+                            null
+                        },
                     )
                     val bucket = if (fields[0] == "R") rooms else direct
                     bucket.getOrPut(decoded[0]) { mutableListOf() }.add(message)
@@ -248,13 +273,20 @@ object ChatStateCodec {
 
     private fun StringBuilder.appendMessage(kind: String, ownerId: String, message: ChatMessage) {
         val systemEvents = message.systemEvents.ifEmpty {
-            if (message.isSystem) listOf(ChatSystemEvent(ChatSystemEventKind.OTHER, message.text, message.time)) else emptyList()
+            if (message.isSystem) {
+                listOf(ChatSystemEvent(ChatSystemEventKind.OTHER, message.text, message.time, message.timestampMillis))
+            } else {
+                emptyList()
+            }
         }
-        val eventFields = systemEvents.flatMap { event -> listOf(event.kind.name, event.time, event.text) }
+        val eventFields = systemEvents.flatMap {
+            listOf(it.kind.name, it.time, it.text, it.timestampMillis?.toString().orEmpty())
+        }
         appendRecord(
             kind, ownerId, message.id, message.author, message.text, message.time,
             message.isMine.bit(), message.isAction.bit(), message.deliveryState.orEmpty(), message.authorId.orEmpty(),
-            message.isSystem.bit(), systemEvents.size.toString(), *eventFields.toTypedArray(),
+            message.isSystem.bit(), systemEvents.size.toString(),
+            *(eventFields + message.timestampMillis?.toString().orEmpty()).toTypedArray(),
         )
     }
 

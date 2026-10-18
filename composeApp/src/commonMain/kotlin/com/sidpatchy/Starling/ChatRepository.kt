@@ -40,6 +40,7 @@ data class ChatSystemEvent(
     val kind: ChatSystemEventKind,
     val text: String,
     val time: String,
+    val timestampMillis: Long? = null,
 )
 
 data class ChatMessage(
@@ -53,6 +54,7 @@ data class ChatMessage(
     val authorId: String? = null,
     val isSystem: Boolean = false,
     val systemEvents: List<ChatSystemEvent> = emptyList(),
+    val timestampMillis: Long? = null,
 )
 
 internal fun collapseRepeatedSystemMessage(
@@ -63,7 +65,7 @@ internal fun collapseRepeatedSystemMessage(
     if (!message.isSystem) return history + message
 
     val newEvents = message.systemEvents.ifEmpty {
-        listOf(ChatSystemEvent(ChatSystemEventKind.OTHER, message.text, message.time))
+        listOf(ChatSystemEvent(ChatSystemEventKind.OTHER, message.text, message.time, message.timestampMillis))
     }
     val isStandaloneSystemMessage = newEvents.any {
         it.kind == ChatSystemEventKind.ERROR ||
@@ -87,12 +89,13 @@ internal fun collapseRepeatedSystemMessage(
     }
 
     val groupedEvents = previous.systemEvents.ifEmpty {
-        listOf(ChatSystemEvent(ChatSystemEventKind.OTHER, previous.text, previous.time))
+        listOf(ChatSystemEvent(ChatSystemEventKind.OTHER, previous.text, previous.time, previous.timestampMillis))
     } + newEvents
     return history.dropLast(1) + previous.copy(
         text = summarizeSystemEvents(groupedEvents),
         time = message.time.ifBlank { previous.time },
         systemEvents = groupedEvents,
+        timestampMillis = message.timestampMillis ?: previous.timestampMillis,
     )
 }
 
@@ -476,4 +479,5 @@ data class ChatContactRequest(
     val message: String,
     val time: String,
     val isPreview: Boolean = false,
+    val timestampMillis: Long? = null,
 )

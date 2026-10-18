@@ -360,7 +360,7 @@ fun StarlingApp(
         selectedDirectMessageId?.let(repository::directMessages) ?: flowOf(emptyList())
     }.collectAsState(initial = emptyList())
 
-    StarlingTheme(uiSettings.themePreference) {
+    StarlingTheme(uiSettings.themePreference, uiSettings.timestampTimeZone) {
         Surface(modifier = Modifier.fillMaxSize(), color = Canvas) {
             BoxWithConstraints(Modifier.fillMaxSize().safeDrawingPadding().imePadding()) {
                 val isWide = maxWidth >= 1000.dp
@@ -422,6 +422,8 @@ fun StarlingApp(
                                 onBubbleStyleChange = { updateUiSettings(uiSettings.copy(bubbleStyle = it)) },
                                 denseMessages = uiSettings.denseMessages,
                                 onDenseMessagesChange = { updateUiSettings(uiSettings.copy(denseMessages = it)) },
+                                timestampTimeZone = uiSettings.timestampTimeZone,
+                                onTimestampTimeZoneChange = { updateUiSettings(uiSettings.copy(timestampTimeZone = it)) },
                                 previewMode = previewMode,
                                 onPreviewModeChange = changePreviewMode,
                                 networks = networks,
@@ -645,6 +647,8 @@ fun StarlingApp(
                                 onBubbleStyleChange = { updateUiSettings(uiSettings.copy(bubbleStyle = it)) },
                                 denseMessages = uiSettings.denseMessages,
                                 onDenseMessagesChange = { updateUiSettings(uiSettings.copy(denseMessages = it)) },
+                                timestampTimeZone = uiSettings.timestampTimeZone,
+                                onTimestampTimeZoneChange = { updateUiSettings(uiSettings.copy(timestampTimeZone = it)) },
                                 previewMode = previewMode,
                                 onPreviewModeChange = changePreviewMode,
                                 networks = networks,
@@ -1074,6 +1078,7 @@ private fun ContactRequestsPage(
     showNavigationButton: Boolean = false,
     onOpenNavigation: () -> Unit = {},
 ) {
+    val timeZonePreference = LocalTimestampTimeZonePreference.current
     Column(Modifier.fillMaxSize().background(Canvas)) {
         Row(
             Modifier.fillMaxWidth().height(68.dp).background(Paper)
@@ -1109,7 +1114,11 @@ private fun ContactRequestsPage(
                             Column(Modifier.weight(1f)) {
                                 val palette = LocalStarlingPalette.current
                                 Text(request.sender.displayName, color = ircNickTextColor(request.sender.displayName, palette == DarkPalette), fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-                                Text("Unknown sender · ${request.time}", color = Muted, fontSize = 11.sp)
+                                Text(
+                                    "Unknown sender · ${displayChatTime(request.time, request.timestampMillis, timeZonePreference)}",
+                                    color = Muted,
+                                    fontSize = 11.sp,
+                                )
                             }
                         }
                         Spacer(Modifier.height(14.dp))
@@ -2006,6 +2015,8 @@ private fun MessageRow(
 ) {
     val authorName = member?.displayName ?: message.author
     val palette = LocalStarlingPalette.current
+    val timeZonePreference = LocalTimestampTimeZonePreference.current
+    val displayTime = displayChatTime(message.time, message.timestampMillis, timeZonePreference)
     val authorColor = ircNickTextColor(authorName, darkTheme = palette == DarkPalette)
     if (message.isSystem) {
         SystemMessageRow(message, denseMessages, bubbleStyle, onSystemExpansion)
@@ -2028,7 +2039,7 @@ private fun MessageRow(
                         fontWeight = FontWeight.SemiBold,
                     )
                     Spacer(Modifier.width(8.dp))
-                    Text(message.time, color = Muted, fontSize = 10.sp)
+                    Text(displayTime, color = Muted, fontSize = 10.sp)
                     deliveryMarker(message.deliveryState)
                 }
                 Spacer(Modifier.height(2.dp))
@@ -2046,7 +2057,7 @@ private fun MessageRow(
         modifier = Modifier.fillMaxWidth().padding(vertical = if (denseMessages) 0.dp else 1.dp),
         verticalAlignment = Alignment.Top,
     ) {
-        Text(message.time, modifier = Modifier.width(40.dp).padding(top = 1.dp), color = Muted, fontSize = 10.sp)
+        Text(displayTime, modifier = Modifier.width(40.dp).padding(top = 1.dp), color = Muted, fontSize = 10.sp)
         deliveryMarker(message.deliveryState)
         if (message.isAction) {
             Text(
@@ -2097,6 +2108,8 @@ private fun SystemMessageRow(
     onSystemExpansion: () -> Unit,
 ) {
     var expanded by rememberSaveable(message.id) { mutableStateOf(false) }
+    val timeZonePreference = LocalTimestampTimeZonePreference.current
+    val displayTime = displayChatTime(message.time, message.timestampMillis, timeZonePreference)
     val isErrorMessage = message.systemEvents.any {
         it.kind == ChatSystemEventKind.ERROR || it.kind == ChatSystemEventKind.COMMAND_ERROR
     }
@@ -2137,7 +2150,7 @@ private fun SystemMessageRow(
                     SystemEventDetails(message.systemEvents)
                 } else {
                     Text(
-                        if (canExpand) "${message.systemEvents.size} events · last at ${message.time}" else message.time,
+                        if (canExpand) "${message.systemEvents.size} events · last at $displayTime" else displayTime,
                         color = textColor,
                         fontSize = 9.sp,
                     )
@@ -2147,7 +2160,7 @@ private fun SystemMessageRow(
     } else {
         Column(Modifier.fillMaxWidth().padding(vertical = verticalPadding)) {
             Row(verticalAlignment = Alignment.Top) {
-                Text(message.time, modifier = Modifier.width(40.dp).padding(top = 1.dp), color = Muted, fontSize = 10.sp)
+                Text(displayTime, modifier = Modifier.width(40.dp).padding(top = 1.dp), color = Muted, fontSize = 10.sp)
                 Text(
                     message.text,
                     modifier = Modifier.weight(1f).padding(top = 1.dp),
@@ -2183,13 +2196,19 @@ private fun SystemEventExpandButton(expanded: Boolean, onClick: () -> Unit) {
 
 @Composable
 private fun SystemEventDetails(events: List<ChatSystemEvent>, modifier: Modifier = Modifier) {
+    val timeZonePreference = LocalTimestampTimeZonePreference.current
     Column(
         modifier = modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(3.dp),
     ) {
         events.forEach { event ->
             Row(verticalAlignment = Alignment.Top) {
-                Text(event.time, modifier = Modifier.width(40.dp), color = Muted, fontSize = 9.sp)
+                Text(
+                    displayChatTime(event.time, event.timestampMillis, timeZonePreference),
+                    modifier = Modifier.width(40.dp),
+                    color = Muted,
+                    fontSize = 9.sp,
+                )
                 Text(event.text, modifier = Modifier.weight(1f), color = Muted, fontSize = 10.sp, lineHeight = 14.sp)
             }
         }

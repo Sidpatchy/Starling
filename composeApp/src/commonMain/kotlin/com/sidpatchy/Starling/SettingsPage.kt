@@ -124,6 +124,8 @@ internal fun SettingsPage(
     onBubbleStyleChange: (Boolean) -> Unit,
     denseMessages: Boolean,
     onDenseMessagesChange: (Boolean) -> Unit,
+    timestampTimeZone: TimestampTimeZonePreference,
+    onTimestampTimeZoneChange: (TimestampTimeZonePreference) -> Unit,
     previewMode: Boolean,
     onPreviewModeChange: (Boolean) -> Unit,
     networks: List<ChatNetwork>,
@@ -327,6 +329,22 @@ internal fun SettingsPage(
                             Text("Reduce vertical spacing in room and direct-message history.", color = Muted, fontSize = 11.sp)
                         }
                         Switch(checked = denseMessages, onCheckedChange = onDenseMessagesChange)
+                    }
+                    Spacer(Modifier.height(5.dp))
+                    Text("Message time zone", color = Ink, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                    Text("Choose how message timestamps are displayed.", color = Muted, fontSize = 11.sp)
+                    TimestampTimeZonePreference.entries.forEach { option ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
+                                .clickable { onTimestampTimeZoneChange(option) }.padding(vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            RadioButton(
+                                selected = timestampTimeZone == option,
+                                onClick = { onTimestampTimeZoneChange(option) },
+                            )
+                            Text(option.label, color = Ink, fontSize = 13.sp)
+                        }
                     }
                 }
             }
