@@ -15,11 +15,15 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withTimeoutOrNull
 
 /** Starts and observes the isolated Android RNS service without blocking Compose. */
-class AndroidReticulumNodeController(context: Context) : ReticulumNodeController {
+class AndroidReticulumNodeController(
+    context: Context,
+    private val requestBluetoothPermissions: suspend () -> Boolean = { false },
+) : ReticulumNodeController {
     private val appContext = context.applicationContext
     private val _state = MutableStateFlow<ReticulumNodeState>(ReticulumNodeState.Stopped)
     override val state: StateFlow<ReticulumNodeState> = _state.asStateFlow()
     override val isSupported: Boolean = true
+    override val supportsRNodeInterfaces: Boolean = true
     private var pendingStateQuery: CompletableDeferred<ReticulumNodeState>? = null
 
     private val receiver = object : BroadcastReceiver() {
@@ -52,9 +56,36 @@ class AndroidReticulumNodeController(context: Context) : ReticulumNodeController
     }
 
     override suspend fun start(config: ReticulumNodeConfig) {
-        if (config.rnodeInterfaces.isNotEmpty()) {
+        val bleInterfaces = config.rnodeInterfaces.filter { it.port.startsWith(BLE_PREFIX, ignoreCase = true) }
+        if (bleInterfaces.size > 1) {
             _state.value = ReticulumNodeState.Failed(
-                "Direct RNode USB/Bluetooth access is not available in Starling's Android runtime yet. Use an RNS TCP gateway for now.",
+                "Only one BLE RNode can be connected on Android at a time.",
+            )
+            return
+        }
+
+        val unsupportedInterface = config.rnodeInterfaces.firstOrNull { radio ->
+            !radio.port.startsWith(BLE_PREFIX, ignoreCase = true) &&
+                !radio.port.startsWith(TCP_PREFIX, ignoreCase = true)
+        }
+        if (unsupportedInterface != null) {
+            _state.value = ReticulumNodeState.Failed(
+                "Android supports RNodes over BLE or TCP/Wi-Fi; direct USB/serial ports are not available.",
+            )
+            return
+        }
+        val invalidTcpRNode = config.rnodeInterfaces.firstOrNull { radio ->
+            if (!radio.port.startsWith(TCP_PREFIX, ignoreCase = true)) return@firstOrNull false
+            val host = radio.port.drop(TCP_PREFIX.length)
+            host.isBlank() || host.any { !(it.isLetterOrDigit() || it in "._:-") }
+        }
+        if (invalidTcpRNode != null) {
+            _state.value = ReticulumNodeState.Failed("Use tcp:// followed by an RNode TCP/Wi-Fi host name or IP address.")
+            return
+        }
+        if (config.rnodeInterfaces.any { it.bandwidthHz > ANDROID_MAX_RNODE_BANDWIDTH_HZ }) {
+            _state.value = ReticulumNodeState.Failed(
+                "The Android RNS RNode adapter supports radio bandwidths up to 500 kHz.",
             )
             return
         }
@@ -69,6 +100,13 @@ class AndroidReticulumNodeController(context: Context) : ReticulumNodeController
             return
         }
 
+        if (bleInterfaces.isNotEmpty() && !requestBluetoothPermissions()) {
+            _state.value = ReticulumNodeState.Failed(
+                "Bluetooth permission is required to connect to a BLE RNode. Grant it and try again.",
+            )
+            return
+        }
+
         _state.value = ReticulumNodeState.Starting(config.mode)
         val peersJson = JSONArray()
         config.tcpPeers.forEach { peer ->
@@ -80,10 +118,23 @@ class AndroidReticulumNodeController(context: Context) : ReticulumNodeController
                     .put("ifac_passphrase", peer.ifacPassphrase.orEmpty()),
             )
         }
+        val radiosJson = JSONArray()
+        config.rnodeInterfaces.forEach { radio ->
+            radiosJson.put(
+                JSONObject()
+                    .put("port", radio.port.trim())
+                    .put("frequency_hz", radio.frequencyHz)
+                    .put("bandwidth_hz", radio.bandwidthHz)
+                    .put("tx_power_dbm", radio.txPowerDbm)
+                    .put("spreading_factor", radio.spreadingFactor)
+                    .put("coding_rate", radio.codingRate),
+            )
+        }
         val intent = Intent(appContext, ReticulumNodeService::class.java).apply {
             action = ReticulumNodeService.ACTION_START
             putExtra(ReticulumNodeService.EXTRA_MODE, config.mode.name)
             putExtra(ReticulumNodeService.EXTRA_TCP_PEERS, peersJson.toString())
+            putExtra(ReticulumNodeService.EXTRA_RNODE_INTERFACES, radiosJson.toString())
             putExtra(ReticulumNodeService.EXTRA_RPC_KEY, config.existingInstanceRpcKeyHex.orEmpty())
         }
         try {
@@ -131,11 +182,31 @@ class AndroidReticulumNodeController(context: Context) : ReticulumNodeController
                     tcpPeers += tcpPeer
                     if (peer.optBoolean("online")) onlineIds += tcpPeer.id
                 }
+                val rnodeInterfaces = mutableListOf<ReticulumRNodeInterface>()
+                val onlineRNodePorts = mutableSetOf<String>()
+                val radios = runCatching {
+                    JSONArray(intent.getStringExtra(ReticulumNodeService.EXTRA_RNODE_STATUS).orEmpty())
+                }.getOrElse { JSONArray() }
+                for (index in 0 until radios.length()) {
+                    val radio = radios.optJSONObject(index) ?: continue
+                    val port = radio.optString("port").takeIf(String::isNotBlank) ?: continue
+                    rnodeInterfaces += ReticulumRNodeInterface(
+                        port = port,
+                        frequencyHz = radio.optLong("frequency_hz"),
+                        bandwidthHz = radio.optInt("bandwidth_hz"),
+                        txPowerDbm = radio.optInt("tx_power_dbm"),
+                        spreadingFactor = radio.optInt("spreading_factor"),
+                        codingRate = radio.optInt("coding_rate"),
+                    )
+                    if (radio.optBoolean("online")) onlineRNodePorts += port.lowercase()
+                }
                 ReticulumNodeState.Running(
                     mode = mode,
                     tcpPeers = tcpPeers,
                     onlineTcpPeerIds = onlineIds,
                     sharedInstanceConnected = intent.getBooleanExtra(ReticulumNodeService.EXTRA_SHARED, false),
+                    rnodeInterfaces = rnodeInterfaces,
+                    onlineRNodePorts = onlineRNodePorts,
                 )
             }
             ReticulumNodeService.STATE_FAILED -> ReticulumNodeState.Failed(
@@ -143,5 +214,11 @@ class AndroidReticulumNodeController(context: Context) : ReticulumNodeController
             )
             else -> ReticulumNodeState.Stopped
         }
+    }
+
+    private companion object {
+        const val BLE_PREFIX = "ble://"
+        const val TCP_PREFIX = "tcp://"
+        const val ANDROID_MAX_RNODE_BANDWIDTH_HZ = 500_000
     }
 }

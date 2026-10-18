@@ -22,6 +22,17 @@ _lxmf = None
 _last_self_event = None
 
 
+def _prepare_rnode_interfaces(radios):
+    """Route BLE RNodes through the native CoreBluetooth serial proxy."""
+    prepared = []
+    for radio in radios:
+        interface = dict(radio)
+        if str(interface.get("port", "")).lower().startswith("ble://"):
+            interface["runtime_port"] = "tcp://127.0.0.1"
+        prepared.append(interface)
+    return prepared
+
+
 def _emit_events(include_current=False):
     global _last_self_event
     result = []
@@ -59,6 +70,7 @@ def _start(fields):
     data_dir = _decode(fields[1])
     start = ["START"] + fields[2:]
     mode, rpc_key_hex, peers, radios = parse_start_request(start, platform="iOS")
+    radios = _prepare_rnode_interfaces(radios)
 
     import starling_lxmf
     import starling_rns

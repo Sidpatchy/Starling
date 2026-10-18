@@ -29,7 +29,7 @@ data class ReticulumTcpPeer(
     }
 }
 
-/** A host-controlled RNode radio attached to Starling over a serial port. */
+/** A host-controlled RNode radio attached over serial, TCP, or BLE. */
 data class ReticulumRNodeInterface(
     val port: String,
     val frequencyHz: Long,
@@ -41,8 +41,8 @@ data class ReticulumRNodeInterface(
     val id: String get() = port.trim().lowercase()
 
     fun validationError(): String? = when {
-        port.isBlank() -> "Enter the RNode serial port, such as COM3, /dev/cu.usbserial, or /dev/ttyUSB0."
-        port.any { it.code < 32 || it.code == 127 } -> "The RNode serial port cannot contain control characters."
+        port.isBlank() -> "Enter a serial port, tcp://host, or ble://device name."
+        port.any { it.code < 32 || it.code == 127 } -> "The RNode connection cannot contain control characters."
         frequencyHz !in 137_000_000L..3_000_000_000L -> "RNode frequency must be between 137 MHz and 3 GHz."
         bandwidthHz !in 7_800..1_625_000 -> "RNode bandwidth must be between 7.8 kHz and 1.625 MHz."
         txPowerDbm !in 0..37 -> "RNode transmit power must be between 0 and 37 dBm."
@@ -89,7 +89,7 @@ data class ReticulumNodeConfig(
         val invalidRNode = rnodeInterfaces.firstOrNull { it.validationError() != null }
         if (invalidRNode != null) return invalidRNode.validationError()
         if (rnodeInterfaces.map { it.id }.distinct().size != rnodeInterfaces.size) {
-            return "Each RNode interface must use a unique serial port."
+            return "Each RNode interface must use a unique connection."
         }
         return null
     }
@@ -126,7 +126,7 @@ interface ReticulumNodeController {
     val isSupported: Boolean
     /** False when the platform can only test a TCP socket, not exchange RNS packets. */
     val supportsReticulumProtocol: Boolean get() = true
-    /** RNode USB/serial support is currently implemented by the desktop runtime only. */
+    /** Whether this platform exposes RNode connection settings. */
     val supportsRNodeInterfaces: Boolean get() = false
     suspend fun start(config: ReticulumNodeConfig)
     suspend fun disconnect()

@@ -26,7 +26,7 @@ cp -R "$TEMP_DIR/Python.xcframework" "$VENDOR_DIR/Python.xcframework"
 mkdir -p "$TEMP_DIR/python-base"
 python3 -m pip install --disable-pip-version-check --no-input --no-deps \
   --target "$TEMP_DIR/python-base" \
-  "rns==1.5.7" "lxmf==1.2.0"
+  "rns==1.5.7" "lxmf==1.2.0" "pyserial==3.5"
 
 cp "$ROOT/composeApp/src/main/python/starling_rns.py" "$TEMP_DIR/python-base/"
 cp "$ROOT/composeApp/src/main/python/starling_rrc.py" "$TEMP_DIR/python-base/"
@@ -38,15 +38,18 @@ cp "$ROOT/composeApp/src/main/python/starling_ios_runtime.py" "$TEMP_DIR/python-
 mkdir -p "$TEMP_DIR/python-base/licenses"
 cp "$ROOT/licenses/Reticulum-LICENSE.txt" "$TEMP_DIR/python-base/licenses/"
 cp "$ROOT/licenses/LXMF-LICENSE.txt" "$TEMP_DIR/python-base/licenses/"
+cp "$ROOT/licenses/PySerial-LICENSE.txt" "$TEMP_DIR/python-base/licenses/"
 cp "$TEMP_DIR/Python.xcframework/lib/python3.13/LICENSE.txt" "$TEMP_DIR/python-base/licenses/Python-LICENSE.txt"
 
 PYTHONPATH="$TEMP_DIR/python-base" python3 -S - <<'PY'
 import LXMF
 import RNS
+import serial
 from RNS.Cryptography import Provider
 import starling_ios_runtime
 
 assert Provider.PROVIDER == Provider.PROVIDER_INTERNAL
+assert serial.VERSION == "3.5"
 assert starling_ios_runtime.invoke("STATUS") == "STATUS\tSTOPPED"
 print("RNS/LXMF bridge smoke passed before adding the iOS PyCA wheels.")
 PY

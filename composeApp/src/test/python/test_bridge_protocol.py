@@ -6,15 +6,117 @@ import queue
 import subprocess
 import sys
 import tempfile
+import types
 import unittest
 from unittest.mock import Mock, patch
 
 import starling_bridge_protocol as protocol
 import starling_ios_runtime as ios_runtime
+import starling_rns as rns_bridge
 import starling_rrc as rrc
 
 
 class BridgeProtocolTest(unittest.TestCase):
+    def test_ios_ble_rnode_uses_native_tcp_proxy_and_preserves_configured_port(self):
+        radios = [{
+            "port": "ble://RNode Field Unit", "frequency_hz": 915000000,
+            "bandwidth_hz": 125000, "tx_power_dbm": 17,
+            "spreading_factor": 7, "coding_rate": 5,
+        }]
+
+        prepared = ios_runtime._prepare_rnode_interfaces(radios)
+
+        self.assertEqual(prepared[0]["port"], "ble://RNode Field Unit")
+        self.assertEqual(prepared[0]["runtime_port"], "tcp://127.0.0.1")
+        self.assertNotIn("runtime_port", radios[0])
+
+    def test_ios_ble_rnode_config_targets_the_loopback_proxy(self):
+        radio = ios_runtime._prepare_rnode_interfaces([{
+            "port": "ble://RNode Field Unit", "frequency_hz": 915000000,
+            "bandwidth_hz": 125000, "tx_power_dbm": 17,
+            "spreading_factor": 7, "coding_rate": 5,
+        }])[0]
+        created = []
+
+        class ConfigObj(dict):
+            def __init__(self):
+                super().__init__()
+                created.append(self)
+
+            def write(self):
+                pass
+
+        rns = types.ModuleType("RNS")
+        vendor = types.ModuleType("RNS.vendor")
+        vendor.__path__ = []
+        config_module = types.ModuleType("RNS.vendor.configobj")
+        config_module.ConfigObj = ConfigObj
+        with tempfile.TemporaryDirectory() as config_dir, patch.dict(sys.modules, {
+            "RNS": rns,
+            "RNS.vendor": vendor,
+            "RNS.vendor.configobj": config_module,
+        }):
+            rns_bridge._write_config(config_dir, "embedded", [], [radio], None)
+
+        configured_radio = created[0]["interfaces"]["Starling RNode 1"]
+        self.assertEqual(configured_radio["port"], "tcp://127.0.0.1")
+        self.assertEqual(radio["port"], "ble://RNode Field Unit")
+
+    def test_android_rnode_config_uses_android_tcp_adapter_for_ble_and_wifi(self):
+        created = []
+
+        class ConfigObj(dict):
+            def __init__(self):
+                super().__init__()
+                created.append(self)
+
+            def write(self):
+                pass
+
+        rns = types.ModuleType("RNS")
+        vendor = types.ModuleType("RNS.vendor")
+        vendor.__path__ = []
+        config_module = types.ModuleType("RNS.vendor.configobj")
+        config_module.ConfigObj = ConfigObj
+        radios = [
+            {
+                "port": "ble://RNode Field Unit", "runtime_port": "127.0.0.1",
+                "frequency_hz": 915000000, "bandwidth_hz": 125000,
+                "tx_power_dbm": 17, "spreading_factor": 7, "coding_rate": 5,
+            },
+            {
+                "port": "tcp://192.168.1.25", "runtime_port": "192.168.1.25",
+                "frequency_hz": 915000000, "bandwidth_hz": 125000,
+                "tx_power_dbm": 17, "spreading_factor": 7, "coding_rate": 5,
+            },
+        ]
+
+        with tempfile.TemporaryDirectory() as config_dir, patch.dict(sys.modules, {
+            "RNS": rns,
+            "RNS.vendor": vendor,
+            "RNS.vendor.configobj": config_module,
+        }):
+            rns_bridge._write_config(config_dir, "embedded", [], radios, None, android_platform=True)
+
+        interfaces = created[0]["interfaces"]
+        ble_config = interfaces["Starling RNode 1"]
+        wifi_config = interfaces["Starling RNode 2"]
+        self.assertEqual(ble_config["type"], "RNodeInterface")
+        self.assertEqual(ble_config["force_tcp"], "yes")
+        self.assertEqual(ble_config["tcp_host"], "127.0.0.1")
+        self.assertEqual(ble_config["allow_bluetooth"], "no")
+        self.assertEqual(wifi_config["tcp_host"], "192.168.1.25")
+        self.assertEqual(wifi_config["port"], "")
+
+    def test_android_tcp_rnode_compat_modules_satisfy_rns_import_checks(self):
+        with patch.dict(sys.modules):
+            rns_bridge._install_android_tcp_rnode_compat()
+            import importlib.util
+
+            self.assertIsNotNone(importlib.util.find_spec("usbserial4a"))
+            self.assertIsNotNone(importlib.util.find_spec("usbserial4a.serial4a"))
+            self.assertIsNotNone(importlib.util.find_spec("jnius"))
+
     def test_rrc_roomless_notices_and_presence_events_keep_context(self):
         with patch.object(rrc, "_events", queue.Queue()):
             rrc._emit("message", message_id="id", room="", sender_id="hub", sender_name="Hub",

@@ -439,7 +439,7 @@ internal fun SettingsPage(
                                 if (!supportsReticulumProtocol) {
                                     "This opens a plain TCP socket only; it does not exchange Reticulum traffic."
                                 } else if (supportsRNodeInterfaces) {
-                                    "Configure TCP peers and/or an RNode serial radio. Starling stays a client; Reticulum transport routing remains disabled."
+                                    "Configure TCP peers and/or an RNode radio. Use a serial port on desktop, tcp://host for a Wi-Fi RNode on port 7633, or ble://device name for BLE on iOS and Android. Bare ble:// selects the first nearby RNode. Android and iOS support one BLE RNode at a time. Starling stays a client; Reticulum transport routing remains disabled."
                                 } else {
                                     "Manage outbound TCP client interfaces. Starling stays a client; Reticulum transport routing remains disabled."
                                 },
@@ -541,7 +541,7 @@ internal fun SettingsPage(
                                                 connectionInputError = null
                                             },
                                             modifier = Modifier.fillMaxWidth(),
-                                            label = { Text("Serial port (e.g. COM3, /dev/cu.* or /dev/ttyUSB0)") },
+                                            label = { Text("Serial port, tcp://host, or ble://device name") },
                                             singleLine = true,
                                             enabled = !isRunning && !isStarting,
                                         )
@@ -653,7 +653,7 @@ internal fun SettingsPage(
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Icon(Icons.Filled.Add, contentDescription = null, tint = Accent, modifier = Modifier.size(18.dp))
                                     Spacer(Modifier.width(4.dp))
-                                    Text("Add RNode serial interface", color = Accent)
+                                    Text("Add RNode interface", color = Accent)
                                 }
                             }
                                 }

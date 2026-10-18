@@ -8,6 +8,9 @@ import json
 import os
 import re
 import signal
+import sys
+import types
+from importlib.machinery import ModuleSpec
 
 _reticulum = None
 _mode = None
@@ -39,7 +42,7 @@ def construct_without_required_process_signals(factory):
         signal.signal = original_signal
 
 
-def _write_config(config_dir, mode, tcp_peers, rnode_interfaces, rpc_key_hex):
+def _write_config(config_dir, mode, tcp_peers, rnode_interfaces, rpc_key_hex, android_platform=False):
     os.makedirs(config_dir, exist_ok=True)
     config_path = os.path.join(config_dir, "config")
 
@@ -81,16 +84,27 @@ def _write_config(config_dir, mode, tcp_peers, rnode_interfaces, rpc_key_hex):
                 interface["passphrase"] = peer["ifac_passphrase"]
             interfaces["Starling TCP " + str(index)] = interface
         for index, radio in enumerate(rnode_interfaces, start=1):
-            interfaces["Starling RNode " + str(index)] = {
+            interface = {
                 "type": "RNodeInterface",
                 "enabled": "yes",
-                "port": radio["port"],
                 "frequency": str(radio["frequency_hz"]),
                 "bandwidth": str(radio["bandwidth_hz"]),
                 "txpower": str(radio["tx_power_dbm"]),
                 "spreadingfactor": str(radio["spreading_factor"]),
                 "codingrate": str(radio["coding_rate"]),
             }
+            if android_platform:
+                # RNS's Android-specific RNode adapter expects explicit TCP fields.
+                # The loopback bridge handles BLE; Wi-Fi RNodes connect directly.
+                interface.update({
+                    "port": "",
+                    "force_tcp": "yes",
+                    "tcp_host": radio["runtime_port"],
+                    "allow_bluetooth": "no",
+                })
+            else:
+                interface["port"] = radio.get("runtime_port", radio["port"])
+            interfaces["Starling RNode " + str(index)] = interface
         config["interfaces"] = interfaces
 
     config.write()
@@ -141,13 +155,27 @@ def start_node(config_dir, mode, tcp_peers="[]", rpc_key_hex="", rnode_interface
         rnode_interfaces = json.loads(rnode_interfaces)
     if not isinstance(rnode_interfaces, list):
         raise ValueError("RNode interfaces must be a list")
+    android_platform = RNS.vendor.platformutils.is_android()
     normalized_rnodes = []
     for radio in rnode_interfaces:
         if not isinstance(radio, dict):
             raise ValueError("Invalid RNode interface configuration")
         port = str(radio.get("port", "")).strip()
         if not port or any(ord(character) < 32 or ord(character) == 127 for character in port):
-            raise ValueError("RNode serial port must be a non-empty path without control characters")
+            raise ValueError("RNode connection must be non-empty and cannot contain control characters")
+        runtime_port = str(radio.get("runtime_port", port)).strip()
+        if android_platform:
+            lowered_port = port.lower()
+            if lowered_port.startswith("ble://"):
+                runtime_port = "127.0.0.1"
+            elif lowered_port.startswith("tcp://"):
+                runtime_port = port[len("tcp://"):].strip()
+                if not re.fullmatch(r"[A-Za-z0-9_.:-]+", runtime_port):
+                    raise ValueError("Android TCP RNode hosts may contain only letters, numbers, dots, dashes, underscores, and colons")
+            else:
+                raise ValueError("Android RNodes must use ble:// or tcp:// connections")
+        if not runtime_port or any(ord(character) < 32 or ord(character) == 127 for character in runtime_port):
+            raise ValueError("RNode runtime connection must be non-empty and cannot contain control characters")
         frequency_hz = int(radio.get("frequency_hz", 0))
         bandwidth_hz = int(radio.get("bandwidth_hz", 0))
         tx_power_dbm = int(radio.get("tx_power_dbm", -1))
@@ -165,6 +193,7 @@ def start_node(config_dir, mode, tcp_peers="[]", rpc_key_hex="", rnode_interface
             raise ValueError("RNode coding rate must be between 5 and 8")
         normalized_rnodes.append({
             "port": port,
+            "runtime_port": runtime_port,
             "frequency_hz": frequency_hz,
             "bandwidth_hz": bandwidth_hz,
             "tx_power_dbm": tx_power_dbm,
@@ -176,7 +205,10 @@ def start_node(config_dir, mode, tcp_peers="[]", rpc_key_hex="", rnode_interface
         raise ValueError("Each TCP peer must use a unique host and port")
     rnode_ports = [radio["port"].lower() for radio in normalized_rnodes]
     if len(set(rnode_ports)) != len(rnode_ports):
-        raise ValueError("Each RNode interface must use a unique serial port")
+        raise ValueError("Each RNode interface must use a unique connection")
+    rnode_runtime_ports = [radio["runtime_port"].lower() for radio in normalized_rnodes]
+    if len(set(rnode_runtime_ports)) != len(rnode_runtime_ports):
+        raise ValueError("Each RNode interface must use a unique runtime connection")
     if mode == "embedded" and not normalized_peers and not normalized_rnodes:
         raise ValueError("Add a TCP peer or an RNode interface before starting the embedded node")
     if mode == "existing_shared_instance" and (normalized_peers or normalized_rnodes):
@@ -205,7 +237,9 @@ def start_node(config_dir, mode, tcp_peers="[]", rpc_key_hex="", rnode_interface
             # the interpreter is unsafe. Reuse its RNS singleton and replace
             # only Starling's interfaces after an explicit disconnect.
             _disconnect_configured_interfaces()
-            _write_config(config_dir, mode, normalized_peers, normalized_rnodes, rpc_key_hex)
+            if android_platform and normalized_rnodes:
+                _install_android_tcp_rnode_compat()
+            _write_config(config_dir, mode, normalized_peers, normalized_rnodes, rpc_key_hex, android_platform)
             if mode == "embedded":
                 from RNS.vendor.configobj import ConfigObj
 
@@ -229,7 +263,9 @@ def start_node(config_dir, mode, tcp_peers="[]", rpc_key_hex="", rnode_interface
     except OSError:
         pass
     os.umask(0o077)
-    _write_config(config_dir, mode, normalized_peers, normalized_rnodes, rpc_key_hex)
+    if android_platform and normalized_rnodes:
+        _install_android_tcp_rnode_compat()
+    _write_config(config_dir, mode, normalized_peers, normalized_rnodes, rpc_key_hex, android_platform)
     _reticulum = construct_without_required_process_signals(lambda: RNS.Reticulum(
         configdir=config_dir,
         loglevel=RNS.LOG_NOTICE,
@@ -300,6 +336,11 @@ def status():
                     rnode_interfaces.append({
                         "port": radio["port"],
                         "online": bool(getattr(interface, "online", False)),
+                        "frequency_hz": radio["frequency_hz"],
+                        "bandwidth_hz": radio["bandwidth_hz"],
+                        "tx_power_dbm": radio["tx_power_dbm"],
+                        "spreading_factor": radio["spreading_factor"],
+                        "coding_rate": radio["coding_rate"],
                     })
         except Exception:
             tcp_interfaces = [
@@ -307,7 +348,14 @@ def status():
                 for peer in _tcp_peers
             ]
             rnode_interfaces = [
-                {"port": radio["port"], "online": False}
+                {
+                    "port": radio["port"], "online": False,
+                    "frequency_hz": radio["frequency_hz"],
+                    "bandwidth_hz": radio["bandwidth_hz"],
+                    "tx_power_dbm": radio["tx_power_dbm"],
+                    "spreading_factor": radio["spreading_factor"],
+                    "coding_rate": radio["coding_rate"],
+                }
                 for radio in _rnode_interfaces
             ]
 
@@ -318,6 +366,34 @@ def status():
         "rnode_interfaces": rnode_interfaces,
         "shared_instance_connected": bool(getattr(_reticulum, "is_connected_to_shared_instance", False)),
     })
+
+
+def _install_android_tcp_rnode_compat():
+    """Satisfy RNS's Android-only USB imports when using its TCP RNode path.
+
+    Starling supports only TCP-backed RNodes on Android. The native USB and
+    Bluetooth implementations require PyJNIus/usbserial4a, neither of which is
+    used by this app. RNS currently checks for those modules before selecting
+    its TCP mode, so provide import-only modules for that unused branch.
+    """
+    package = sys.modules.get("usbserial4a")
+    if package is None:
+        package = types.ModuleType("usbserial4a")
+        package.__spec__ = ModuleSpec("usbserial4a", loader=None, is_package=True)
+        package.__path__ = []
+        sys.modules["usbserial4a"] = package
+
+    serial_module = sys.modules.get("usbserial4a.serial4a")
+    if serial_module is None:
+        serial_module = types.ModuleType("usbserial4a.serial4a")
+        serial_module.__spec__ = ModuleSpec("usbserial4a.serial4a", loader=None)
+        sys.modules["usbserial4a.serial4a"] = serial_module
+    package.serial4a = serial_module
+
+    if "jnius" not in sys.modules:
+        jnius_module = types.ModuleType("jnius")
+        jnius_module.__spec__ = ModuleSpec("jnius", loader=None)
+        sys.modules["jnius"] = jnius_module
 
 
 def stop_node():

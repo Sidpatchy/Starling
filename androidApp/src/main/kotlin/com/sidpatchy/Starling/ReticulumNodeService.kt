@@ -29,7 +29,9 @@ class ReticulumNodeService : Service() {
     private val rrcWorker = Executors.newSingleThreadExecutor { runnable -> Thread(runnable, "starling-rrc") }
     private var mode = ReticulumRuntimeMode.EMBEDDED
     private var tcpPeersJson = "[]"
+    private var rnodeInterfacesJson = "[]"
     private var rpcKeyHex = ""
+    private val rnodeBluetoothBridge by lazy { AndroidRNodeBluetoothBridge(this) }
     private var pythonModule: com.chaquo.python.PyObject? = null
     private var rrcModule: com.chaquo.python.PyObject? = null
     private var lxmfModule: com.chaquo.python.PyObject? = null
@@ -38,6 +40,7 @@ class ReticulumNodeService : Service() {
     private var lastNodeMessage = ""
     private var lastNodeShared = false
     private var lastNodeTcpStatusJson = "[]"
+    private var lastNodeRNodeStatusJson = "[]"
     @Volatile private var stopping = false
 
     private val pollStatus = object : Runnable {
@@ -67,7 +70,7 @@ class ReticulumNodeService : Service() {
                 } else if (pythonModule != null) {
                     publishRuntimeStatus()
                 } else {
-                    publish(lastNodeState, lastNodeMessage, lastNodeShared, lastNodeTcpStatusJson)
+                    publish(lastNodeState, lastNodeMessage, lastNodeShared, lastNodeTcpStatusJson, lastNodeRNodeStatusJson)
                     if (lastNodeState == STATE_STOPPED || lastNodeState == STATE_FAILED) stopSelf(startId)
                 }
             }
@@ -85,6 +88,7 @@ class ReticulumNodeService : Service() {
             ReticulumRuntimeMode.valueOf(intent.getStringExtra(EXTRA_MODE).orEmpty())
         }.getOrDefault(ReticulumRuntimeMode.EMBEDDED)
         tcpPeersJson = intent.getStringExtra(EXTRA_TCP_PEERS).orEmpty().ifBlank { "[]" }
+        rnodeInterfacesJson = intent.getStringExtra(EXTRA_RNODE_INTERFACES).orEmpty().ifBlank { "[]" }
         rpcKeyHex = intent.getStringExtra(EXTRA_RPC_KEY).orEmpty()
 
         startForegroundCompat()
@@ -92,6 +96,7 @@ class ReticulumNodeService : Service() {
 
         rrcWorker.execute {
             try {
+                startBleRNodeBridgeIfNeeded()
                 if (!Python.isStarted()) Python.start(AndroidPlatform(this))
                 val module = Python.getInstance().getModule("starling_rns")
                 pythonModule = module
@@ -103,6 +108,7 @@ class ReticulumNodeService : Service() {
                     if (mode == ReticulumRuntimeMode.EMBEDDED) "embedded" else "existing_shared_instance",
                     tcpPeersJson,
                     rpcKeyHex,
+                    rnodeInterfacesJson,
                 ).toString()
                 try {
                     lxmfModule?.callAttr("start", noBackupFilesDir.resolve("reticulum").absolutePath)
@@ -120,6 +126,7 @@ class ReticulumNodeService : Service() {
                 }
             } catch (error: Exception) {
                 Log.e(TAG, "Reticulum startup failed", error)
+                rnodeBluetoothBridge.stop()
                 handler.post {
                     publish(STATE_FAILED, message = error.message ?: error.javaClass.simpleName)
                     handler.removeCallbacks(pollStatus)
@@ -143,6 +150,8 @@ class ReticulumNodeService : Service() {
                 pythonModule?.callAttr("stop_node")
             } catch (error: Exception) {
                 Log.w(TAG, "Error while shutting down Reticulum", error)
+            } finally {
+                rnodeBluetoothBridge.stop()
             }
             handler.post {
                 publish(STATE_STOPPED)
@@ -162,20 +171,32 @@ class ReticulumNodeService : Service() {
             }
             val shared = json.optBoolean("shared_instance_connected", false)
             val tcpStatusJson = json.optJSONArray("tcp_interfaces")?.toString() ?: "[]"
+            val rnodeStatusJson = json.optJSONArray("rnode_interfaces")?.toString() ?: "[]"
             val peers = json.optJSONArray("tcp_interfaces")
+            val radios = json.optJSONArray("rnode_interfaces")
             var onlineCount = 0
             if (peers != null) {
                 for (index in 0 until peers.length()) {
                     if (peers.optJSONObject(index)?.optBoolean("online", false) == true) onlineCount++
                 }
             }
+            var onlineRadioCount = 0
+            if (radios != null) {
+                for (index in 0 until radios.length()) {
+                    if (radios.optJSONObject(index)?.optBoolean("online", false) == true) onlineRadioCount++
+                }
+            }
             publish(
                 state = STATE_RUNNING,
                 shared = shared,
                 tcpStatusJson = tcpStatusJson,
+                rnodeStatusJson = rnodeStatusJson,
             )
             val notificationText = when {
                 shared -> "Using the existing local Reticulum instance"
+                radios != null && radios.length() > 0 && peers != null && peers.length() > 0 ->
+                    "$onlineCount TCP and $onlineRadioCount RNode connections online"
+                radios != null && radios.length() > 0 -> "$onlineRadioCount of ${radios.length()} RNode radios online"
                 peers != null && peers.length() > 0 -> "$onlineCount of ${peers.length()} TCP connections online"
                 else -> "Reticulum node is running"
             }
@@ -300,16 +321,19 @@ class ReticulumNodeService : Service() {
         message: String = "",
         shared: Boolean = false,
         tcpStatusJson: String = "[]",
+        rnodeStatusJson: String = "[]",
     ) {
         lastNodeState = state
         lastNodeMessage = message
         lastNodeShared = shared
         lastNodeTcpStatusJson = tcpStatusJson
+        lastNodeRNodeStatusJson = rnodeStatusJson
         val intent = Intent(ACTION_STATE)
             .setPackage(packageName)
             .putExtra(EXTRA_STATE, state)
             .putExtra(EXTRA_MODE, mode.name)
             .putExtra(EXTRA_TCP_STATUS, tcpStatusJson)
+            .putExtra(EXTRA_RNODE_STATUS, rnodeStatusJson)
             .putExtra(EXTRA_SHARED, shared)
             .putExtra(EXTRA_MESSAGE, message)
         sendBroadcast(intent)
@@ -365,12 +389,28 @@ class ReticulumNodeService : Service() {
         stopping = true
         handler.removeCallbacks(pollStatus)
         handler.removeCallbacks(pollRrcEvents)
+        runCatching { rnodeBluetoothBridge.stop() }
         // This service has its own process. Reticulum is a process singleton;
         // clearing that interpreter on shutdown makes a later user reconnect
         // start from a clean state without killing the UI process.
         runCatching { pythonModule?.callAttr("stop_node") }
         super.onDestroy()
         Process.killProcess(Process.myPid())
+    }
+
+    private fun startBleRNodeBridgeIfNeeded() {
+        val radios = JSONArray(rnodeInterfacesJson)
+        var selectedName: String? = null
+        for (index in 0 until radios.length()) {
+            val port = radios.optJSONObject(index)?.optString("port").orEmpty()
+            if (!port.startsWith("ble://", ignoreCase = true)) continue
+            if (selectedName != null) throw IllegalArgumentException("Only one BLE RNode can be connected on Android at a time.")
+            selectedName = port.drop("ble://".length).trim()
+        }
+        if (selectedName != null) {
+            val error = rnodeBluetoothBridge.start(selectedName)
+            if (error != null) throw IllegalStateException(error)
+        }
     }
 
     companion object {
@@ -390,6 +430,8 @@ class ReticulumNodeService : Service() {
         const val EXTRA_MODE = "mode"
         const val EXTRA_TCP_PEERS = "tcp_peers"
         const val EXTRA_TCP_STATUS = "tcp_status"
+        const val EXTRA_RNODE_INTERFACES = "rnode_interfaces"
+        const val EXTRA_RNODE_STATUS = "rnode_status"
         const val EXTRA_STATE = "state"
         const val EXTRA_SHARED = "shared"
         const val EXTRA_RPC_KEY = "rpc_key"

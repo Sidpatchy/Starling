@@ -8,6 +8,7 @@ final class StarlingEmbeddedPythonRuntime: NSObject, IosPythonRuntime {
     private let pythonModules: String
     private let executablePath: String
     private let runtimeLock = NSRecursiveLock()
+    private let rnodeBluetoothBridge = StarlingRNodeBluetoothBridge()
     private var didInitialize = false
     private var startupError: String?
 
@@ -57,5 +58,13 @@ final class StarlingEmbeddedPythonRuntime: NSObject, IosPythonRuntime {
             return "ERROR\t\(encoded)"
         }
         return StarlingPythonInvoke(command)
+    }
+
+    func startRNodeBleProxy(deviceName: String) -> String? {
+        rnodeBluetoothBridge.start(targetName: deviceName.isEmpty ? nil : deviceName)
+    }
+
+    func stopRNodeBleProxy() {
+        rnodeBluetoothBridge.stop()
     }
 }
