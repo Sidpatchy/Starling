@@ -353,7 +353,7 @@ internal class AndroidRNodeBluetoothBridge(context: Context) {
     }
 
     private fun onRNodeData(bytes: ByteArray?) {
-        if (bytes.isNullOrEmpty()) return
+        if (bytes == null || bytes.isEmpty()) return
         val destination = synchronized(lock) {
             val socket = clientSocket
             if (socket == null) {
