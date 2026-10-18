@@ -40,7 +40,6 @@ STARLING_COMPOSE_CONFIGURATION=release xcodebuild \
   -scheme Starling-App \
   -configuration Release \
   -sdk iphoneos \
-  -arch arm64 \
   -destination 'generic/platform=iOS' \
   -derivedDataPath .build/StarlingDerivedData \
   CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
