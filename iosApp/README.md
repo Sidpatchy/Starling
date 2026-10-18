@@ -24,17 +24,27 @@ chat preferences and history use the shared persisted-state codec. iOS does not
 provide an Android-style background service, so live networking is foreground-only.
 
 The unsigned release IPA workflow prepares the pinned Python support framework,
-builds the release Compose framework, lets xtool create the IPA, then installs
-Python's standard library and extension frameworks into the app bundle. It also
-cross-builds PyCA cryptography wheels for iOS device and simulator using
-cibuildwheel and Rust. To run it manually on a Mac with full Xcode and rustup
-installed:
+builds the release Compose framework, asks xtool to generate an Xcode project,
+then uses Xcode to build against the installed iOS SDK before embedding Python's
+standard library and extension frameworks. The Xcode build is required for
+App Store Connect's SDK and platform metadata. The workflow also cross-builds
+PyCA cryptography wheels for iOS device and simulator using cibuildwheel and
+Rust. To run it manually on a Mac with Xcode 26 or later and rustup installed:
 
 ```sh
 bash packaging/ios/prepare-python-runtime.sh
 ./gradlew :composeApp:assembleComposeAppReleaseXCFramework
-STARLING_COMPOSE_CONFIGURATION=release xtool dev build --configuration release --ipa --triple arm64-apple-ios
-# Then run packaging/ios/package-python-ipa.sh on the generated IPA.
+STARLING_COMPOSE_CONFIGURATION=release xtool dev generate-xcode-project
+STARLING_COMPOSE_CONFIGURATION=release xcodebuild \
+  -project xtool/.xtool-tmp/Starling.xcodeproj \
+  -target Starling-App \
+  -configuration Release \
+  -sdk iphoneos \
+  -arch arm64 \
+  -derivedDataPath .build/StarlingDerivedData \
+  CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
+app_path="$(find .build/StarlingDerivedData/Build/Products/Release-iphoneos -maxdepth 1 -type d -name '*.app' -print -quit)"
+bash packaging/ios/package-python-app.sh "$app_path" artifacts/Starling-ios-unsigned.ipa
 ```
 
 GitHub Actions can also sign this IPA and upload it to App Store Connect. The

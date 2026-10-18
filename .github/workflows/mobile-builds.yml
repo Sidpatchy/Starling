@@ -123,22 +123,66 @@ jobs:
       - name: Verify shared Compose framework
         run: test -f composeApp/build/XCFrameworks/release/ComposeApp.xcframework/Info.plist
 
-      - name: Build unsigned release device IPA
+      - name: Generate release Xcode project
         env:
           STARLING_COMPOSE_CONFIGURATION: release
-        run: xtool dev build --configuration release --ipa --triple arm64-apple-ios
+        run: xtool dev generate-xcode-project
+
+      - name: Build app with the current iOS SDK
+        env:
+          STARLING_COMPOSE_CONFIGURATION: release
+        shell: bash
+        run: |
+          derived_data="$RUNNER_TEMP/StarlingDerivedData"
+          xcodebuild \
+            -project xtool/.xtool-tmp/Starling.xcodeproj \
+            -target Starling-App \
+            -configuration Release \
+            -sdk iphoneos \
+            -arch arm64 \
+            -derivedDataPath "$derived_data" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            build
+
+          product_directory="$derived_data/Build/Products/Release-iphoneos"
+          app_path="$(find "$product_directory" -maxdepth 1 -type d -name '*.app' -print -quit)"
+          if [[ -z "$app_path" ]]; then
+            echo "Xcode did not produce an iOS app in $product_directory" >&2
+            exit 1
+          fi
+
+          info_plist="$app_path/Info.plist"
+          platform_name="$(/usr/libexec/PlistBuddy -c 'Print :DTPlatformName' "$info_plist")"
+          sdk_name="$(/usr/libexec/PlistBuddy -c 'Print :DTSDKName' "$info_plist")"
+          expected_sdk="$(xcrun --sdk iphoneos --show-sdk-version)"
+          if [[ "$platform_name" != iphoneos || "$sdk_name" != "iphoneos$expected_sdk" ]]; then
+            echo "Unexpected app build metadata: platform=$platform_name sdk=$sdk_name expected=iphoneos$expected_sdk" >&2
+            exit 1
+          fi
+
+          executable="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$info_plist")"
+          binary_sdk="$(xcrun vtool -show-build "$app_path/$executable" | awk '$1 == "sdk" { print $2; exit }')"
+          case "$binary_sdk" in
+            "$expected_sdk"|"$expected_sdk".*) ;;
+            *)
+              echo "App binary SDK $binary_sdk does not match the installed iOS SDK $expected_sdk" >&2
+              exit 1
+              ;;
+          esac
 
       - name: Package unsigned IPA with embedded Python
         shell: bash
         run: |
-          ipa_path="$(find . -type f -name '*.ipa' -not -path './.git/*' -not -path './artifacts/*' -print -quit)"
-          if [[ -z "$ipa_path" ]]; then
-            echo "xtool did not produce an IPA" >&2
+          product_directory="$RUNNER_TEMP/StarlingDerivedData/Build/Products/Release-iphoneos"
+          app_path="$(find "$product_directory" -maxdepth 1 -type d -name '*.app' -print -quit)"
+          if [[ -z "$app_path" ]]; then
+            echo "Xcode did not produce an iOS app" >&2
             exit 1
           fi
           mkdir -p artifacts
-          bash packaging/ios/package-python-ipa.sh \
-            "$ipa_path" \
+          bash packaging/ios/package-python-app.sh \
+            "$app_path" \
             "artifacts/Starling-${{ needs.resolve-version.outputs.app_version }}-ios-unsigned.ipa"
 
       - name: Upload unsigned IPA
