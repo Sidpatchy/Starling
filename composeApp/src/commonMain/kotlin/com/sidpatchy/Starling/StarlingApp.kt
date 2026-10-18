@@ -111,6 +111,13 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.stateDescription
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.flowOf
@@ -119,7 +126,8 @@ import kotlinx.coroutines.withTimeoutOrNull
 
 private val EMPTY_CHAT_ROOM = ChatRoom("empty", "", "", "", 0)
 private val SidebarEdgeInset = 12.dp
-private val SidebarActionSize = 30.dp
+private val SidebarActionSize = 48.dp
+private val InteractiveRowMinHeight = 48.dp
 
 @Composable
 fun StarlingApp(
@@ -525,6 +533,13 @@ fun StarlingApp(
                                 EmptyNetworkContent(
                                     onAddNetwork = { showAddNetwork = true },
                                     onSettings = { showSettings = true; showSettingsIndex = true },
+                                    showIdentitySetup = !previewMode && identityManager != null && identityState == ReticulumIdentityState.Missing,
+                                    onSetupIdentity = {
+                                        showIdentityPage = true
+                                        showSettings = false
+                                        showContactRequests = false
+                                        selectedDirectMessageId = null
+                                    },
                                 )
                                 if (!showDesktopNavigation) {
                                     NavigationToggle(Modifier.align(Alignment.TopStart)) { showDesktopNavigation = true }
@@ -748,6 +763,13 @@ fun StarlingApp(
                             EmptyNetworkContent(
                                 onAddNetwork = { showAddNetwork = true },
                                 onSettings = { showSettings = true; showSettingsIndex = true },
+                                showIdentitySetup = !previewMode && identityManager != null && identityState == ReticulumIdentityState.Missing,
+                                onSetupIdentity = {
+                                    showIdentityPage = true
+                                    showSettings = false
+                                    showContactRequests = false
+                                    selectedDirectMessageId = null
+                                },
                                 modifier = Modifier.fillMaxSize(),
                             )
                         } else Box(Modifier.fillMaxSize()) {
@@ -937,8 +959,10 @@ private fun ChatContent(
         error?.let {
             Text(
                 it,
-                modifier = Modifier.fillMaxWidth().background(Color(0x22C44545)).padding(horizontal = 18.dp, vertical = 8.dp),
-                color = Color(0xFFC44545),
+                modifier = Modifier.fillMaxWidth().background(Color(0x22C44545))
+                    .semantics { liveRegion = LiveRegionMode.Assertive }
+                    .padding(horizontal = 18.dp, vertical = 8.dp),
+                color = ErrorText,
                 fontSize = 11.sp,
             )
         }
@@ -1021,7 +1045,7 @@ private fun DirectMessageContent(
         if (isLive) LiveNotice("Connected to LXMF. Delivery may wait for the recipient’s Reticulum path.")
         else PreviewNotice("Direct messages are local preview only — start Reticulum to use LXMF.")
         if (error != null) {
-            Text(error, modifier = Modifier.fillMaxWidth().background(Color(0x22C44545)).padding(horizontal = 18.dp, vertical = 8.dp), color = Color(0xFFC44545), fontSize = 11.sp)
+            Text(error, modifier = Modifier.fillMaxWidth().background(Color(0x22C44545)).padding(horizontal = 18.dp, vertical = 8.dp), color = ErrorText, fontSize = 11.sp)
         }
 
         if (messages.isEmpty()) {
@@ -1131,7 +1155,7 @@ private fun ContactRequestsPage(
                         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             TextButton(onClick = { onAccept(request) }) { Text("Accept", color = Accent) }
                             TextButton(onClick = { onIgnore(request) }) { Text("Ignore", color = Muted) }
-                            TextButton(onClick = { onBlock(request) }) { Text("Block", color = Color(0xFFC44545)) }
+                            TextButton(onClick = { onBlock(request) }) { Text("Block", color = ErrorText) }
                         }
                     }
                 }
@@ -1226,7 +1250,7 @@ private fun AddNetworkDialog(previewMode: Boolean, onAdd: (String, String) -> Un
 
 @Composable
 internal fun NavigationToggle(modifier: Modifier = Modifier, onClick: () -> Unit) {
-    IconButton(onClick = onClick, modifier = modifier.size(42.dp)) {
+    IconButton(onClick = onClick, modifier = modifier.size(48.dp)) {
         Icon(Icons.Filled.Menu, contentDescription = "Open navigation", tint = Accent)
     }
 }
@@ -1235,6 +1259,8 @@ internal fun NavigationToggle(modifier: Modifier = Modifier, onClick: () -> Unit
 private fun EmptyNetworkContent(
     onAddNetwork: () -> Unit,
     onSettings: () -> Unit,
+    showIdentitySetup: Boolean,
+    onSetupIdentity: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -1245,13 +1271,22 @@ private fun EmptyNetworkContent(
         Text("No channels to show", color = Ink, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
         Spacer(Modifier.height(8.dp))
         Text(
-            "Add an RRC network and a channel, or turn on Local preview in Settings to explore the sample chat.",
+            if (showIdentitySetup) {
+                "Create an identity or import a backup before connecting. Then add an RRC network and channel."
+            } else {
+                "Add an RRC network and a channel, or turn on Local preview in Settings to explore the sample chat."
+            },
             color = Muted,
             fontSize = 13.sp,
             lineHeight = 19.sp,
         )
         Spacer(Modifier.height(16.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            if (showIdentitySetup) {
+                Button(onClick = onSetupIdentity, colors = ButtonDefaults.buttonColors(containerColor = Accent)) {
+                    Text("Set up identity")
+                }
+            }
             Button(onClick = onAddNetwork, colors = ButtonDefaults.buttonColors(containerColor = Accent)) {
                 Text("Add network")
             }
@@ -1329,7 +1364,7 @@ private fun ManageChannelDialog(
         },
         confirmButton = {
             TextButton(onClick = onRemoveFromApp) {
-                Text("Remove from app", color = Color(0xFFC44545))
+                Text("Remove from app", color = ErrorText)
             }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Done", color = Accent) } },
@@ -1371,7 +1406,7 @@ private fun RoomSidebar(
         previewMode -> "Live identity hidden in preview" to Muted
         rrcState is ReticulumConnectionState.Connected ->
             "Connected to ${rrcState.hubName?.takeIf(String::isNotBlank) ?: "RRC hub"}" to Color(0xFF48A868)
-        rrcState is ReticulumConnectionState.Failed -> "Hub connection failed" to Color(0xFFC44545)
+        rrcState is ReticulumConnectionState.Failed -> "Hub connection failed" to ErrorText
         rrcState is ReticulumConnectionState.Connecting || rrcState == ReticulumConnectionState.Starting ->
             "Connecting to hub" to Color(0xFFE1A448)
         nodeState is ReticulumNodeState.Running -> {
@@ -1386,7 +1421,7 @@ private fun RoomSidebar(
         }
         nodeState is ReticulumNodeState.Starting || nodeState is ReticulumNodeState.PreparingRuntime ->
             "Starting Reticulum" to Color(0xFFE1A448)
-        nodeState is ReticulumNodeState.Failed -> "Reticulum node failed" to Color(0xFFC44545)
+        nodeState is ReticulumNodeState.Failed -> "Reticulum node failed" to ErrorText
         nodeState is ReticulumNodeState.Unavailable -> "Reticulum unavailable" to Muted
         else -> "Reticulum stopped" to Muted
     }
@@ -1448,6 +1483,7 @@ private fun RoomSidebar(
                     network = network,
                     expanded = network.id in expandedNetworkIds,
                     connectionColor = networkConnectionColor(network, previewMode, activeHubNetworkId, rrcState, nodeState),
+                    connectionDescription = networkConnectionDescription(network, previewMode, activeHubNetworkId, rrcState, nodeState),
                     onAddChannel = { onAddChannel(network.id) },
                     onDetails = { onNetworkDetails(network) },
                     onClick = {
@@ -1470,8 +1506,10 @@ private fun RoomSidebar(
                     }
                     if (networkRooms.isEmpty()) {
                         Row(
-                            modifier = Modifier.fillMaxWidth().padding(start = 42.dp, end = 12.dp)
-                                .clip(RoundedCornerShape(8.dp)).clickable { onAddChannel(network.id) }
+                            modifier = Modifier.fillMaxWidth().heightIn(min = InteractiveRowMinHeight)
+                                .padding(start = 42.dp, end = 12.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable(role = Role.Button) { onAddChannel(network.id) }
                                 .padding(vertical = 7.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
@@ -1505,9 +1543,10 @@ private fun RoomSidebar(
                 Row(
                     modifier = Modifier.fillMaxWidth()
                         .padding(horizontal = SidebarEdgeInset, vertical = 2.dp)
-                        .clip(RoundedCornerShape(9.dp))
+                        .heightIn(min = InteractiveRowMinHeight).clip(RoundedCornerShape(9.dp))
                         .background(if (member.id == selectedDirectMessageId) PaleAccent else Color.Transparent)
-                        .clickable { onContactSelected(member) }
+                        .clickable(role = Role.Button) { onContactSelected(member) }
+                        .semantics { selected = member.id == selectedDirectMessageId }
                         .padding(horizontal = 10.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -1526,7 +1565,8 @@ private fun RoomSidebar(
             }
             Row(
                 modifier = Modifier.fillMaxWidth().padding(start = SidebarEdgeInset, end = SidebarEdgeInset, top = 8.dp, bottom = 6.dp)
-                    .clip(RoundedCornerShape(9.dp)).clickable(onClick = onRequestsClick)
+                    .heightIn(min = InteractiveRowMinHeight).clip(RoundedCornerShape(9.dp))
+                    .clickable(role = Role.Button, onClick = onRequestsClick)
                     .padding(start = 10.dp, end = 8.dp, top = 7.dp, bottom = 7.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -1534,7 +1574,17 @@ private fun RoomSidebar(
                 if (requestsCount > 0) {
                     Text(
                         requestsCount.toString(),
-                        modifier = Modifier.clip(CircleShape).background(PaleAccent).padding(horizontal = 7.dp, vertical = 3.dp),
+                        // The row is a single button target, so give its compact numeric badge context.
+                        // This lets screen readers announce "3 pending requests" instead of just "3".
+                        modifier = Modifier
+                            .semantics {
+                                contentDescription = if (requestsCount == 1) {
+                                    "1 pending request"
+                                } else {
+                                    "$requestsCount pending requests"
+                                }
+                            }
+                            .clip(CircleShape).background(PaleAccent).padding(horizontal = 7.dp, vertical = 3.dp),
                         color = Accent,
                         fontSize = 10.sp,
                         fontWeight = FontWeight.Bold,
@@ -1549,7 +1599,8 @@ private fun RoomSidebar(
         ) {
             Column(
                 modifier = Modifier.weight(1f).clip(RoundedCornerShape(10.dp))
-                    .clickable(onClick = onIdentityClick).padding(horizontal = 8.dp, vertical = 9.dp),
+                    .heightIn(min = InteractiveRowMinHeight).clickable(role = Role.Button, onClick = onIdentityClick)
+                    .padding(horizontal = 8.dp, vertical = 9.dp),
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(Modifier.size(8.dp).clip(CircleShape).background(identityColor))
@@ -1652,11 +1703,28 @@ private fun networkConnectionColor(
     }
 }
 
+private fun networkConnectionDescription(
+    network: ChatNetwork,
+    previewMode: Boolean,
+    activeHubNetworkId: String?,
+    rrcState: ReticulumConnectionState,
+    nodeState: ReticulumNodeState,
+): String = when {
+    previewMode || network.isPreview -> "Local preview"
+    activeHubNetworkId != network.id -> "Not active"
+    rrcState is ReticulumConnectionState.Connected -> "Connected"
+    rrcState == ReticulumConnectionState.Starting || rrcState == ReticulumConnectionState.Connecting -> "Connecting"
+    rrcState is ReticulumConnectionState.Failed || nodeState is ReticulumNodeState.Failed -> "Connection failed"
+    nodeState is ReticulumNodeState.Starting || nodeState is ReticulumNodeState.PreparingRuntime -> "Starting Reticulum"
+    else -> "Disconnected"
+}
+
 @Composable
 private fun NetworkRow(
     network: ChatNetwork,
     expanded: Boolean,
     connectionColor: Color,
+    connectionDescription: String,
     onAddChannel: () -> Unit,
     onDetails: () -> Unit,
     onClick: () -> Unit,
@@ -1681,7 +1749,11 @@ private fun NetworkRow(
                         }
                     }
                 }
-                .combinedClickable(onClick = onClick, onLongClick = onDetails)
+                .heightIn(min = InteractiveRowMinHeight)
+                .combinedClickable(role = Role.Button, onClick = onClick, onLongClick = onDetails)
+                .semantics {
+                    stateDescription = "${if (expanded) "Expanded" else "Collapsed"}, $connectionDescription"
+                }
                 .padding(start = 10.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -1702,6 +1774,9 @@ private fun NetworkRow(
                 maxLines = 1,
             )
         }
+        IconButton(onClick = onDetails, modifier = Modifier.size(SidebarActionSize)) {
+            Icon(Icons.Filled.MoreVert, contentDescription = "Network status for ${network.name}", tint = Muted)
+        }
         IconButton(onClick = onAddChannel, modifier = Modifier.size(SidebarActionSize)) {
             Icon(Icons.Filled.Add, contentDescription = "Add channel to ${network.name}", tint = Muted)
         }
@@ -1720,7 +1795,8 @@ private fun RoomRow(room: ChatRoom, selected: Boolean, onClick: () -> Unit, onMa
         Row(
             modifier = Modifier.weight(1f).clip(RoundedCornerShape(9.dp))
                 .background(if (selected) PaleAccent else Color.Transparent)
-                .clickable(onClick = onClick)
+                .heightIn(min = InteractiveRowMinHeight).clickable(role = Role.Button, onClick = onClick)
+                .semantics { this.selected = selected }
                 .padding(start = 31.dp, end = 8.dp, top = 10.dp, bottom = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -1783,7 +1859,11 @@ private fun ChatHeader(
             }
         }
         Row(
-            modifier = Modifier.clip(RoundedCornerShape(10.dp)).clickable(onClick = onToggleMembers)
+            modifier = Modifier.heightIn(min = InteractiveRowMinHeight)
+                .clip(RoundedCornerShape(10.dp)).clickable(role = Role.Button, onClick = onToggleMembers)
+                .semantics {
+                    stateDescription = if (membersVisible) "Member list shown" else "Member list hidden"
+                }
                 .padding(horizontal = 10.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -1872,8 +1952,8 @@ private fun MemberSectionLabel(label: String) {
 private fun MemberRow(member: ChatMember, isContact: Boolean, onClick: () -> Unit) {
     val palette = LocalStarlingPalette.current
     Row(
-        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(9.dp))
-            .clickable(enabled = !member.isSelf, onClick = onClick)
+        modifier = Modifier.fillMaxWidth().heightIn(min = InteractiveRowMinHeight).clip(RoundedCornerShape(9.dp))
+            .clickable(enabled = !member.isSelf, role = Role.Button, onClick = onClick)
             .padding(horizontal = 5.dp, vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -2033,7 +2113,11 @@ private fun MessageRow(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         authorName,
-                        modifier = Modifier.clickable(enabled = member != null && !member.isSelf, onClick = onMemberClick),
+                        modifier = Modifier
+                            .clickable(enabled = member != null && !member.isSelf, role = Role.Button, onClick = onMemberClick)
+                            .semantics {
+                                contentDescription = if (member != null && !member.isSelf) "View profile for $authorName" else authorName
+                            },
                         color = authorColor,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.SemiBold,
@@ -2063,7 +2147,10 @@ private fun MessageRow(
             Text(
                 "$authorName ",
                 modifier = Modifier
-                    .clickable(enabled = member != null && !member.isSelf, onClick = onMemberClick)
+                    .clickable(enabled = member != null && !member.isSelf, role = Role.Button, onClick = onMemberClick)
+                    .semantics {
+                        contentDescription = if (member != null && !member.isSelf) "View profile for $authorName" else authorName
+                    }
                     .alignBy(FirstBaseline),
                 color = authorColor,
                 fontSize = 13.sp,
@@ -2081,7 +2168,10 @@ private fun MessageRow(
             Text(
                 "$authorName:",
                 modifier = Modifier
-                    .clickable(enabled = member != null && !member.isSelf, onClick = onMemberClick)
+                    .clickable(enabled = member != null && !member.isSelf, role = Role.Button, onClick = onMemberClick)
+                    .semantics {
+                        contentDescription = if (member != null && !member.isSelf) "View profile for $authorName" else authorName
+                    }
                     .alignBy(FirstBaseline),
                 color = authorColor,
                 fontSize = 13.sp,
@@ -2116,7 +2206,7 @@ private fun SystemMessageRow(
     val isStandaloneSystemMessage = isErrorMessage || message.systemEvents.any { it.kind == ChatSystemEventKind.HELP }
     val canExpand = message.systemEvents.size > 1 && !isStandaloneSystemMessage
     val summaryMaxLines = if (expanded || isStandaloneSystemMessage) Int.MAX_VALUE else 2
-    val textColor = if (isErrorMessage) Color(0xFFC44545) else Muted
+    val textColor = if (isErrorMessage) ErrorText else Muted
     val verticalPadding = if (denseMessages) 1.dp else 4.dp
 
     if (bubbleStyle) {
@@ -2185,7 +2275,7 @@ private fun SystemMessageRow(
 
 @Composable
 private fun SystemEventExpandButton(expanded: Boolean, onClick: () -> Unit) {
-    IconButton(onClick = onClick, modifier = Modifier.size(28.dp)) {
+    IconButton(onClick = onClick, modifier = Modifier.size(48.dp)) {
         Icon(
             imageVector = if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
             contentDescription = if (expanded) "Collapse system events" else "Expand system events",
@@ -2223,7 +2313,7 @@ private fun deliveryMarker(state: String?) {
         "sending" -> Triple(Icons.Filled.Schedule, "Sending", Muted)
         "sent" -> Triple(Icons.Filled.Check, "Sent", Accent)
         "delivered" -> Triple(Icons.Filled.Check, "Delivered", Accent)
-        "failed", "rejected" -> Triple(Icons.Filled.ErrorOutline, "Delivery failed", Color(0xFFC44545))
+        "failed", "rejected" -> Triple(Icons.Filled.ErrorOutline, "Delivery failed", ErrorText)
         else -> return
     }
     Icon(
@@ -2313,9 +2403,13 @@ private fun MessageComposer(
             ) {
                 itemsIndexed(slashSuggestions, key = { _, command -> command.name }) { index, command ->
                     Column(
-                        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
+                        modifier = Modifier.fillMaxWidth().heightIn(min = InteractiveRowMinHeight)
+                            .clip(RoundedCornerShape(8.dp))
                             .background(if (index == selectedSlashSuggestionIndex) PaleAccent else Color.Transparent)
-                            .clickable { draft = completeSlashCommand(draft, command) }
+                            .clickable(role = Role.Button) { draft = completeSlashCommand(draft, command) }
+                            .semantics(mergeDescendants = true) {
+                                selected = index == selectedSlashSuggestionIndex
+                            }
                             .padding(horizontal = 10.dp, vertical = 7.dp),
                         verticalArrangement = Arrangement.spacedBy(2.dp),
                     ) {
@@ -2345,7 +2439,9 @@ private fun MessageComposer(
                 BasicTextField(
                     value = draft,
                     onValueChange = { draft = limitChatMessageLength(it) },
-                    modifier = Modifier.weight(1f).onPreviewKeyEvent { event ->
+                    modifier = Modifier.weight(1f).semantics {
+                        contentDescription = "Message"
+                    }.onPreviewKeyEvent { event ->
                         if (event.type != KeyEventType.KeyDown || slashSuggestions.isEmpty()) {
                             false
                         } else {
@@ -2383,7 +2479,7 @@ private fun MessageComposer(
                     },
                 )
                 if (keyboardVisible) {
-                    IconButton(onClick = { focusManager.clearFocus() }, modifier = Modifier.size(32.dp)) {
+                    IconButton(onClick = { focusManager.clearFocus() }, modifier = Modifier.size(48.dp)) {
                         Icon(Icons.Filled.KeyboardHide, contentDescription = "Hide keyboard", tint = Muted)
                     }
                 } else {
@@ -2398,7 +2494,7 @@ private fun MessageComposer(
             Text(
                 "$characterCount / $MAX_CHAT_MESSAGE_CHARACTERS characters",
                 modifier = Modifier.align(Alignment.End).padding(top = 4.dp, end = 4.dp),
-                color = if (characterCount >= MAX_CHAT_MESSAGE_CHARACTERS) Color(0xFFC44545) else Muted,
+                color = if (characterCount >= MAX_CHAT_MESSAGE_CHARACTERS) ErrorText else Muted,
                 fontSize = 10.sp,
             )
         }

@@ -3,6 +3,9 @@ package com.sidpatchy.Starling
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -34,6 +37,12 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.preferredFrameRate
@@ -55,23 +64,24 @@ private fun RuntimeModeSelection(
     enabled: Boolean,
     onSelect: (ReticulumRuntimeMode) -> Unit,
 ) {
-    listOf(ReticulumRuntimeMode.EMBEDDED, ReticulumRuntimeMode.EXISTING_SHARED_INSTANCE).forEach { mode ->
-        Row(
-            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
-                .clickable(enabled = enabled) { onSelect(mode) }
-                .padding(vertical = 1.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            RadioButton(selected = selected == mode, onClick = { onSelect(mode) }, enabled = enabled)
-            Column {
-                Text(
-                    if (mode == ReticulumRuntimeMode.EMBEDDED) "Embedded Starling node" else "Existing local RNS instance",
-                    color = Ink,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Medium,
-                )
-                if (mode == ReticulumRuntimeMode.EXISTING_SHARED_INSTANCE) {
-                    Text("Advanced", color = Muted, fontSize = 10.sp)
+    Column(Modifier.selectableGroup()) {
+        listOf(ReticulumRuntimeMode.EMBEDDED, ReticulumRuntimeMode.EXISTING_SHARED_INSTANCE).forEach { mode ->
+            Row(
+                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).clip(RoundedCornerShape(8.dp))
+                    .selectable(selected = selected == mode, enabled = enabled, role = Role.RadioButton) { onSelect(mode) },
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                RadioButton(selected = selected == mode, onClick = null, enabled = enabled)
+                Column(Modifier.padding(vertical = 6.dp)) {
+                    Text(
+                        if (mode == ReticulumRuntimeMode.EMBEDDED) "Embedded Starling node" else "Existing local RNS instance",
+                        color = Ink,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                    )
+                    if (mode == ReticulumRuntimeMode.EXISTING_SHARED_INSTANCE) {
+                        Text("Advanced", color = Muted, fontSize = 10.sp)
+                    }
                 }
             }
         }
@@ -88,9 +98,12 @@ private fun NetworkHubPicker(
     var expanded by remember { mutableStateOf(false) }
     Box {
         Row(
-            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(Canvas)
+            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).clip(RoundedCornerShape(8.dp)).background(Canvas)
                 .border(1.dp, Line, RoundedCornerShape(8.dp))
-                .clickable(enabled = enabled && networks.isNotEmpty()) { expanded = true }
+                .clickable(enabled = enabled && networks.isNotEmpty(), role = Role.Button) { expanded = true }
+                .semantics {
+                    stateDescription = if (expanded) "Options shown" else "Options hidden"
+                }
                 .padding(horizontal = 12.dp, vertical = 13.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -279,7 +292,7 @@ internal fun SettingsPage(
                 .padding(horizontal = 20.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            IconButton(onClick = onBack, modifier = Modifier.size(40.dp)) {
+            IconButton(onClick = onBack, modifier = Modifier.size(48.dp)) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Accent)
             }
             Spacer(Modifier.width(10.dp))
@@ -298,52 +311,69 @@ internal fun SettingsPage(
             verticalArrangement = Arrangement.spacedBy(18.dp),
         ) {
             if (selectedSection == SettingsSection.APPEARANCE) {
-                Column(
-                    modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Paper)
-                        .border(1.dp, Line, RoundedCornerShape(14.dp)).padding(18.dp),
-                ) {
-                    Text("Color theme", color = Ink, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-                    Spacer(Modifier.height(8.dp))
-                    ThemePreference.values().forEach { option ->
-                        Row(
-                            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
-                                .clickable { onThemeChange(option) }.padding(vertical = 2.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            RadioButton(selected = themePreference == option, onClick = { onThemeChange(option) })
-                            Text(option.label, color = Ink, fontSize = 13.sp)
+                    Column(
+                        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Paper)
+                            .border(1.dp, Line, RoundedCornerShape(14.dp)).padding(18.dp),
+                    ) {
+                        Text("Color theme", color = Ink, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                        Spacer(Modifier.height(8.dp))
+                        Column(Modifier.selectableGroup()) {
+                            ThemePreference.values().forEach { option ->
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).clip(RoundedCornerShape(8.dp))
+                                        .selectable(
+                                            selected = themePreference == option,
+                                            role = Role.RadioButton,
+                                        ) { onThemeChange(option) },
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    RadioButton(selected = themePreference == option, onClick = null)
+                                    Text(option.label, color = Ink, fontSize = 13.sp)
+                                }
+                            }
                         }
-                    }
                     Spacer(Modifier.height(8.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                            .toggleable(value = bubbleStyle, role = Role.Switch, onValueChange = onBubbleStyleChange)
+                            .semantics(mergeDescendants = true) {},
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
                         Column(Modifier.weight(1f)) {
                             Text("Bubble messages", color = Ink, fontSize = 13.sp, fontWeight = FontWeight.Medium)
                             Text("Use a chat-bubble layout instead of the IRC-style timeline.", color = Muted, fontSize = 11.sp)
                         }
-                        Switch(checked = bubbleStyle, onCheckedChange = onBubbleStyleChange)
+                        Switch(checked = bubbleStyle, onCheckedChange = null)
                     }
                     Spacer(Modifier.height(8.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                            .toggleable(value = denseMessages, role = Role.Switch, onValueChange = onDenseMessagesChange)
+                            .semantics(mergeDescendants = true) {},
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
                         Column(Modifier.weight(1f)) {
                             Text("Dense messages", color = Ink, fontSize = 13.sp, fontWeight = FontWeight.Medium)
                             Text("Reduce vertical spacing in room and direct-message history.", color = Muted, fontSize = 11.sp)
                         }
-                        Switch(checked = denseMessages, onCheckedChange = onDenseMessagesChange)
+                        Switch(checked = denseMessages, onCheckedChange = null)
                     }
                     Spacer(Modifier.height(5.dp))
                     Text("Message time zone", color = Ink, fontSize = 13.sp, fontWeight = FontWeight.Medium)
                     Text("Choose how message timestamps are displayed.", color = Muted, fontSize = 11.sp)
-                    TimestampTimeZonePreference.entries.forEach { option ->
-                        Row(
-                            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
-                                .clickable { onTimestampTimeZoneChange(option) }.padding(vertical = 2.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            RadioButton(
-                                selected = timestampTimeZone == option,
-                                onClick = { onTimestampTimeZoneChange(option) },
-                            )
-                            Text(option.label, color = Ink, fontSize = 13.sp)
+                    Column(Modifier.selectableGroup()) {
+                        TimestampTimeZonePreference.entries.forEach { option ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).clip(RoundedCornerShape(8.dp))
+                                    .selectable(
+                                        selected = timestampTimeZone == option,
+                                        role = Role.RadioButton,
+                                    ) { onTimestampTimeZoneChange(option) },
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                RadioButton(selected = timestampTimeZone == option, onClick = null)
+                                Text(option.label, color = Ink, fontSize = 13.sp)
+                            }
                         }
                     }
                 }
@@ -371,7 +401,7 @@ internal fun SettingsPage(
                                     is ReticulumNodeState.Unavailable -> "UNAVAILABLE"
                                     ReticulumNodeState.Stopped -> "DISCONNECTED"
                                 },
-                            color = if (!previewMode && nodeState is ReticulumNodeState.Failed) Color(0xFFC44545) else Accent,
+                            color = if (!previewMode && nodeState is ReticulumNodeState.Failed) ErrorText else Accent,
                             fontSize = 9.sp,
                             fontWeight = FontWeight.Bold,
                             letterSpacing = 0.8.sp,
@@ -392,18 +422,20 @@ internal fun SettingsPage(
                         lineHeight = 18.sp,
                     )
 
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                            .toggleable(value = previewMode, role = Role.Switch) {
+                                connectionInputError = null
+                                onPreviewModeChange(it)
+                            }
+                            .semantics(mergeDescendants = true) {},
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
                         Column(Modifier.weight(1f)) {
                             Text("Local preview", color = Ink, fontSize = 13.sp, fontWeight = FontWeight.Medium)
                             Text("Isolated sample data; live identity and connections are hidden.", color = Muted, fontSize = 11.sp)
                         }
-                        Switch(
-                            checked = previewMode,
-                            onCheckedChange = {
-                                connectionInputError = null
-                                onPreviewModeChange(it)
-                            },
-                        )
+                        Switch(checked = previewMode, onCheckedChange = null)
                     }
 
                     if (previewMode) {
@@ -456,7 +488,7 @@ internal fun SettingsPage(
                                         Text("TCP connection ${index + 1}", modifier = Modifier.weight(1f), color = Ink, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                                         if ((tcpPeers.size > 1 || rnodeInterfaces.isNotEmpty()) && !isRunning && !isStarting) {
                                             TextButton(onClick = { tcpPeers = tcpPeers.filterIndexed { i, _ -> i != index }; connectionInputError = null }) {
-                                                Text("Remove", color = Color(0xFFC44545))
+                                                Text("Remove", color = ErrorText)
                                             }
                                         }
                                     }
@@ -528,7 +560,7 @@ internal fun SettingsPage(
                                                     rnodeInterfaces = rnodeInterfaces.filterIndexed { radioIndex, _ -> radioIndex != index }
                                                     connectionInputError = null
                                                 }) {
-                                                    Text("Remove", color = Color(0xFFC44545))
+                                                    Text("Remove", color = ErrorText)
                                                 }
                                             }
                                         }
@@ -625,7 +657,7 @@ internal fun SettingsPage(
                                             )
                                         }
                                         radio.validationError()?.let { validationError ->
-                                            Text(validationError, color = Color(0xFFC44545), fontSize = 10.sp)
+                                            Text(validationError, color = ErrorText, fontSize = 10.sp)
                                         }
                                     }
                                 }
@@ -700,8 +732,15 @@ internal fun SettingsPage(
                                 else "No TCP connection is open. Turn off local preview to test a peer."
                             } else "Embedded RNS is not available on this platform yet."
                         }
-                        Text(stateMessage, color = if (nodeState is ReticulumNodeState.Failed) Color(0xFFC44545) else Muted, fontSize = 11.sp)
-                        connectionInputError?.let { Text(it, color = Color(0xFFC44545), fontSize = 11.sp) }
+                        Text(stateMessage, color = if (nodeState is ReticulumNodeState.Failed) ErrorText else Muted, fontSize = 11.sp)
+                        connectionInputError?.let {
+                            Text(
+                                it,
+                                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Assertive },
+                                color = ErrorText,
+                                fontSize = 11.sp,
+                            )
+                        }
 
                         if (nodeActionBlockedReason != null && !isStarting) {
                             Column(
@@ -775,7 +814,7 @@ internal fun SettingsPage(
                                     is ReticulumConnectionState.Connected -> "CONNECTED"
                                     is ReticulumConnectionState.Failed -> "ERROR"
                                 },
-                                color = if (rrcState is ReticulumConnectionState.Failed) Color(0xFFC44545) else Accent,
+                                color = if (rrcState is ReticulumConnectionState.Failed) ErrorText else Accent,
                                 fontSize = 9.sp,
                                 fontWeight = FontWeight.Bold,
                                 letterSpacing = 0.8.sp,
@@ -804,8 +843,15 @@ internal fun SettingsPage(
                             is ReticulumConnectionState.Connected -> "Connected${state.hubName?.takeIf { it.isNotBlank() }?.let { " to $it" }.orEmpty()}. Room messages now use RRC."
                             is ReticulumConnectionState.Failed -> state.message
                         }
-                        Text(rrcStatusText, color = if (rrcState is ReticulumConnectionState.Failed) Color(0xFFC44545) else Muted, fontSize = 11.sp)
-                        rrcError?.let { Text(it, color = Color(0xFFC44545), fontSize = 11.sp) }
+                        Text(rrcStatusText, color = if (rrcState is ReticulumConnectionState.Failed) ErrorText else Muted, fontSize = 11.sp)
+                        rrcError?.let {
+                            Text(
+                                it,
+                                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Assertive },
+                                color = ErrorText,
+                                fontSize = 11.sp,
+                            )
+                        }
                         val rrcBusy = rrcState is ReticulumConnectionState.Starting || rrcState is ReticulumConnectionState.Connecting
                         val rrcActive = rrcState is ReticulumConnectionState.Connected
                         Button(
@@ -909,10 +955,11 @@ private fun SettingsSectionNavigation(
             Row(
                 modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
                     .background(if (isSelected) PaleAccent else Color.Transparent)
-                    .clickable {
+                    .clickable(role = Role.Button) {
                         if (section == SettingsSection.IDENTITY) onManageIdentity()
                         else onSectionSelected(section)
                     }
+                    .semantics { selected = isSelected }
                     .padding(horizontal = 14.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {

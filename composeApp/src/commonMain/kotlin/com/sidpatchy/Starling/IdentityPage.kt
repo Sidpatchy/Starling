@@ -30,6 +30,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.preferredFrameRate
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -138,7 +141,7 @@ internal fun IdentityPage(
                             Text("Checking for a saved identity…", color = Muted, fontSize = 12.sp)
                         }
                         identityState is ReticulumIdentityState.Failed -> {
-                            Text("Identity could not be loaded", color = Color(0xFFC44545), fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                            Text("Identity could not be loaded", color = ErrorText, fontSize = 13.sp, fontWeight = FontWeight.Medium)
                             Text("You can import a valid backup to replace the unreadable identity.", color = Muted, fontSize = 11.sp)
                         }
                         identityConfigured -> {
@@ -212,7 +215,7 @@ internal fun IdentityPage(
                                 TextButton(
                                     onClick = { identityConfirmation = IdentityConfirmation.DELETE },
                                     enabled = identityMutable,
-                                ) { Text("Delete identity", color = Color(0xFFC44545)) }
+                                ) { Text("Delete identity", color = ErrorText) }
                             }
                             is ReticulumIdentityState.Failed -> OutlinedButton(
                                 onClick = { identityConfirmation = IdentityConfirmation.IMPORT },
@@ -224,9 +227,30 @@ internal fun IdentityPage(
                             Text("Disconnect the node before creating, replacing, or deleting an identity.", color = Muted, fontSize = 11.sp)
                             TextButton(onClick = onDisconnectNode, enabled = !identityBusy) { Text("Disconnect node") }
                         }
-                        if (identityBusy) Text("Identity operation in progress…", color = Muted, fontSize = 11.sp)
-                        identityError?.let { Text(it, color = Color(0xFFC44545), fontSize = 12.sp) }
-                        identityNotice?.let { Text(it, color = Muted, fontSize = 12.sp) }
+                        if (identityBusy) {
+                            Text(
+                                "Identity operation in progress…",
+                                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                                color = Muted,
+                                fontSize = 11.sp,
+                            )
+                        }
+                        identityError?.let {
+                            Text(
+                                it,
+                                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                                color = ErrorText,
+                                fontSize = 12.sp,
+                            )
+                        }
+                        identityNotice?.let {
+                            Text(
+                                it,
+                                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                                color = Muted,
+                                fontSize = 12.sp,
+                            )
+                        }
                         Text(
                             "Identity backups are unencrypted private-key files. Anyone with a copy can use your identity, so keep backups somewhere secure.",
                             color = Muted, fontSize = 11.sp, lineHeight = 16.sp,
