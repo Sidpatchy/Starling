@@ -114,14 +114,58 @@ jobs:
       - name: Install xtool
         run: brew install xtool-org/tap/xtool
 
+      - name: Resolve Apple toolchain versions for caches
+        id: ios-toolchain
+        shell: bash
+        run: |
+          echo "xcode=$(xcodebuild -version | sed -n '1s/^Xcode //p')" >> "$GITHUB_OUTPUT"
+          echo "sdk=$(xcrun --sdk iphoneos --show-sdk-version)" >> "$GITHUB_OUTPUT"
+          echo "rust=$(rustc --version | awk '{print $2}')" >> "$GITHUB_OUTPUT"
+
+      - name: Restore embedded Python runtime cache
+        id: ios-python-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: |
+            iosApp/Vendor/Python.xcframework
+            iosApp/Sources/Starling/PythonModules/ios-device
+            iosApp/Sources/Starling/PythonModules/ios-simulator
+          key: ios-python-v1-${{ runner.os }}-${{ runner.arch }}-xcode${{ steps.ios-toolchain.outputs.xcode }}-sdk${{ steps.ios-toolchain.outputs.sdk }}-rust${{ steps.ios-toolchain.outputs.rust }}-py313-${{ hashFiles('packaging/ios/prepare-python-runtime.sh', 'packaging/ios/build-ios-cryptography-wheels.sh', 'packaging/ios/patch-cryptography-ios-build.py', 'packaging/ios/prepare-pyo3-cross-lib.py', 'packaging/ios/test-embedded-python.py', 'composeApp/src/main/python/**', 'licenses/**') }}
+
       - name: Prepare embedded iOS Python runtime
+        if: steps.ios-python-cache.outputs.cache-hit != 'true'
         run: bash packaging/ios/prepare-python-runtime.sh
 
+      - name: Save embedded Python runtime cache
+        if: steps.ios-python-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            iosApp/Vendor/Python.xcframework
+            iosApp/Sources/Starling/PythonModules/ios-device
+            iosApp/Sources/Starling/PythonModules/ios-simulator
+          key: ${{ steps.ios-python-cache.outputs.cache-primary-key }}
+
+      - name: Restore release Compose framework cache
+        id: ios-compose-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: composeApp/build/XCFrameworks/release/composeApp.xcframework
+          key: ios-compose-release-v1-${{ runner.os }}-${{ runner.arch }}-xcode${{ steps.ios-toolchain.outputs.xcode }}-sdk${{ steps.ios-toolchain.outputs.sdk }}-${{ hashFiles('composeApp/src/commonMain/**', 'composeApp/src/iosMain/**', 'composeApp/build.gradle.kts', 'build.gradle.kts', 'settings.gradle.kts', 'gradle/libs.versions.toml', 'gradle.properties', 'gradle/wrapper/gradle-wrapper.properties') }}
+
       - name: Build release Compose iOS framework
+        if: steps.ios-compose-cache.outputs.cache-hit != 'true'
         run: ./gradlew --no-daemon "-PstarlingVersion=${{ needs.resolve-version.outputs.app_version }}" :composeApp:assembleComposeAppReleaseXCFramework
 
       - name: Verify shared Compose framework
-        run: test -f composeApp/build/XCFrameworks/release/ComposeApp.xcframework/Info.plist
+        run: test -f composeApp/build/XCFrameworks/release/composeApp.xcframework/Info.plist
+
+      - name: Save release Compose framework cache
+        if: steps.ios-compose-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: composeApp/build/XCFrameworks/release/composeApp.xcframework
+          key: ${{ steps.ios-compose-cache.outputs.cache-primary-key }}
 
       - name: Generate release Xcode project
         env:
