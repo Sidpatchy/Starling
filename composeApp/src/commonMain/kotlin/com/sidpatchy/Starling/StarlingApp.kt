@@ -2,6 +2,8 @@ package com.sidpatchy.Starling
 
 import androidx.compose.foundation.Canvas as ComposeCanvas
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
@@ -25,6 +27,7 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.WindowInsets
@@ -34,6 +37,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -129,6 +133,28 @@ private val SidebarEdgeInset = 12.dp
 private val SidebarActionSize = 48.dp
 private val InteractiveRowMinHeight = 48.dp
 
+/**
+ * True when the app is at a fresh live-mode start: not in Local preview, no rooms or live
+ * networks configured yet, identity management available, and no saved identity.
+ * In that state Starling shows a welcome screen that explains the decentralized model and
+ * offers explicit identity setup (create or import) or Local preview. Keys are never
+ * generated implicitly; the condition is derived from live state so the screen disappears
+ * as soon as the user creates an identity, adds a network, or enables preview.
+ */
+internal fun shouldShowWelcomeScreen(
+    previewMode: Boolean,
+    rooms: List<ChatRoom>,
+    networks: List<ChatNetwork>,
+    identityManagerAvailable: Boolean,
+    identityState: ReticulumIdentityState,
+): Boolean {
+    return !previewMode &&
+        rooms.isEmpty() &&
+        networks.none { !it.isPreview } &&
+        identityManagerAvailable &&
+        identityState == ReticulumIdentityState.Missing
+}
+
 @Composable
 fun StarlingApp(
     repository: ChatRepository = remember { LocalPreviewChatRepository() },
@@ -177,6 +203,13 @@ fun StarlingApp(
         identityManager?.state ?: flowOf<ReticulumIdentityState>(ReticulumIdentityState.Missing)
     }.collectAsState(initial = identityManager?.state?.value ?: ReticulumIdentityState.Missing)
     val identityBusy by remember(identityManager) { identityManager?.busy ?: flowOf(false) }.collectAsState(initial = false)
+    val showWelcome = shouldShowWelcomeScreen(
+        previewMode = previewMode,
+        rooms = rooms,
+        networks = networks,
+        identityManagerAvailable = identityManager != null,
+        identityState = identityState,
+    )
     val identityError by remember(identityManager) { identityManager?.error ?: flowOf(null) }.collectAsState(initial = null)
     val managedIdentity = (identityState as? ReticulumIdentityState.Available)?.identity
     var identityNotice by remember { mutableStateOf<String?>(null) }
@@ -208,6 +241,17 @@ fun StarlingApp(
             nodeController.refreshState()
         }
     }
+    var reconnecting by remember { mutableStateOf(false) }
+    val retryActiveHub: () -> Unit = {
+        if (!reconnecting && liveChatRepository != null) {
+            reconnecting = true
+            scope.launch {
+                runCatching { liveChatRepository?.reconnectActiveHub() }.onFailure {
+                    reconnecting = false
+                }
+            }
+        }
+    }
     LaunchedEffect(previewMode, nodeController) {
         if (previewMode) {
             nodeController.disconnect()
@@ -229,6 +273,8 @@ fun StarlingApp(
     var localThemePreference by rememberSaveable { mutableStateOf(ThemePreference.SYSTEM) }
     var localBubbleStyle by rememberSaveable { mutableStateOf(false) }
     var localDenseMessages by rememberSaveable { mutableStateOf(false) }
+    var showNetworkDiagnostics by remember { mutableStateOf(false) }
+    var diagnosticsNetwork by remember { mutableStateOf<ChatNetwork?>(null) }
     val repositoryUiSettings by remember(liveChatRepository) {
         liveChatRepository?.uiSettings ?: flowOf(StarlingUiSettings())
     }.collectAsState(initial = liveChatRepository?.uiSettings?.value ?: StarlingUiSettings())
@@ -356,6 +402,15 @@ fun StarlingApp(
             }
         }
     }
+    // Settle the in-progress reconnect flag once the hub reaches a conclusive state so the
+    // retry button can be offered again after a successful or failed attempt.
+    LaunchedEffect(visibleConnectionState) {
+        if (visibleConnectionState is ReticulumConnectionState.Connected ||
+            visibleConnectionState is ReticulumConnectionState.Failed
+        ) {
+            reconnecting = false
+        }
+    }
     val selectedDirectMessage = knownMembers.firstOrNull { it.id == selectedDirectMessageId }
     val sidebarSelection = sidebarSelectionForVisiblePage(
         roomId = selectedRoom.id.takeIf { rooms.isNotEmpty() },
@@ -368,7 +423,11 @@ fun StarlingApp(
         selectedDirectMessageId?.let(repository::directMessages) ?: flowOf(emptyList())
     }.collectAsState(initial = emptyList())
 
-    StarlingTheme(uiSettings.themePreference, uiSettings.timestampTimeZone) {
+    StarlingTheme(
+        preference = uiSettings.themePreference,
+        timestampTimeZonePreference = uiSettings.timestampTimeZone,
+        reducedMotion = uiSettings.reduceMotion,
+    ) {
         Surface(modifier = Modifier.fillMaxSize(), color = Canvas) {
             BoxWithConstraints(Modifier.fillMaxSize().safeDrawingPadding().imePadding()) {
                 val isWide = maxWidth >= 1000.dp
@@ -430,6 +489,8 @@ fun StarlingApp(
                                 onBubbleStyleChange = { updateUiSettings(uiSettings.copy(bubbleStyle = it)) },
                                 denseMessages = uiSettings.denseMessages,
                                 onDenseMessagesChange = { updateUiSettings(uiSettings.copy(denseMessages = it)) },
+                                reduceMotion = uiSettings.reduceMotion,
+                                onReduceMotionChange = { updateUiSettings(uiSettings.copy(reduceMotion = it)) },
                                 timestampTimeZone = uiSettings.timestampTimeZone,
                                 onTimestampTimeZoneChange = { updateUiSettings(uiSettings.copy(timestampTimeZone = it)) },
                                 previewMode = previewMode,
@@ -465,6 +526,10 @@ fun StarlingApp(
                                 },
                                 onConnectHub = { config -> scope.launch { liveChatRepository?.connectToHub(config) } },
                                 onDisconnectHub = { scope.launch { liveChatRepository?.disconnectFromHub() } },
+                                onOpenNetworkDiagnostics = {
+                                    diagnosticsNetwork = null
+                                    showNetworkDiagnostics = true
+                                },
                                 onBack = { showSettings = false; showSettingsIndex = true },
                             )
                         } else if (showContactRequests) {
@@ -530,17 +595,33 @@ fun StarlingApp(
                             )
                         } else if (rooms.isEmpty()) {
                             Box(Modifier.weight(1f).fillMaxHeight()) {
-                                EmptyNetworkContent(
-                                    onAddNetwork = { showAddNetwork = true },
-                                    onSettings = { showSettings = true; showSettingsIndex = true },
-                                    showIdentitySetup = !previewMode && identityManager != null && identityState == ReticulumIdentityState.Missing,
-                                    onSetupIdentity = {
-                                        showIdentityPage = true
-                                        showSettings = false
-                                        showContactRequests = false
-                                        selectedDirectMessageId = null
-                                    },
-                                )
+                                if (showWelcome) {
+                                    WelcomeScreen(
+                                        onSetUpIdentity = {
+                                            showIdentityPage = true
+                                            showSettings = false
+                                            showContactRequests = false
+                                            selectedDirectMessageId = null
+                                        },
+                                        onContinueInPreview = { changePreviewMode(true) },
+                                        onSettings = {
+                                            showSettings = true
+                                            showSettingsIndex = true
+                                        },
+                                    )
+                                } else {
+                                    EmptyNetworkContent(
+                                        onAddNetwork = { showAddNetwork = true },
+                                        onSettings = { showSettings = true; showSettingsIndex = true },
+                                        showIdentitySetup = !previewMode && identityManager != null && identityState == ReticulumIdentityState.Missing,
+                                        onSetupIdentity = {
+                                            showIdentityPage = true
+                                            showSettings = false
+                                            showContactRequests = false
+                                            selectedDirectMessageId = null
+                                        },
+                                    )
+                                }
                                 if (!showDesktopNavigation) {
                                     NavigationToggle(Modifier.align(Alignment.TopStart)) { showDesktopNavigation = true }
                                 }
@@ -576,6 +657,9 @@ fun StarlingApp(
                     }
                 } else {
                     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
+                    val reducedMotion = LocalReducedMotion.current
+                    val drawerEnter: EnterTransition = if (reducedMotion) EnterTransition.None else fadeIn()
+                    val drawerExit: ExitTransition = if (reducedMotion) ExitTransition.None else (slideOutHorizontally(targetOffsetX = { it }) + fadeOut())
                     ModalNavigationDrawer(
                         drawerState = drawerState,
                         drawerContent = {
@@ -662,6 +746,8 @@ fun StarlingApp(
                                 onBubbleStyleChange = { updateUiSettings(uiSettings.copy(bubbleStyle = it)) },
                                 denseMessages = uiSettings.denseMessages,
                                 onDenseMessagesChange = { updateUiSettings(uiSettings.copy(denseMessages = it)) },
+                                reduceMotion = uiSettings.reduceMotion,
+                                onReduceMotionChange = { updateUiSettings(uiSettings.copy(reduceMotion = it)) },
                                 timestampTimeZone = uiSettings.timestampTimeZone,
                                 onTimestampTimeZoneChange = { updateUiSettings(uiSettings.copy(timestampTimeZone = it)) },
                                 previewMode = previewMode,
@@ -696,6 +782,10 @@ fun StarlingApp(
                                 },
                                 onConnectHub = { config -> scope.launch { liveChatRepository?.connectToHub(config) } },
                                 onDisconnectHub = { scope.launch { liveChatRepository?.disconnectFromHub() } },
+                                onOpenNetworkDiagnostics = {
+                                    diagnosticsNetwork = null
+                                    showNetworkDiagnostics = true
+                                },
                                 onBack = { showSettings = false; showSettingsIndex = true },
                             )
                         } else if (showContactRequests) {
@@ -760,18 +850,35 @@ fun StarlingApp(
                                 onSend = { text -> scope.launch { repository.sendDirectMessage(selectedDirectMessage.id, text) } },
                             )
                         } else if (rooms.isEmpty()) {
-                            EmptyNetworkContent(
-                                onAddNetwork = { showAddNetwork = true },
-                                onSettings = { showSettings = true; showSettingsIndex = true },
-                                showIdentitySetup = !previewMode && identityManager != null && identityState == ReticulumIdentityState.Missing,
-                                onSetupIdentity = {
-                                    showIdentityPage = true
-                                    showSettings = false
-                                    showContactRequests = false
-                                    selectedDirectMessageId = null
-                                },
-                                modifier = Modifier.fillMaxSize(),
-                            )
+                            if (showWelcome) {
+                                WelcomeScreen(
+                                    modifier = Modifier.fillMaxSize(),
+                                    onSetUpIdentity = {
+                                        showIdentityPage = true
+                                        showSettings = false
+                                        showContactRequests = false
+                                        selectedDirectMessageId = null
+                                    },
+                                    onContinueInPreview = { changePreviewMode(true) },
+                                    onSettings = {
+                                        showSettings = true
+                                        showSettingsIndex = true
+                                    },
+                                )
+                            } else {
+                                EmptyNetworkContent(
+                                    onAddNetwork = { showAddNetwork = true },
+                                    onSettings = { showSettings = true; showSettingsIndex = true },
+                                    showIdentitySetup = !previewMode && identityManager != null && identityState == ReticulumIdentityState.Missing,
+                                    onSetupIdentity = {
+                                        showIdentityPage = true
+                                        showSettings = false
+                                        showContactRequests = false
+                                        selectedDirectMessageId = null
+                                    },
+                                    modifier = Modifier.fillMaxSize(),
+                                )
+                            }
                         } else Box(Modifier.fillMaxSize()) {
                             ChatContent(
                                 room = selectedRoom,
@@ -793,8 +900,8 @@ fun StarlingApp(
                             AnimatedVisibility(
                                 visible = showMembersDrawer,
                                 modifier = Modifier.fillMaxSize(),
-                                enter = fadeIn(),
-                                exit = fadeOut(),
+                                enter = drawerEnter,
+                                exit = drawerExit,
                             ) {
                                 Box(Modifier.fillMaxSize()) {
                                     Box(
@@ -807,8 +914,8 @@ fun StarlingApp(
                                         AnimatedVisibility(
                                             visible = showMembersDrawer,
                                             modifier = Modifier.widthIn(max = 320.dp).fillMaxHeight(),
-                                            enter = slideInHorizontally(initialOffsetX = { it }) + fadeIn(),
-                                            exit = slideOutHorizontally(targetOffsetX = { it }) + fadeOut(),
+                                            enter = if (reducedMotion) EnterTransition.None else slideInHorizontally(initialOffsetX = { it }) + fadeIn(),
+                                            exit = if (reducedMotion) ExitTransition.None else slideOutHorizontally(targetOffsetX = { it }) + fadeOut(),
                                         ) {
                                             MembersPane(
                                                 members = members,
@@ -836,6 +943,25 @@ fun StarlingApp(
                     rrcState = visibleConnectionState,
                     activeHubNetworkId = visibleHubNetworkId,
                     onDismiss = { networkToInspect = null },
+                    onRetry = retryActiveHub,
+                    isRetrying = reconnecting,
+                )
+            }
+            if (showNetworkDiagnostics) {
+                NetworkDiagnosticsDialog(
+                    network = diagnosticsNetwork,
+                    nodeState = reticulumNodeState,
+                    rrcState = visibleConnectionState,
+                    activeHubNetworkId = visibleHubNetworkId,
+                    localDeliveryAddress = visibleDeliveryAddress,
+                    previewMode = previewMode,
+                    onDismiss = {
+                        showNetworkDiagnostics = false
+                        diagnosticsNetwork = null
+                    },
+                    onRefresh = { scope.launch { nodeController.refreshState() } },
+                    onReconnect = retryActiveHub,
+                    isRetrying = reconnecting,
                 )
             }
 
@@ -938,10 +1064,11 @@ private fun ChatContent(
 ) {
     var systemExpansionScrollRequest by remember { mutableStateOf(0) }
     val listState = rememberLazyListState()
+    val reducedMotion = LocalReducedMotion.current
     LaunchedEffect(systemExpansionScrollRequest) {
         if (systemExpansionScrollRequest > 0) {
             withFrameNanos { }
-            listState.animateScrollToItem(messages.size)
+            scrollToLatestMessage(listState, messages, reducedMotion)
         }
     }
     Column(modifier.fillMaxSize()) {
@@ -968,7 +1095,7 @@ private fun ChatContent(
         }
 
         LaunchedEffect(room.id, messages.size) {
-            if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size)
+            if (messages.isNotEmpty()) scrollToLatestMessage(listState, messages, reducedMotion)
         }
 
         LazyColumn(
@@ -1017,10 +1144,11 @@ private fun DirectMessageContent(
 ) {
     var systemExpansionScrollRequest by remember { mutableStateOf(0) }
     val listState = rememberLazyListState()
+    val reducedMotion = LocalReducedMotion.current
     LaunchedEffect(systemExpansionScrollRequest) {
         if (systemExpansionScrollRequest > 0 && messages.isNotEmpty()) {
             withFrameNanos { }
-            listState.animateScrollToItem(messages.size)
+            scrollToLatestMessage(listState, messages, reducedMotion)
         }
     }
     Column(Modifier.fillMaxSize().background(Canvas)) {
@@ -1060,7 +1188,7 @@ private fun DirectMessageContent(
             }
         } else {
             LaunchedEffect(messages.size) {
-                listState.animateScrollToItem(messages.size)
+                scrollToLatestMessage(listState, messages, reducedMotion)
             }
             LazyColumn(
                 modifier = Modifier.weight(1f).fillMaxWidth().preferredFrameRate(120f),
@@ -1291,6 +1419,87 @@ private fun EmptyNetworkContent(
                 Text("Add network")
             }
             TextButton(onClick = onSettings) { Text("Settings", color = Accent) }
+        }
+    }
+}
+
+@Composable
+private fun WelcomeScreen(
+    modifier: Modifier = Modifier,
+    onSetUpIdentity: () -> Unit,
+    onContinueInPreview: () -> Unit,
+    onSettings: () -> Unit,
+) {
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .background(Canvas)
+            .padding(28.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Box(
+            Modifier.size(66.dp).clip(RoundedCornerShape(16.dp)).background(PaleAccent),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                "S",
+                color = Accent,
+                fontSize = 32.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.semantics { contentDescription = "Starling" },
+            )
+        }
+        Spacer(Modifier.height(24.dp))
+        Text(
+            "Welcome to Starling",
+            color = Ink,
+            fontSize = 26.sp,
+            fontWeight = FontWeight.Bold,
+        )
+        Spacer(Modifier.height(16.dp))
+        Text(
+            "Starling is a decentralized Reticulum chat client — there is no central server or directory. You hold your own identity and choose the hubs and people you talk to.",
+            color = Muted,
+            fontSize = 14.sp,
+            lineHeight = 21.sp,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Spacer(Modifier.height(12.dp))
+        Text(
+            "Before going live, create an identity for this device or import an existing Reticulum backup. Otherwise, continue in Local preview to explore the sample chat with demo data only.",
+            color = Muted,
+            fontSize = 14.sp,
+            lineHeight = 21.sp,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Spacer(Modifier.height(28.dp))
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Button(
+                onClick = onSetUpIdentity,
+                colors = ButtonDefaults.buttonColors(containerColor = Accent),
+                modifier = Modifier
+                    .heightIn(min = 48.dp)
+                    .widthIn(min = 220.dp, max = 340.dp),
+            ) {
+                Text("Set up identity", textAlign = TextAlign.Center)
+            }
+            Spacer(Modifier.height(12.dp))
+            TextButton(
+                onClick = onContinueInPreview,
+                modifier = Modifier.heightIn(min = 48.dp),
+            ) {
+                Text("Continue in Local preview", color = Accent, textAlign = TextAlign.Center)
+            }
+            Spacer(Modifier.height(12.dp))
+            TextButton(
+                onClick = onSettings,
+                modifier = Modifier.heightIn(min = 48.dp),
+            ) {
+                Text("Settings", color = Muted, textAlign = TextAlign.Center)
+            }
         }
     }
 }
@@ -1633,8 +1842,13 @@ private fun NetworkStatusDialog(
     rrcState: ReticulumConnectionState,
     activeHubNetworkId: String?,
     onDismiss: () -> Unit,
+    onRetry: (() -> Unit)? = null,
+    isRetrying: Boolean = false,
 ) {
     val isTargetNetwork = activeHubNetworkId == network.id
+    val showRetry = onRetry != null &&
+        isTargetNetwork &&
+        (rrcState is ReticulumConnectionState.Failed || rrcState == ReticulumConnectionState.Disconnected)
     val hubStatus = when {
         previewMode || network.isPreview -> "Sample network. Live hub status is hidden in preview."
         !isTargetNetwork -> "Not connected. This hub is not the active connection."
@@ -1681,7 +1895,33 @@ private fun NetworkStatusDialog(
                 }
             }
         },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("Close", color = Accent) } },
+        confirmButton = {
+            if (showRetry) {
+                val retryLabel = when {
+                    rrcState is ReticulumConnectionState.Failed -> "Retry connection"
+                    else -> "Connect"
+                }
+                TextButton(
+                    enabled = !isRetrying,
+                    onClick = onRetry,
+                    modifier = Modifier.heightIn(min = 48.dp),
+                    colors = ButtonDefaults.textButtonColors(if (isRetrying) Muted else Accent),
+                ) {
+                    Text(
+                        if (isRetrying) "Reconnecting…" else retryLabel,
+                        color = if (isRetrying) Muted else Accent,
+                        textAlign = TextAlign.Center,
+                    )
+                }
+            } else {
+                TextButton(onClick = onDismiss) { Text("Close", color = Accent) }
+            }
+        },
+        dismissButton = {
+            if (showRetry) {
+                TextButton(onClick = onDismiss) { Text("Close", color = Muted) }
+            }
+        },
     )
 }
 
@@ -2114,6 +2354,7 @@ private fun MessageRow(
                     Text(
                         authorName,
                         modifier = Modifier
+                            .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
                             .clickable(enabled = member != null && !member.isSelf, role = Role.Button, onClick = onMemberClick)
                             .semantics {
                                 contentDescription = if (member != null && !member.isSelf) "View profile for $authorName" else authorName
@@ -2127,13 +2368,15 @@ private fun MessageRow(
                     deliveryMarker(message.deliveryState)
                 }
                 Spacer(Modifier.height(2.dp))
-                Text(
-                    text = markdown(message.text, palette),
-                    color = Ink,
-                    fontSize = 13.sp,
-                    lineHeight = if (denseMessages) 16.sp else 17.sp,
-                    fontStyle = if (message.isAction) FontStyle.Italic else FontStyle.Normal,
-                )
+                SelectionContainer {
+                    Text(
+                        text = markdown(message.text, palette),
+                        color = Ink,
+                        fontSize = 13.sp,
+                        lineHeight = if (denseMessages) 16.sp else 17.sp,
+                        fontStyle = if (message.isAction) FontStyle.Italic else FontStyle.Normal,
+                    )
+                }
             }
         }
     } else {
@@ -2147,6 +2390,7 @@ private fun MessageRow(
             Text(
                 "$authorName ",
                 modifier = Modifier
+                    .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
                     .clickable(enabled = member != null && !member.isSelf, role = Role.Button, onClick = onMemberClick)
                     .semantics {
                         contentDescription = if (member != null && !member.isSelf) "View profile for $authorName" else authorName
@@ -2156,18 +2400,22 @@ private fun MessageRow(
                 fontSize = 13.sp,
                 fontStyle = FontStyle.Italic,
             )
-            Text(
-                text = markdown(message.text, palette),
+            SelectionContainer(
                 modifier = Modifier.weight(1f).alignBy(FirstBaseline),
-                color = Ink,
-                fontSize = 13.sp,
-                lineHeight = if (denseMessages) 16.sp else 17.sp,
-                fontStyle = FontStyle.Italic,
-            )
+            ) {
+                Text(
+                    text = markdown(message.text, palette),
+                    color = Ink,
+                    fontSize = 13.sp,
+                    lineHeight = if (denseMessages) 16.sp else 17.sp,
+                    fontStyle = FontStyle.Italic,
+                )
+            }
         } else {
             Text(
                 "$authorName:",
                 modifier = Modifier
+                    .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
                     .clickable(enabled = member != null && !member.isSelf, role = Role.Button, onClick = onMemberClick)
                     .semantics {
                         contentDescription = if (member != null && !member.isSelf) "View profile for $authorName" else authorName
@@ -2178,13 +2426,16 @@ private fun MessageRow(
                 fontWeight = FontWeight.SemiBold,
             )
                 Spacer(Modifier.width(5.dp))
-            Text(
-                text = markdown(message.text, palette),
+            SelectionContainer(
                 modifier = Modifier.weight(1f).alignBy(FirstBaseline),
-                color = Ink,
-                fontSize = 13.sp,
-                lineHeight = if (denseMessages) 16.sp else 18.sp,
-            )
+            ) {
+                Text(
+                    text = markdown(message.text, palette),
+                    color = Ink,
+                    fontSize = 13.sp,
+                    lineHeight = if (denseMessages) 16.sp else 18.sp,
+                )
+            }
         }
     }
     }
@@ -2221,16 +2472,19 @@ private fun SystemMessageRow(
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        message.text,
+                    SelectionContainer(
                         modifier = Modifier.weight(1f),
-                        color = textColor,
-                        fontSize = 11.sp,
-                        lineHeight = 15.sp,
-                        textAlign = TextAlign.Center,
-                        maxLines = summaryMaxLines,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+                    ) {
+                        Text(
+                            message.text,
+                            color = textColor,
+                            fontSize = 11.sp,
+                            lineHeight = 15.sp,
+                            textAlign = TextAlign.Center,
+                            maxLines = summaryMaxLines,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                     if (canExpand) SystemEventExpandButton(expanded) {
                         onSystemExpansion()
                         expanded = !expanded
@@ -2251,16 +2505,19 @@ private fun SystemMessageRow(
         Column(Modifier.fillMaxWidth().padding(vertical = verticalPadding)) {
             Row(verticalAlignment = Alignment.Top) {
                 Text(displayTime, modifier = Modifier.width(40.dp).padding(top = 1.dp), color = Muted, fontSize = 10.sp)
-                Text(
-                    message.text,
+                SelectionContainer(
                     modifier = Modifier.weight(1f).padding(top = 1.dp),
-                    color = textColor,
-                    fontSize = 12.sp,
-                    lineHeight = 16.sp,
-                    fontStyle = FontStyle.Italic,
-                    maxLines = summaryMaxLines,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                ) {
+                    Text(
+                        message.text,
+                        color = textColor,
+                        fontSize = 12.sp,
+                        lineHeight = 16.sp,
+                        fontStyle = FontStyle.Italic,
+                        maxLines = summaryMaxLines,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
                 if (canExpand) SystemEventExpandButton(expanded) {
                     onSystemExpansion()
                     expanded = !expanded
@@ -2540,4 +2797,18 @@ private fun hslColor(hue: Float, saturation: Float, lightness: Float): Color {
     }
     val offset = lightness - chroma / 2f
     return Color(red + offset, green + offset, blue + offset)
+}
+
+/** Scrolls the chat list to its latest message. Animates unless the system prefers reduced motion. */
+private suspend fun scrollToLatestMessage(
+    state: LazyListState,
+    messages: List<ChatMessage>,
+    reducedMotion: Boolean,
+) {
+    if (messages.isEmpty()) return
+    if (reducedMotion) {
+        state.scrollToItem(messages.lastIndex)
+    } else {
+        state.animateScrollToItem(messages.lastIndex)
+    }
 }

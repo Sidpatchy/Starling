@@ -163,6 +163,118 @@ class BridgeProtocolTest(unittest.TestCase):
         self.assertEqual(lines[2].split("\t")[-1], "125")
         self.assertEqual(lines[3].split("\t")[-1], "126")
 
+    def test_rrc_join_and_part_share_utf8_room_name_validation(self):
+        room = "🌍" * 16  # Exactly 64 UTF-8 bytes.
+        with patch.multiple(
+            rrc,
+            _connection_state="connected",
+            _joined_rooms=set(),
+            _joining_rooms=set(),
+            _parting_rooms=set(),
+            _display_name="Moss",
+        ), patch.object(rrc, "_send") as send:
+            rrc.join("  " + room + "  ")
+            rrc.part("  " + room + "  ")
+
+            for invalid_room in ("", "  ", "🌍" * 17):
+                for operation in (rrc.join, rrc.part):
+                    with self.subTest(operation=operation.__name__, room=invalid_room):
+                        with self.assertRaises(ValueError):
+                            operation(invalid_room)
+
+        self.assertEqual(send.call_args_list, [
+            unittest.mock.call(rrc.JOIN, room=room, nickname="Moss"),
+            unittest.mock.call(rrc.PART, room=room, nickname="Moss"),
+        ])
+
+    def test_rrc_joined_flushes_queued_room_messages_in_order(self):
+        with patch.multiple(
+            rrc,
+            _connection_state="connected",
+            _joining_rooms={"general"},
+            _joined_rooms=set(),
+            _pending_messages=[],
+            _events=queue.Queue(),
+            _display_name="Moss",
+            _identity=None,
+        ), patch.object(rrc, "cbor_decode", return_value={0: rrc.PROTOCOL_VERSION, 1: rrc.JOINED, 5: "General"}), \
+                patch.object(rrc, "_send") as send:
+            rrc.send("general", "first message")
+            rrc._pending_messages.append(("other", "keep for other room", False))
+            rrc.send("General", "second message", is_action=True)
+            rrc._packet_received(b"", None)
+
+            self.assertEqual(rrc._pending_messages, [("other", "keep for other room", False)])
+            self.assertIn("general", rrc._joined_rooms)
+            self.assertEqual(send.call_args_list, [
+                unittest.mock.call(rrc.MSG, room="general", body="first message", nickname="Moss"),
+                unittest.mock.call(rrc.ACTION, room="General", body="second message", nickname="Moss"),
+            ])
+
+    def test_rrc_pending_send_failures_are_reported_and_do_not_block_later_messages(self):
+        events = queue.Queue()
+
+        def send(message_type, **kwargs):
+            if kwargs["body"] == "fail":
+                raise RuntimeError("link send failed")
+
+        with patch.multiple(
+            rrc,
+            _connection_state="connected",
+            _joining_rooms={"general"},
+            _joined_rooms=set(),
+            _pending_messages=[("general", "fail", False), ("general", "still sent", False)],
+            _events=events,
+            _display_name="Moss",
+            _identity=None,
+        ), patch.object(rrc, "cbor_decode", return_value={0: rrc.PROTOCOL_VERSION, 1: rrc.JOINED, 5: "general"}), \
+                patch.object(rrc, "_send", side_effect=send) as send_mock:
+            rrc._packet_received(b"", None)
+
+            self.assertEqual(send_mock.call_count, 2)
+            errors = [event for event in list(events.queue) if event.get("kind") == "error"]
+            self.assertEqual(len(errors), 1)
+            self.assertEqual(errors[0]["room"], "general")
+            self.assertIn("link send failed", errors[0]["message"])
+
+    def test_rrc_welcome_reports_failed_pending_room_command_and_continues(self):
+        events = queue.Queue()
+
+        def send(message_type, **kwargs):
+            if kwargs["room"] == "broken":
+                raise RuntimeError("link send failed")
+
+        with patch.multiple(
+            rrc,
+            _connection_state="connecting",
+            _pending_joins=["broken", "general"],
+            _pending_parts=["other"],
+            _joining_rooms=set(),
+            _parting_rooms=set(),
+            _welcome_timer=None,
+            _events=events,
+            _display_name="Moss",
+        ), patch.object(rrc, "cbor_decode", return_value={0: rrc.PROTOCOL_VERSION, 1: rrc.WELCOME, 6: {}}), \
+                patch.object(rrc, "_send", side_effect=send) as send_mock:
+            rrc._packet_received(b"", None)
+
+            self.assertEqual(rrc._connection_state, "connected")
+            self.assertEqual(rrc._pending_joins, [])
+            self.assertEqual(rrc._pending_parts, [])
+            self.assertNotIn("broken", rrc._joining_rooms)
+            self.assertEqual(rrc._joining_rooms, {"general"})
+            self.assertEqual(rrc._parting_rooms, {"other"})
+            self.assertEqual(send_mock.call_args_list, [
+                unittest.mock.call(rrc.JOIN, room="broken", nickname="Moss"),
+                unittest.mock.call(rrc.JOIN, room="general", nickname="Moss"),
+                unittest.mock.call(rrc.PART, room="other", nickname="Moss"),
+            ])
+            errors = [event for event in list(events.queue) if event.get("kind") == "error"]
+            self.assertEqual(len(errors), 1)
+            self.assertEqual(errors[0]["room"], "broken")
+            self.assertIn("Could not join RRC room", errors[0]["message"])
+            self.assertIn("link send failed", errors[0]["message"])
+
     def mixed_start_fields(self):
         return [
             "START", "EMBEDDED", protocol.encode(""), "4", "2", "1",
@@ -270,9 +382,11 @@ class BridgeProtocolTest(unittest.TestCase):
         ])
         rrc.disconnect.assert_called_once_with()
         for command in ["UNKNOWN", "RRC_CONNECT", "RRC_SEND\tZg==",
-                        "RRC_SEND\tZg==\tYQ==\ttrue", "RRC_SEND\tZg==\tYQ==\t2"]:
+                        "RRC_SEND\tZg==\tYQ==\ttrue", "RRC_SEND\tZg==\tYQ==\t2",
+                        "RRC_DISCONNECT\tunexpected"]:
             with self.subTest(command=command), self.assertRaises(ValueError):
                 protocol.dispatch_rrc(command, rrc)
+        rrc.disconnect.assert_called_once_with()
 
     def test_lxmf_dispatch_preserves_empty_names_and_message_body(self):
         lxmf = Mock()
@@ -313,6 +427,23 @@ class BridgeProtocolTest(unittest.TestCase):
             response = ios_runtime.invoke(command)
         self.assertEqual(response, "ERROR\t" + protocol.encode("Unsupported iOS bridge protocol version."))
         rns.start_node.assert_not_called()
+
+    def test_ios_control_commands_reject_unexpected_fields_without_running(self):
+        rns, rrc, lxmf = self.fake_runtime_modules()
+        with patch.dict(sys.modules, {"starling_rns": rns, "starling_rrc": rrc, "starling_lxmf": lxmf}), \
+                patch.multiple(ios_runtime, _rns=rns, _rrc=rrc, _lxmf=lxmf):
+            for command in ("STATUS\textra", "POLL\textra", "STOP\textra"):
+                with self.subTest(command=command):
+                    response = ios_runtime.invoke(command)
+                    self.assertTrue(response.startswith("EVENT\tERROR\t"))
+                    self.assertEqual(protocol.decode(response.split("\t")[2]),
+                                     command.split("\t")[0] + " does not accept arguments.")
+
+        rns.status.assert_not_called()
+        rrc.poll_event_lines.assert_not_called()
+        rrc.disconnect.assert_not_called()
+        lxmf.stop.assert_not_called()
+        rns.disconnect_node.assert_not_called()
 
     def test_ios_startup_failure_cleans_up_partial_runtime_and_preserves_start_error(self):
         rns, rrc, lxmf = self.fake_runtime_modules()

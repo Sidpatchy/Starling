@@ -149,6 +149,8 @@ def invoke(command):
     action = fields[0]
 
     try:
+        if action in ("STATUS", "POLL", "STOP") and len(fields) != 1:
+            raise ValueError("{} does not accept arguments.".format(action))
         if action == "IDENTITY" and len(fields) == 3:
             from starling_identity import invoke as invoke_identity
 

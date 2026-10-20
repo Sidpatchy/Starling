@@ -137,6 +137,8 @@ internal fun SettingsPage(
     onBubbleStyleChange: (Boolean) -> Unit,
     denseMessages: Boolean,
     onDenseMessagesChange: (Boolean) -> Unit,
+    reduceMotion: Boolean,
+    onReduceMotionChange: (Boolean) -> Unit,
     timestampTimeZone: TimestampTimeZonePreference,
     onTimestampTimeZoneChange: (TimestampTimeZonePreference) -> Unit,
     previewMode: Boolean,
@@ -163,6 +165,7 @@ internal fun SettingsPage(
     onDisconnectNode: () -> Unit,
     onConnectHub: (ReticulumConnectionConfig) -> Unit,
     onDisconnectHub: () -> Unit,
+    onOpenNetworkDiagnostics: () -> Unit,
     onBack: () -> Unit,
 ) {
     var runtimeModeName by rememberSaveable {
@@ -358,6 +361,19 @@ internal fun SettingsPage(
                         }
                         Switch(checked = denseMessages, onCheckedChange = null)
                     }
+                    Spacer(Modifier.height(8.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                            .toggleable(value = reduceMotion, role = Role.Switch, onValueChange = onReduceMotionChange)
+                            .semantics(mergeDescendants = true) {},
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Reduce motion", color = Ink, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                        Text("Turn off slide and fade animations when showing panels and scrolling messages.", color = Muted, fontSize = 11.sp)
+                    }
+                    Switch(checked = reduceMotion, onCheckedChange = null)
+                }
                     Spacer(Modifier.height(5.dp))
                     Text("Message time zone", color = Ink, fontSize = 13.sp, fontWeight = FontWeight.Medium)
                     Text("Choose how message timestamps are displayed.", color = Muted, fontSize = 11.sp)
@@ -458,6 +474,15 @@ internal fun SettingsPage(
                             fontSize = 11.sp,
                             lineHeight = 16.sp,
                         )
+
+                        TextButton(
+                            onClick = onOpenNetworkDiagnostics,
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text("Open network diagnostics", color = Accent)
+                            }
+                        }
+
                         if (supportsReticulumProtocol) {
                             RuntimeModeSelection(
                                 selected = runtimeMode,

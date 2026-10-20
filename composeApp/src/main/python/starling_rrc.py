@@ -44,6 +44,18 @@ _pending_messages = []
 _welcome_timer = None
 _connect_generation = 0
 
+# Keepalive: once an RRC hub has welcomed the connection, Starling sends a
+# PING every _KEEPALIVE_INTERVAL seconds and expects the matching PONG back
+# within _PONG_TIMEOUT seconds. A link whose hub stops answering keepalives is
+# treated as failed so the UI can reconnect instead of silently black-holing
+# outgoing messages.
+_KEEPALIVE_INTERVAL = 45.0
+_PONG_TIMEOUT = 15.0
+
+_keepalive_timer = None
+_pong_timer = None
+_outstanding_ping = None
+
 
 def _emit(kind, **fields):
     event = {"kind": kind}
@@ -234,6 +246,7 @@ def _link_closed(link):
         _hub_name = None
         timer = _welcome_timer
         _welcome_timer = None
+        _cancel_keepalive_locked()
     if timer is not None:
         timer.cancel()
     _emit(
@@ -251,6 +264,117 @@ def _welcome_timeout(link):
         _connection_state = "failed"
     _emit("connection", state="failed", message="The RRC hub did not send WELCOME within 30 seconds")
     link.teardown()
+
+
+def _cancel_keepalive_locked():
+    """Cancel outstanding keepalive timers. Callers must hold _lock."""
+    global _keepalive_timer, _pong_timer, _outstanding_ping
+    timer = _keepalive_timer
+    _keepalive_timer = None
+    pong_timer = _pong_timer
+    _pong_timer = None
+    _outstanding_ping = None
+    if timer is not None:
+        timer.cancel()
+    if pong_timer is not None:
+        pong_timer.cancel()
+
+
+def _schedule_keepalive(link):
+    """Arrange the next keepalive PING for an established connection."""
+    global _keepalive_timer
+    with _lock:
+        if _connection_state != "connected" or link is not _link:
+            return
+        timer = _keepalive_timer
+        _keepalive_timer = None
+        if timer is not None:
+            timer.cancel()
+        _keepalive_timer = threading.Timer(_KEEPALIVE_INTERVAL, _send_keepalive, args=(link,))
+        _keepalive_timer.daemon = True
+        _keepalive_timer.start()
+
+
+def _send_keepalive(link):
+    """Send one keepalive PING and arm the PONG timeout for it."""
+    global _pong_timer, _outstanding_ping
+    with _lock:
+        if _connection_state != "connected" or link is not _link:
+            return
+        if _outstanding_ping is not None:
+            # A PING is already awaiting its PONG; the PONG timeout detects a
+            # dead link, so do not stack another keepalive behind it.
+            return
+        payload = secrets.token_bytes(8)
+        _outstanding_ping = payload
+    try:
+        _send(PING, body=payload)
+    except Exception as error:
+        with _lock:
+            _outstanding_ping = None
+        _emit(
+            "error",
+            message="Could not send RRC keepalive: " + (str(error) or "unknown error"),
+            room="",
+        )
+        _schedule_keepalive(link)
+        return
+    with _lock:
+        if _connection_state != "connected" or link is not _link:
+            _outstanding_ping = None
+            return
+        timer = _pong_timer
+        _pong_timer = None
+        if timer is not None:
+            timer.cancel()
+        _pong_timer = threading.Timer(_PONG_TIMEOUT, _keepalive_pong_timeout, args=(link, payload))
+        _pong_timer.daemon = True
+        _pong_timer.start()
+
+
+def _keepalive_pong_timeout(link, payload):
+    """Treat the link as failed when the hub does not answer a keepalive PING."""
+    global _connection_state, _pong_timer, _outstanding_ping
+    with _lock:
+        if (
+            _outstanding_ping is None
+            or _outstanding_ping != payload
+            or link is not _link
+            or _connection_state != "connected"
+        ):
+            return
+        _outstanding_ping = None
+        pong_timer = _pong_timer
+        _pong_timer = None
+        connection_link = _link
+        _connection_state = "failed"
+    if pong_timer is not None:
+        pong_timer.cancel()
+    connection_link.teardown()
+    _emit(
+        "connection",
+        state="failed",
+        message="The RRC hub did not respond to a keepalive ping",
+    )
+
+
+def _handle_pong(room, body):
+    """Acknowledge a hub PONG that matches the outstanding keepalive PING."""
+    global _pong_timer, _outstanding_ping
+    with _lock:
+        outstanding = _outstanding_ping
+        if outstanding is None or body != outstanding:
+            return
+        if _connection_state != "connected" or _link is None:
+            _outstanding_ping = None
+            return
+        _outstanding_ping = None
+        pong_timer = _pong_timer
+        _pong_timer = None
+        link_ref = _link
+    if pong_timer is not None:
+        pong_timer.cancel()
+    _schedule_keepalive(link_ref)
 
 
 def _packet_received(data, packet):
@@ -279,13 +403,10 @@ def _packet_received(data, packet):
                 timer.cancel()
             _emit("connection", state="connected", hub_name=_hub_name or "")
             for pending_room in joins:
-                with _lock:
-                    _joining_rooms.add(pending_room.casefold())
-                _send(JOIN, room=pending_room, nickname=_display_name)
+                _send_pending_room_command(JOIN, pending_room)
             for pending_room in parts:
-                with _lock:
-                    _parting_rooms.add(pending_room.casefold())
-                _send(PART, room=pending_room, nickname=_display_name)
+                _send_pending_room_command(PART, pending_room)
+            _schedule_keepalive(_link)
             return
 
         if message_type == JOINED and isinstance(room, str):
@@ -300,6 +421,7 @@ def _packet_received(data, packet):
                 _emit("room_joined", room=room)
                 if member_ids:
                     _emit("members", room=room, member_ids=[(member_id, _lxmf_address_for_identity(member_id)) for member_id in member_ids])
+                _flush_pending_messages(room)
             else:
                 nickname = envelope.get(7) if isinstance(envelope.get(7), str) else ""
                 for member_id in member_ids:
@@ -333,6 +455,9 @@ def _packet_received(data, packet):
             return
         if message_type == PING:
             _send(PONG, room=room, body=body)
+            return
+        if message_type == PONG:
+            _handle_pong(room, body)
             return
         if message_type == ERROR:
             message = body if isinstance(body, str) else "The RRC hub reported an error"
@@ -476,6 +601,7 @@ def disconnect():
         _hub_name = None
         timer = _welcome_timer
         _welcome_timer = None
+        _cancel_keepalive_locked()
         _joined_rooms.clear()
         _joining_rooms.clear()
         _parting_rooms.clear()
@@ -489,12 +615,64 @@ def disconnect():
     _emit("connection", state="disconnected")
 
 
-def join(room):
+def _normalize_room_name(room):
     room = room.strip()
     if not room:
         raise ValueError("Room name cannot be empty")
     if len(room.encode("utf-8")) > 64:
         raise ValueError("Room name exceeds the 64-byte RRC limit")
+    return room
+
+
+def _flush_pending_messages(room):
+    normalized_room = room.casefold()
+    with _lock:
+        pending = []
+        remaining = []
+        for message in _pending_messages:
+            if message[0].casefold() == normalized_room:
+                pending.append(message)
+            else:
+                remaining.append(message)
+        _pending_messages[:] = remaining
+
+        # Keep sends serialized with send() so a new message cannot overtake
+        # messages queued while this room's JOIN was being acknowledged.
+        for pending_room, body, is_action in pending:
+            try:
+                _send(ACTION if is_action else MSG, room=pending_room, body=body, nickname=_display_name)
+            except Exception as error:
+                _emit(
+                    "error",
+                    message="Could not send queued RRC message: " + (str(error) or "unknown send error"),
+                    room=pending_room,
+                    timestamp=int(time.time() * 1000),
+                )
+
+
+def _send_pending_room_command(message_type, room):
+    normalized_room = room.casefold()
+    is_join = message_type == JOIN
+    pending_rooms = _joining_rooms if is_join else _parting_rooms
+    opposite_rooms = _parting_rooms if is_join else _joining_rooms
+    operation = "join" if is_join else "leave"
+    with _lock:
+        pending_rooms.add(normalized_room)
+        opposite_rooms.discard(normalized_room)
+        try:
+            _send(message_type, room=room, nickname=_display_name)
+        except Exception as error:
+            pending_rooms.discard(normalized_room)
+            _emit(
+                "error",
+                message="Could not {} RRC room: {}".format(operation, str(error) or "unknown send error"),
+                room=room,
+                timestamp=int(time.time() * 1000),
+            )
+
+
+def join(room):
+    room = _normalize_room_name(room)
     with _lock:
         if _connection_state == "connected":
             _joining_rooms.add(room.casefold())
@@ -509,7 +687,7 @@ def join(room):
 
 
 def part(room):
-    room = room.strip()
+    room = _normalize_room_name(room)
     with _lock:
         if _connection_state == "connected":
             _parting_rooms.add(room.casefold())
@@ -529,8 +707,17 @@ def send(room, body, is_action=False):
     if not body:
         return
     with _lock:
-        if _connection_state != "connected":
+        if _connection_state not in ("connected", "connecting"):
             raise RuntimeError("The RRC hub has not welcomed this client yet")
+        if _connection_state == "connecting":
+            # The hub has not welcomed this client yet, but a connection is in
+            # progress. Queue the message instead of dropping it so user input
+            # is not lost while the hub path is still being resolved; it is
+            # sent once the room is joined and the welcome has arrived.
+            if len(_pending_messages) >= 32:
+                raise RuntimeError("Too many RRC messages are waiting for the room join")
+            _pending_messages.append((room, body, is_action))
+            return
         normalized = room.casefold()
         if normalized not in _joined_rooms:
             if normalized not in _joining_rooms:

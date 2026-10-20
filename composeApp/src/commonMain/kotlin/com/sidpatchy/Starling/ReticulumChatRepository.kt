@@ -1,5 +1,6 @@
 package com.sidpatchy.Starling
 
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -28,8 +29,9 @@ class ReticulumChatRepository(
     private val preview: LocalPreviewChatRepository,
     private val transport: ReticulumTransport,
     private val stateStore: ChatStateStore,
+    private val dispatcher: CoroutineDispatcher = Dispatchers.Default,
 ) : ChatRepository by preview {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val scope = CoroutineScope(SupervisorJob() + dispatcher)
     private val joinMutex = Mutex()
     private val nicknameReconnectMutex = Mutex()
     private val persistenceRequests = Channel<Unit>(Channel.CONFLATED)
@@ -39,6 +41,14 @@ class ReticulumChatRepository(
     private val lastServerCommandName = MutableStateFlow<String?>(null)
     private val lastServerCommandText = MutableStateFlow<String?>(null)
     private val joinedRoomNames = mutableSetOf<String>()
+
+    /** Messages typed while the hub is not reachable are kept here and flushed once connected. */
+    private val MAX_QUEUED_SENDS = 32
+    private val sendQueueMutex = Mutex()
+    private var pendingSends = mutableListOf<PendingSend>()
+
+    private data class PendingSend(val roomId: String, val body: String)
+
     private val restoredState = runCatching { stateStore.read()?.let(ChatStateCodec::decode) }.getOrNull()
     private val restoredPreviewMode = (restoredState?.previewMode ?: true).also(preview::setPreviewMode)
     private val _nodeConfig = MutableStateFlow(restoredState?.nodeConfig)
@@ -166,6 +176,7 @@ class ReticulumChatRepository(
                         _preferredHubNetworkId.value?.let { _activeHubNetworkId.value = it }
                     }
                     joinConfiguredRooms()
+                    scope.launch { flushQueuedSends() }
                 } else if (state is ReticulumConnectionState.Disconnected || state is ReticulumConnectionState.Failed) {
                     lastServerCommandRoomId.value = null
                     lastServerCommandName.value = null
@@ -200,6 +211,32 @@ class ReticulumChatRepository(
                             persistState()
                         }
                     }
+                    is ReticulumEvent.RoomJoined -> {
+                        scope.launch { flushQueuedSends() }
+                        joinMutex.withLock {
+                            _activeHubNetworkId.value?.let { networkId ->
+                                joinedRoomNames += "$networkId:${event.roomId.lowercase()}"
+                                val room = preview.rooms.value.firstOrNull {
+                                    it.networkId == networkId && it.name.equals(event.roomId, ignoreCase = true)
+                                }
+                                if (room != null) {
+                                    localMember.value?.let { addLiveMember(room.id, it) }
+                                    pendingSelfNicknameChange?.let { (oldName, newName) ->
+                                        if (pendingSelfNicknameRooms.remove(room.id)) {
+                                            appendSystemMessage(
+                                                room,
+                                                "$oldName is now known as $newName",
+                                                localMember.value?.id,
+                                                kind = ChatSystemEventKind.NICK,
+                                            )
+                                            if (pendingSelfNicknameRooms.isEmpty()) pendingSelfNicknameChange = null
+                                        }
+                                    }
+                                    appendSystemMessage(room, "You joined #${room.name}", localMember.value?.id, kind = ChatSystemEventKind.JOIN)
+                                }
+                            }
+                        }
+                    }
                     is ReticulumEvent.RoomMessageReceived -> receive(event.message)
                     is ReticulumEvent.DirectMessage -> receiveDirect(event.message)
                     is ReticulumEvent.LocalMemberChanged -> {
@@ -226,29 +263,6 @@ class ReticulumChatRepository(
                             }
                         }
                         if (changed) persistState()
-                    }
-                    is ReticulumEvent.RoomJoined -> joinMutex.withLock {
-                        _activeHubNetworkId.value?.let { networkId ->
-                            joinedRoomNames += "$networkId:${event.roomId.lowercase()}"
-                            val room = preview.rooms.value.firstOrNull {
-                                it.networkId == networkId && it.name.equals(event.roomId, ignoreCase = true)
-                            }
-                            if (room != null) {
-                                localMember.value?.let { addLiveMember(room.id, it) }
-                                pendingSelfNicknameChange?.let { (oldName, newName) ->
-                                    if (pendingSelfNicknameRooms.remove(room.id)) {
-                                        appendSystemMessage(
-                                            room,
-                                            "$oldName is now known as $newName",
-                                            localMember.value?.id,
-                                            kind = ChatSystemEventKind.NICK,
-                                        )
-                                        if (pendingSelfNicknameRooms.isEmpty()) pendingSelfNicknameChange = null
-                                    }
-                                }
-                                appendSystemMessage(room, "You joined #${room.name}", localMember.value?.id, kind = ChatSystemEventKind.JOIN)
-                            }
-                        }
                     }
                     is ReticulumEvent.RoomLeft -> joinMutex.withLock {
                         _activeHubNetworkId.value?.let { networkId ->
@@ -541,15 +555,31 @@ class ReticulumChatRepository(
         val outgoing = parseOutgoingChatMessage(text) ?: return
         val room = preview.rooms.value.firstOrNull { it.id == roomId }
             ?: throw IllegalArgumentException("Unknown room")
-        val connection = transport.state.value
-        if (connection !is ReticulumConnectionState.Connected) {
-            _lastError.value = "Connect to this network's RRC hub before sending a message."
+        val connectedToRoom =
+            transport.state.value is ReticulumConnectionState.Connected &&
+                room.networkId == _activeHubNetworkId.value
+        if (!connectedToRoom) {
+            // Keep the message instead of dropping it; it is flushed once the hub is reachable.
+            queueSend(roomId, outgoing.body)
             return
         }
-        if (room.networkId != _activeHubNetworkId.value) {
-            _lastError.value = "Connect to this room's RRC hub before sending a message."
-            return
+        sendRoomMessageNow(room, outgoing)
+    }
+
+    /** Queues a message for later delivery, or reports an error when the queue is full. */
+    private suspend fun queueSend(roomId: String, body: String) {
+        sendQueueMutex.withLock {
+            if (pendingSends.size >= MAX_QUEUED_SENDS) {
+                _lastError.value = "Message queue is full. Reconnect and try again."
+                return@withLock
+            }
+            pendingSends.add(PendingSend(roomId, body))
+            _lastError.value = null
         }
+    }
+
+    /** Sends a room message immediately when the hub connection is already established. */
+    private suspend fun sendRoomMessageNow(room: ChatRoom, outgoing: OutgoingChatMessage) {
         if (outgoing.body.startsWith('/')) {
             val isServerCommand = isRrcServerSlashCommand(outgoing.body)
             lastServerCommandRoomId.value = room.id
@@ -570,6 +600,31 @@ class ReticulumChatRepository(
         } catch (error: Exception) {
             _lastError.value = error.message ?: "Could not send the RRC message."
         }
+    }
+
+    /** Flushes queued messages for rooms on the active hub, in order, stopping at the first failure. */
+    private suspend fun flushQueuedSends() = sendQueueMutex.withLock {
+        val networkId = _activeHubNetworkId.value ?: return@withLock
+        val roomsById = preview.rooms.value.associateBy { it.id }
+        val (due, remaining) = pendingSends.partition { pending ->
+            roomsById[pending.roomId]?.networkId == networkId
+        }
+        if (due.isEmpty()) return@withLock
+        // A new flush attempt means we are trying to deliver again, so clear any
+        // stale send error; a failed attempt re-reports it below.
+        _lastError.value = null
+        var failureIndex: Int? = null
+        for ((index, pending) in due.withIndex()) {
+            val room = roomsById[pending.roomId]!!
+            try {
+                transport.sendRoomMessage(room.name, pending.body, false)
+            } catch (error: Exception) {
+                _lastError.value = error.message ?: "Could not send a queued RRC message."
+                failureIndex = index
+                break
+            }
+        }
+        pendingSends = ((failureIndex?.let { due.subList(it, due.size) } ?: emptyList()) + remaining).toMutableList()
     }
 
     override suspend fun sendDirectMessage(memberId: String, text: String) {
@@ -622,6 +677,30 @@ class ReticulumChatRepository(
         lastServerCommandText.value = null
         saveActiveHubNetworkId(null)
         transport.disconnect()
+    }
+
+    /**
+     * Reconnect to the currently active RRC hub using its saved destination and nickname.
+     * Intended as an actionable recovery path when the hub connection has failed or the
+     * hub is disconnected, so the user is not stuck with an error and no way to retry.
+     */
+    suspend fun reconnectActiveHub() {
+        check(!preview.previewMode.value) { "Turn off Local preview before connecting to an RRC hub." }
+        val networkId = _activeHubNetworkId.value
+            ?: throw IllegalStateException("No active RRC hub to reconnect to.")
+        val network = preview.networks.value.firstOrNull { it.id == networkId }
+            ?: throw IllegalStateException("The active RRC network is no longer configured.")
+        if (network.hubDestination.isNullOrBlank()) {
+            throw IllegalStateException("The active RRC network has no hub destination.")
+        }
+        _lastError.value = null
+        lastServerCommandRoomId.value = null
+        lastServerCommandName.value = null
+        lastServerCommandText.value = null
+        saveActiveHubNetworkId(network.id)
+        transport.connect(
+            ReticulumConnectionConfig(network.hubDestination.orEmpty(), nicknameForNetwork(network), network.id)
+        )
     }
 
     fun close() {

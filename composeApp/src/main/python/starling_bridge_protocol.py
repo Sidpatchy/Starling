@@ -85,7 +85,7 @@ def dispatch_rrc(command, rrc):
     if action == "RRC_CONNECT" and len(fields) == 3:
         display_name = decode(fields[2])
         rrc.connect(decode(fields[1]), display_name)
-    elif action == "RRC_DISCONNECT":
+    elif action == "RRC_DISCONNECT" and len(fields) == 1:
         rrc.disconnect()
     elif action == "RRC_JOIN" and len(fields) == 2:
         rrc.join(decode(fields[1]))

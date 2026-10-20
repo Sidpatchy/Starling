@@ -52,6 +52,9 @@ internal val LocalStarlingPalette = staticCompositionLocalOf { LightPalette }
 internal val LocalTimestampTimeZonePreference = staticCompositionLocalOf {
     TimestampTimeZonePreference.SYSTEM
 }
+internal val LocalReducedMotion = staticCompositionLocalOf { false }
+
+internal val ReducedMotion: Boolean @Composable get() = LocalReducedMotion.current
 
 internal val Ink: Color @Composable get() = LocalStarlingPalette.current.ink
 internal val Canvas: Color @Composable get() = LocalStarlingPalette.current.canvas
@@ -66,6 +69,7 @@ internal val PaleAccent: Color @Composable get() = LocalStarlingPalette.current.
 internal fun StarlingTheme(
     preference: ThemePreference,
     timestampTimeZonePreference: TimestampTimeZonePreference,
+    reducedMotion: Boolean = false,
     content: @Composable () -> Unit,
 ) {
     val useDarkPalette = when (preference) {
@@ -102,6 +106,7 @@ internal fun StarlingTheme(
         CompositionLocalProvider(
             LocalStarlingPalette provides palette,
             LocalTimestampTimeZonePreference provides timestampTimeZonePreference,
+            LocalReducedMotion provides reducedMotion,
             content = content,
         )
     }

@@ -45,7 +45,7 @@ def start(config_dir, display_name="Starling"):
     import RNS
 
     with _lock:
-        if _router is not None:
+        if _router is not None and _delivery_destination is not None:
             return local_address()
 
         _shutdown.clear()
@@ -54,22 +54,35 @@ def start(config_dir, display_name="Starling"):
         _emit("identity", identity_hash=_identity.hash.hex())
         import starling_rns
 
-        _router = starling_rns.construct_without_required_process_signals(lambda: LXMF.LXMRouter(
-            identity=_identity,
-            storagepath=config_dir,
-            name="Starling",
-            autopeer=False,
-        ))
-        _display_name = _normalize_display_name(display_name)
-        _delivery_destination = _router.register_delivery_identity(
-            _identity,
-            display_name=_display_name,
-        )
-        if _delivery_destination is None:
-            _router = None
-            raise RuntimeError("LXMF could not register Starling's delivery identity")
-        _router.register_delivery_callback(_delivery_received)
-        _router.announce(_delivery_destination.hash)
+        router = None
+        delivery_destination = None
+        try:
+            router = starling_rns.construct_without_required_process_signals(lambda: LXMF.LXMRouter(
+                identity=_identity,
+                storagepath=config_dir,
+                name="Starling",
+                autopeer=False,
+            ))
+            _display_name = _normalize_display_name(display_name)
+            delivery_destination = router.register_delivery_identity(
+                _identity,
+                display_name=_display_name,
+            )
+            if delivery_destination is None:
+                raise RuntimeError("LXMF could not register Starling's delivery identity")
+            router.register_delivery_callback(_delivery_received)
+            router.announce(delivery_destination.hash)
+        except Exception:
+            # A half-registered router must not silently shadow a later start
+            # attempt. Tear it down and let the caller see the original error.
+            if router is not None:
+                try:
+                    router.exit_handler()
+                except Exception:
+                    pass
+            raise
+        _router = router
+        _delivery_destination = delivery_destination
         address = _delivery_destination.hash.hex()
     _emit("local_address", address=address)
     return address
@@ -264,6 +277,14 @@ def _send_resolved(destination_hash, normalized_address, text):
                 time.sleep(0.25)
         if identity is None:
             if _shutdown.is_set():
+                # The node is stopping while we wait for a path to this
+                # destination. Report the failure instead of dropping the
+                # message silently, so the UI can surface actionable feedback.
+                _emit(
+                    "error",
+                    message="Could not send this LXMF message; the local node is stopping.",
+                    address=normalized_address,
+                )
                 return
             raise RuntimeError("Could not discover this LXMF destination. Check the address and Reticulum path.")
 

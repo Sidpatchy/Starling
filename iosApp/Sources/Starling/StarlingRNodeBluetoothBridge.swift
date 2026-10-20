@@ -5,9 +5,12 @@ import Network
 /// Exposes an RNode's Nordic UART BLE service as a loopback TCP serial port.
 /// The pinned RNS TCP RNode transport then handles the device protocol unchanged.
 final class StarlingRNodeBluetoothBridge: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate, @unchecked Sendable {
-    private static let serviceUUID = CBUUID(string: "6E400001-B5A3-F393-E0A9-E50E24DCCA9E")
-    private static let rxUUID = CBUUID(string: "6E400002-B5A3-F393-E0A9-E50E24DCCA9E")
-    private static let txUUID = CBUUID(string: "6E400003-B5A3-F393-E0A9-E50E24DCCA9E")
+    private static let serviceUUIDString = "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"
+    private static let rxUUIDString = "6E400002-B5A3-F393-E0A9-E50E24DCCA9E"
+    private static let txUUIDString = "6E400003-B5A3-F393-E0A9-E50E24DCCA9E"
+    private static var serviceUUID: CBUUID { CBUUID(string: serviceUUIDString) }
+    private static var rxUUID: CBUUID { CBUUID(string: rxUUIDString) }
+    private static var txUUID: CBUUID { CBUUID(string: txUUIDString) }
     private static let tcpPort = NWEndpoint.Port(rawValue: 7633)!
 
     private let queue = DispatchQueue(label: "com.sidpatchy.Starling.rnode-ble")

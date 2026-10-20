@@ -11,7 +11,7 @@ class ChatStateCodecTest {
         val state = PersistedChatState(previewMode = false, preferredHubNetworkId = "hub")
 
         assertEquals(
-            "STARLING_CHAT_STATE_V11\nP\tMA==\nU\taHVi\nG\tU3Rhcmxpbmc=\nA\tU1lTVEVN\tMA==\tMA==\tU1lTVEVN\n",
+            "STARLING_CHAT_STATE_V11\nP\tMA==\nU\taHVi\nG\tU3Rhcmxpbmc=\nA\tU1lTVEVN\tMA==\tMA==\tU1lTVEVN\tMA==\n",
             ChatStateCodec.encode(state),
         )
     }
