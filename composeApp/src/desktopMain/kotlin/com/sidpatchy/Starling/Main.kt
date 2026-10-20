@@ -39,6 +39,7 @@ fun main() = application {
             nodeController = nodeController,
             liveChatRepository = chatRepository,
             identityManager = identityManager,
+            forceGreeterOnLaunch = System.getProperty("starling.forceGreeter").toBoolean(),
         )
     }
 }

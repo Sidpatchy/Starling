@@ -1,5 +1,6 @@
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
 import org.jetbrains.kotlin.gradle.plugin.mpp.apple.XCFramework
+import org.gradle.api.tasks.JavaExec
 import org.gradle.language.jvm.tasks.ProcessResources
 
 plugins {
@@ -107,6 +108,13 @@ compose.desktop {
                 iconFile.set(project.file("../assets/branding/starling.icns"))
             }
         }
+    }
+}
+
+// Run `./gradlew run -PforceGreeter=true` to open the greeter regardless of saved app state.
+tasks.withType<JavaExec>().configureEach {
+    if (name == "run") {
+        systemProperty("starling.forceGreeter", providers.gradleProperty("forceGreeter").orElse("false").get())
     }
 }
 

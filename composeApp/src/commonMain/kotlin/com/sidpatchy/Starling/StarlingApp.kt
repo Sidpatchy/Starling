@@ -163,6 +163,7 @@ fun StarlingApp(
     },
     liveChatRepository: ReticulumChatRepository? = null,
     identityManager: ReticulumIdentityManager? = null,
+    forceGreeterOnLaunch: Boolean = false,
 ) {
     var selectedRoomId by rememberSaveable { mutableStateOf("general") }
     val networks by repository.networks.collectAsState()
@@ -220,11 +221,21 @@ fun StarlingApp(
     val scope = rememberCoroutineScope()
     val createIdentity: () -> Unit = {
         identityNotice = null
-        scope.launch { if (identityManager?.create() == true) identityNotice = "Identity created. Export a backup before using it." }
+        scope.launch {
+            if (identityManager?.create() == true) {
+                repository.setPreviewMode(false)
+                identityNotice = "Identity created. Export a backup before using it."
+            }
+        }
     }
     val importIdentity: () -> Unit = {
         identityNotice = null
-        scope.launch { if (identityManager?.importIdentity() == true) identityNotice = "Identity imported." }
+        scope.launch {
+            if (identityManager?.importIdentity() == true) {
+                repository.setPreviewMode(false)
+                identityNotice = "Identity imported."
+            }
+        }
     }
     val exportIdentity: () -> Unit = {
         identityNotice = null
@@ -260,6 +271,7 @@ fun StarlingApp(
     var showMembersPanel by rememberSaveable { mutableStateOf(true) }
     var showMembersDrawer by rememberSaveable { mutableStateOf(false) }
     var showDesktopNavigation by rememberSaveable { mutableStateOf(true) }
+    var forceGreeterVisible by remember(forceGreeterOnLaunch) { mutableStateOf(forceGreeterOnLaunch) }
     var showSettings by rememberSaveable { mutableStateOf(false) }
     var settingsSection by rememberSaveable { mutableStateOf(SettingsSection.APPEARANCE) }
     var showSettingsIndex by rememberSaveable { mutableStateOf(true) }
@@ -330,6 +342,22 @@ fun StarlingApp(
             networkToInspect = null
         }
         repository.setPreviewMode(enabled)
+    }
+    val onGreeterSetUpIdentity: () -> Unit = {
+        forceGreeterVisible = false
+        showIdentityPage = true
+        showSettings = false
+        showContactRequests = false
+        selectedDirectMessageId = null
+    }
+    val onGreeterContinueInPreview: () -> Unit = {
+        forceGreeterVisible = false
+        changePreviewMode(true)
+    }
+    val onGreeterOpenSettings: () -> Unit = {
+        forceGreeterVisible = false
+        showSettings = true
+        showSettingsIndex = true
     }
     LaunchedEffect(previewMode) {
         if (previewMode) {
@@ -433,7 +461,7 @@ fun StarlingApp(
                 val isWide = maxWidth >= 1000.dp
                 if (isWide) {
                     Row(Modifier.fillMaxSize()) {
-                        if (showDesktopNavigation) RoomSidebar(
+                        if (showDesktopNavigation && !forceGreeterVisible) RoomSidebar(
                             networks = networks,
                             rooms = rooms,
                             previewMode = previewMode,
@@ -474,7 +502,14 @@ fun StarlingApp(
                                 selectedDirectMessageId = null
                             },
                         )
-                        if (showSettings) {
+                        if (forceGreeterVisible) {
+                            WelcomeScreen(
+                                modifier = Modifier.weight(1f).fillMaxHeight(),
+                                onSetUpIdentity = onGreeterSetUpIdentity,
+                                onContinueInPreview = onGreeterContinueInPreview,
+                                onSettings = onGreeterOpenSettings,
+                            )
+                        } else if (showSettings) {
                             SettingsPage(
                                 selectedSection = settingsSection,
                                 onSectionSelected = { section ->
@@ -597,17 +632,9 @@ fun StarlingApp(
                             Box(Modifier.weight(1f).fillMaxHeight()) {
                                 if (showWelcome) {
                                     WelcomeScreen(
-                                        onSetUpIdentity = {
-                                            showIdentityPage = true
-                                            showSettings = false
-                                            showContactRequests = false
-                                            selectedDirectMessageId = null
-                                        },
-                                        onContinueInPreview = { changePreviewMode(true) },
-                                        onSettings = {
-                                            showSettings = true
-                                            showSettingsIndex = true
-                                        },
+                                        onSetUpIdentity = onGreeterSetUpIdentity,
+                                        onContinueInPreview = onGreeterContinueInPreview,
+                                        onSettings = onGreeterOpenSettings,
                                     )
                                 } else {
                                     EmptyNetworkContent(
@@ -647,7 +674,7 @@ fun StarlingApp(
                                 onSend = { text -> scope.launch { repository.send(selectedRoom.id, text) } },
                             )
                         }
-                        if (rooms.isNotEmpty() && showMembersPanel && !showSettings && !showContactRequests && !showIdentityPage && selectedDirectMessage == null) {
+                        if (!forceGreeterVisible && rooms.isNotEmpty() && showMembersPanel && !showSettings && !showContactRequests && !showIdentityPage && selectedDirectMessage == null) {
                             MembersPane(
                                 members = members,
                                 contactMemberIds = contactMemberIds,
@@ -731,7 +758,14 @@ fun StarlingApp(
                             }
                         },
                     ) {
-                        if (showSettings) {
+                        if (forceGreeterVisible) {
+                            WelcomeScreen(
+                                modifier = Modifier.fillMaxSize(),
+                                onSetUpIdentity = onGreeterSetUpIdentity,
+                                onContinueInPreview = onGreeterContinueInPreview,
+                                onSettings = onGreeterOpenSettings,
+                            )
+                        } else if (showSettings) {
                             SettingsPage(
                                 selectedSection = settingsSection,
                                 onSectionSelected = { section ->
@@ -853,17 +887,9 @@ fun StarlingApp(
                             if (showWelcome) {
                                 WelcomeScreen(
                                     modifier = Modifier.fillMaxSize(),
-                                    onSetUpIdentity = {
-                                        showIdentityPage = true
-                                        showSettings = false
-                                        showContactRequests = false
-                                        selectedDirectMessageId = null
-                                    },
-                                    onContinueInPreview = { changePreviewMode(true) },
-                                    onSettings = {
-                                        showSettings = true
-                                        showSettingsIndex = true
-                                    },
+                                    onSetUpIdentity = onGreeterSetUpIdentity,
+                                    onContinueInPreview = onGreeterContinueInPreview,
+                                    onSettings = onGreeterOpenSettings,
                                 )
                             } else {
                                 EmptyNetworkContent(
