@@ -55,8 +55,19 @@ print("RNS/LXMF bridge smoke passed before adding the iOS PyCA wheels.")
 PY
 PYTHONPATH="$TEMP_DIR/python-base" python3 -S "$ROOT/packaging/ios/test-embedded-python.py"
 
-bash "$ROOT/packaging/ios/build-ios-cryptography-wheels.sh" "$TEMP_DIR/cryptography-wheels"
-for slice in ios-device ios-simulator; do
+if [[ "$(uname -s)" == "Linux" ]]; then
+  cryptography_wheels="${STARLING_IOS_WHEEL_DIR:-$TEMP_DIR/cryptography-wheels}"
+  bash "$ROOT/packaging/ios/build-ios-cryptography-wheel-linux.sh" "$cryptography_wheels"
+  slices=(ios-device)
+  # Linux cross-builds currently produce a device-only Python module tree.
+  rm -rf "${MODULES_DIR:?}/ios-simulator"
+else
+  cryptography_wheels="$TEMP_DIR/cryptography-wheels"
+  bash "$ROOT/packaging/ios/build-ios-cryptography-wheels.sh" "$cryptography_wheels"
+  slices=(ios-device ios-simulator)
+fi
+
+for slice in "${slices[@]}"; do
   if [[ "$slice" == "ios-device" ]]; then
     platform="ios_13_0_arm64_iphoneos"
   else
@@ -69,7 +80,7 @@ for slice in ios-device ios-simulator; do
   python3 -m pip download --disable-pip-version-check --no-input --no-deps --only-binary=:all: \
     --platform "$platform" --implementation cp --python-version 313 --abi cp313 \
     --dest "$cffi_download" "cffi==2.1.1"
-  crypto_wheel="$(find "$TEMP_DIR/cryptography-wheels" -maxdepth 1 -type f -name "cryptography-*-${platform}.whl" -print -quit)"
+  crypto_wheel="$(find "$cryptography_wheels" -maxdepth 1 -type f -name "cryptography-*-${platform}.whl" -print -quit)"
   cffi_wheel="$(find "$cffi_download" -maxdepth 1 -type f -name "cffi-*-${platform}.whl" -print -quit)"
   if [[ -z "$crypto_wheel" || -z "$cffi_wheel" ]]; then
     echo "Missing PyCA/cffi iOS wheels for $platform." >&2
@@ -91,9 +102,13 @@ for slice in ios-device ios-simulator; do
     exit 1
   fi
 
-  rm -rf "$MODULES_DIR/$slice"
+  rm -rf "${MODULES_DIR:?}/$slice"
   mkdir -p "$MODULES_DIR/$slice"
   cp -R "$modules_dir/." "$MODULES_DIR/$slice/"
 done
 
-echo "Prepared device and simulator Python modules with PyCA cryptography."
+if [[ "$(uname -s)" == "Linux" ]]; then
+  echo "Prepared arm64 iOS device Python modules with PyCA cryptography (simulator modules are macOS-only)."
+else
+  echo "Prepared device and simulator Python modules with PyCA cryptography."
+fi
