@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ "${GITHUB_REF_TYPE:-}" == "tag" ]]; then
-    app_version="${GITHUB_REF_NAME:-}"
-    app_version="${app_version#v}"
+if [[ "${GITHUB_EVENT_NAME:-}" == "release" && "${GITHUB_REF_TYPE:-}" == "tag" ]]; then
+    artifact_version="${GITHUB_REF_NAME:-}"
+    app_version="${artifact_version#v}"
 else
     app_version="$(sed -n 's/^starlingVersion=//p' gradle.properties | tail -n 1)"
+    artifact_version="${app_version}_SNAPSHOT"
 fi
 
 if [[ ! "$app_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
@@ -16,4 +17,5 @@ fi
 {
     echo "app_version=$app_version"
     echo "package_version=${app_version%%-*}"
+    echo "artifact_version=$artifact_version"
 } >> "${GITHUB_OUTPUT:?GITHUB_OUTPUT must be set}"

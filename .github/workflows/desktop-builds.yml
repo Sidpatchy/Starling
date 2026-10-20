@@ -15,6 +15,7 @@ jobs:
     outputs:
       app_version: ${{ steps.version.outputs.app_version }}
       package_version: ${{ steps.version.outputs.package_version }}
+      artifact_version: ${{ steps.version.outputs.artifact_version }}
     steps:
       - name: Check out source
         uses: actions/checkout@v7
@@ -74,14 +75,14 @@ jobs:
       - name: Upload AppImage
         uses: actions/upload-artifact@v7
         with:
-          name: starling-linux-appimage-x86_64
-          path: composeApp/build/appimage/artifacts/Starling-${{ needs.resolve-version.outputs.app_version }}-x86_64.AppImage
+          name: starling-linux-appimage-x86_64-${{ needs.resolve-version.outputs.artifact_version }}
+          path: composeApp/build/appimage/artifacts/Starling-${{ needs.resolve-version.outputs.artifact_version }}-x86_64.AppImage
           if-no-files-found: error
 
       - name: Upload Flatpak input image
         uses: actions/upload-artifact@v7
         with:
-          name: starling-linux-jpackage-image
+          name: starling-linux-jpackage-image-${{ needs.resolve-version.outputs.artifact_version }}
           path: artifacts/starling-jpackage-linux-x86_64.tar.gz
           if-no-files-found: error
 
@@ -99,7 +100,7 @@ jobs:
       - name: Download Linux application image
         uses: actions/download-artifact@v7
         with:
-          name: starling-linux-jpackage-image
+          name: starling-linux-jpackage-image-${{ needs.resolve-version.outputs.artifact_version }}
           path: downloaded
 
       - name: Restore application image for Flatpak Builder
@@ -112,9 +113,9 @@ jobs:
         uses: flatpak/flatpak-github-actions/flatpak-builder@v6
         with:
           manifest-path: packaging/flatpak/com.sidpatchy.Starling.yml
-          bundle: Starling-${{ needs.resolve-version.outputs.app_version }}-x86_64.flatpak
+          bundle: Starling-${{ needs.resolve-version.outputs.artifact_version }}-x86_64.flatpak
           branch: stable
-          artifact-name: starling-linux-flatpak-x86_64
+          artifact-name: starling-linux-flatpak-x86_64-${{ needs.resolve-version.outputs.artifact_version }}
 
   windows-msi:
     name: Windows MSI
@@ -154,13 +155,13 @@ jobs:
             Select-Object -First 1
           if ($null -eq $package) { throw 'Gradle did not produce an MSI.' }
           New-Item -ItemType Directory -Force artifacts | Out-Null
-          Copy-Item $package.FullName "artifacts/Starling-${{ needs.resolve-version.outputs.app_version }}-windows-x64.msi"
+          Copy-Item $package.FullName "artifacts/Starling-${{ needs.resolve-version.outputs.artifact_version }}-windows-x64.msi"
 
       - name: Upload MSI
         uses: actions/upload-artifact@v7
         with:
-          name: starling-windows-msi-x64
-          path: artifacts/Starling-${{ needs.resolve-version.outputs.app_version }}-windows-x64.msi
+          name: starling-windows-msi-x64-${{ needs.resolve-version.outputs.artifact_version }}
+          path: artifacts/Starling-${{ needs.resolve-version.outputs.artifact_version }}-windows-x64.msi
           if-no-files-found: error
 
   macos-dmg:
@@ -191,7 +192,7 @@ jobs:
 
       - name: Build unsigned macOS DMG
         env:
-          APP_VERSION: ${{ needs.resolve-version.outputs.app_version }}
+          ARTIFACT_VERSION: ${{ needs.resolve-version.outputs.artifact_version }}
           PACKAGE_VERSION: ${{ needs.resolve-version.outputs.package_version }}
         run: |
           mac_package_version="$PACKAGE_VERSION"
@@ -226,13 +227,13 @@ jobs:
             exit 1
           fi
           mkdir -p artifacts
-          cp "$dmg_path" "artifacts/Starling-${{ needs.resolve-version.outputs.app_version }}-macos-${{ matrix.arch }}.dmg"
+          cp "$dmg_path" "artifacts/Starling-${{ needs.resolve-version.outputs.artifact_version }}-macos-${{ matrix.arch }}.dmg"
 
       - name: Upload DMG
         uses: actions/upload-artifact@v7
         with:
-          name: starling-macos-dmg-${{ matrix.arch }}
-          path: artifacts/Starling-${{ needs.resolve-version.outputs.app_version }}-macos-${{ matrix.arch }}.dmg
+          name: starling-macos-dmg-${{ matrix.arch }}-${{ needs.resolve-version.outputs.artifact_version }}
+          path: artifacts/Starling-${{ needs.resolve-version.outputs.artifact_version }}-macos-${{ matrix.arch }}.dmg
           if-no-files-found: error
 
   publish-release-assets:
@@ -246,31 +247,31 @@ jobs:
       - name: Download Linux AppImage
         uses: actions/download-artifact@v7
         with:
-          name: starling-linux-appimage-x86_64
+          name: starling-linux-appimage-x86_64-${{ needs.resolve-version.outputs.artifact_version }}
           path: release-assets
 
       - name: Download Linux Flatpak
         uses: actions/download-artifact@v7
         with:
-          name: starling-linux-flatpak-x86_64
+          name: starling-linux-flatpak-x86_64-${{ needs.resolve-version.outputs.artifact_version }}
           path: release-assets
 
       - name: Download Windows MSI
         uses: actions/download-artifact@v7
         with:
-          name: starling-windows-msi-x64
+          name: starling-windows-msi-x64-${{ needs.resolve-version.outputs.artifact_version }}
           path: release-assets
 
       - name: Download Apple Silicon macOS DMG
         uses: actions/download-artifact@v7
         with:
-          name: starling-macos-dmg-arm64
+          name: starling-macos-dmg-arm64-${{ needs.resolve-version.outputs.artifact_version }}
           path: release-assets
 
       - name: Download Intel macOS DMG
         uses: actions/download-artifact@v7
         with:
-          name: starling-macos-dmg-x64
+          name: starling-macos-dmg-x64-${{ needs.resolve-version.outputs.artifact_version }}
           path: release-assets
 
       - name: Attach builds to GitHub release

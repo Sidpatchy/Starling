@@ -29,6 +29,7 @@ jobs:
     outputs:
       app_version: ${{ steps.version.outputs.app_version }}
       package_version: ${{ steps.version.outputs.package_version }}
+      artifact_version: ${{ steps.version.outputs.artifact_version }}
       android_code: ${{ github.run_number }}
     steps:
       - name: Check out source
@@ -75,13 +76,13 @@ jobs:
         run: |
           mkdir -p artifacts
           cp androidApp/build/outputs/apk/release/androidApp-release-unsigned.apk \
-            "artifacts/Starling-${{ needs.resolve-version.outputs.app_version }}-android-unsigned.apk"
+            "artifacts/Starling-${{ needs.resolve-version.outputs.artifact_version }}-android-unsigned.apk"
 
       - name: Upload unsigned APK
         uses: actions/upload-artifact@v7
         with:
-          name: starling-android-unsigned-apk
-          path: artifacts/Starling-${{ needs.resolve-version.outputs.app_version }}-android-unsigned.apk
+          name: starling-android-unsigned-apk-${{ needs.resolve-version.outputs.artifact_version }}
+          path: artifacts/Starling-${{ needs.resolve-version.outputs.artifact_version }}-android-unsigned.apk
           if-no-files-found: error
 
   ios-ipa:
@@ -227,13 +228,13 @@ jobs:
           mkdir -p artifacts
           bash packaging/ios/package-python-app.sh \
             "$app_path" \
-            "artifacts/Starling-${{ needs.resolve-version.outputs.app_version }}-ios-unsigned.ipa"
+            "artifacts/Starling-${{ needs.resolve-version.outputs.artifact_version }}-ios-unsigned.ipa"
 
       - name: Upload unsigned IPA
         uses: actions/upload-artifact@v7
         with:
-          name: starling-ios-unsigned-ipa
-          path: artifacts/Starling-${{ needs.resolve-version.outputs.app_version }}-ios-unsigned.ipa
+          name: starling-ios-unsigned-ipa-${{ needs.resolve-version.outputs.artifact_version }}
+          path: artifacts/Starling-${{ needs.resolve-version.outputs.artifact_version }}-ios-unsigned.ipa
           if-no-files-found: error
 
   ios-app-store-connect:
@@ -248,7 +249,7 @@ jobs:
       - name: Download unsigned IPA
         uses: actions/download-artifact@v7
         with:
-          name: starling-ios-unsigned-ipa
+          name: starling-ios-unsigned-ipa-${{ needs.resolve-version.outputs.artifact_version }}
           path: artifacts
 
       - name: Sign IPA and upload to App Store Connect
@@ -263,11 +264,11 @@ jobs:
           IOS_MARKETING_VERSION: ${{ needs.resolve-version.outputs.package_version }}
           IOS_BUILD_NUMBER: ${{ github.run_number }}
         run: |
-          ipa_path="artifacts/Starling-${{ needs.resolve-version.outputs.app_version }}-ios-unsigned.ipa"
+          ipa_path="artifacts/Starling-${{ needs.resolve-version.outputs.artifact_version }}-ios-unsigned.ipa"
           test -f "$ipa_path"
           bash packaging/ios/sign-and-upload-ipa.sh \
             "$ipa_path" \
-            "$RUNNER_TEMP/Starling-${{ needs.resolve-version.outputs.app_version }}-ios-signed.ipa"
+            "$RUNNER_TEMP/Starling-${{ needs.resolve-version.outputs.artifact_version }}-ios-signed.ipa"
 
   publish-release-assets:
     name: Attach mobile builds to release
@@ -280,13 +281,13 @@ jobs:
       - name: Download unsigned APK
         uses: actions/download-artifact@v7
         with:
-          name: starling-android-unsigned-apk
+          name: starling-android-unsigned-apk-${{ needs.resolve-version.outputs.artifact_version }}
           path: release-assets
 
       - name: Download unsigned IPA
         uses: actions/download-artifact@v7
         with:
-          name: starling-ios-unsigned-ipa
+          name: starling-ios-unsigned-ipa-${{ needs.resolve-version.outputs.artifact_version }}
           path: release-assets
 
       - name: Attach builds to GitHub release

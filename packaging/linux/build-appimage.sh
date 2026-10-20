@@ -5,7 +5,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 distribution="$repo_root/composeApp/build/compose/binaries/main/app/Starling"
 appdir="$repo_root/composeApp/build/appimage/Starling.AppDir"
 artifactdir="$repo_root/composeApp/build/appimage/artifacts"
-version="${APP_VERSION:-0.1.0}"
+version="${ARTIFACT_VERSION:-${APP_VERSION:-0.1.0}}"
 
 if [[ ! -x "$distribution/bin/Starling" ]]; then
   echo "Missing Compose desktop distribution; run :composeApp:createDistributable first." >&2
