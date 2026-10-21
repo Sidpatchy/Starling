@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+
 if [[ $# -ne 2 ]]; then
   echo "Usage: $0 <unsigned.ipa> <signed.ipa>" >&2
   exit 2
