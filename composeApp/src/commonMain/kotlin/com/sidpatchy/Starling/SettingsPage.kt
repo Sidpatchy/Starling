@@ -46,8 +46,10 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.preferredFrameRate
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
@@ -55,8 +57,17 @@ internal enum class SettingsSection(val label: String, val summary: String) {
     APPEARANCE("Appearance", "Theme and chat display"),
     NETWORK("Network", "Preview, node, and interface settings"),
     MESSAGING("Messaging", "RRC rooms and LXMF direct messages"),
+    OPEN_SOURCE("Open source", "Licenses and acknowledgements"),
     IDENTITY("Identity", "Identity keys and nicknames"),
 }
+
+internal enum class SettingsBackTarget {
+    SETTINGS_INDEX,
+    EXIT_SETTINGS,
+}
+
+internal fun settingsBackTarget(isWideLayout: Boolean, showSectionIndex: Boolean): SettingsBackTarget =
+    if (!isWideLayout && !showSectionIndex) SettingsBackTarget.SETTINGS_INDEX else SettingsBackTarget.EXIT_SETTINGS
 
 @Composable
 private fun RuntimeModeSelection(
@@ -290,27 +301,47 @@ internal fun SettingsPage(
     }
 
     Column(Modifier.fillMaxSize().background(Canvas)) {
-        Row(
-            modifier = Modifier.fillMaxWidth().height(68.dp).background(Paper)
-                .padding(horizontal = 20.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            IconButton(onClick = onBack, modifier = Modifier.size(48.dp)) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Accent)
-            }
-            Spacer(Modifier.width(10.dp))
-            Text("Settings", color = Ink, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
-            if (showNavigationButton) {
-                Spacer(Modifier.weight(1f))
-                NavigationToggle { onOpenNavigation() }
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+            val backTarget = settingsBackTarget(maxWidth >= 900.dp, showSectionIndex)
+            Row(
+                modifier = Modifier.fillMaxWidth().height(68.dp).background(Paper)
+                    .padding(horizontal = 20.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                IconButton(
+                    onClick = {
+                        when (backTarget) {
+                            SettingsBackTarget.SETTINGS_INDEX -> onShowSectionIndex()
+                            SettingsBackTarget.EXIT_SETTINGS -> onBack()
+                        }
+                    },
+                    modifier = Modifier.size(48.dp),
+                ) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = if (backTarget == SettingsBackTarget.SETTINGS_INDEX) "Back to settings sections" else "Back",
+                        tint = Accent,
+                    )
+                }
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    if (backTarget == SettingsBackTarget.SETTINGS_INDEX) selectedSection.label else "Settings",
+                    color = Ink,
+                    fontSize = 17.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                if (showNavigationButton) {
+                    Spacer(Modifier.weight(1f))
+                    NavigationToggle { onOpenNavigation() }
+                }
             }
         }
 
-        val sectionContent: @Composable (Modifier) -> Unit = { contentModifier ->
+        val sectionContent: @Composable (Modifier, Dp) -> Unit = { contentModifier, contentHorizontalPadding ->
         Column(
             modifier = contentModifier.fillMaxWidth().verticalScroll(rememberScrollState())
                 .preferredFrameRate(120f)
-                .padding(horizontal = 24.dp, vertical = 26.dp),
+                .padding(horizontal = contentHorizontalPadding, vertical = 26.dp),
             verticalArrangement = Arrangement.spacedBy(18.dp),
         ) {
             if (selectedSection == SettingsSection.APPEARANCE) {
@@ -915,6 +946,9 @@ internal fun SettingsPage(
                     }
                 }
             }
+            if (selectedSection == SettingsSection.OPEN_SOURCE) {
+                OpenSourceAcknowledgements()
+            }
         }
         }
         BoxWithConstraints(Modifier.fillMaxWidth().weight(1f)) {
@@ -934,7 +968,7 @@ internal fun SettingsPage(
                         fontSize = 20.sp,
                         fontWeight = FontWeight.SemiBold,
                     )
-                    sectionContent(Modifier.weight(1f))
+                    sectionContent(Modifier.weight(1f), 24.dp)
                 }
             }
         } else if (showSectionIndex) {
@@ -945,19 +979,89 @@ internal fun SettingsPage(
                 onManageIdentity = onManageIdentity,
             )
         } else {
-            Column(Modifier.fillMaxSize()) {
-                Row(
-                    modifier = Modifier.fillMaxWidth().height(56.dp).background(Paper),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    IconButton(onClick = onShowSectionIndex) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back to settings", tint = Accent)
-                    }
-                    Text(selectedSection.label, color = Ink, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-                }
-                sectionContent(Modifier.weight(1f))
-            }
+            sectionContent(Modifier.fillMaxSize(), 16.dp)
         }
+        }
+    }
+}
+
+@Composable
+private fun OpenSourceAcknowledgements() {
+    val uriHandler = LocalUriHandler.current
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text(
+            "Starling is open-source software. These acknowledgements cover Starling and selected libraries used by its clients. " +
+                "Open a license link to read the full terms; an internet connection may be required.",
+            color = Muted,
+            fontSize = 12.sp,
+            lineHeight = 18.sp,
+        )
+        TextButton(onClick = { uriHandler.openUri("https://github.com/Sidpatchy/Starling") }) {
+            Text("View Starling source")
+        }
+        AcknowledgementCard(
+            name = "Starling",
+            license = "GNU Affero General Public License v3.0",
+            detail = "Starling's source code and license are published in the project repository.",
+            licenseUrl = "https://github.com/Sidpatchy/Starling/blob/main/LICENSE",
+            onOpenLicense = { uriHandler.openUri(it) },
+        )
+        AcknowledgementCard(
+            name = "Reticulum",
+            license = "Reticulum License",
+            detail = "Copyright © 2016–2026 Mark Qvist.",
+            licenseUrl = "https://github.com/Sidpatchy/Starling/blob/main/licenses/Reticulum-LICENSE.txt",
+            onOpenLicense = { uriHandler.openUri(it) },
+        )
+        AcknowledgementCard(
+            name = "LXMF",
+            license = "Reticulum License",
+            detail = "Copyright © 2020–2025 Mark Qvist.",
+            licenseUrl = "https://github.com/Sidpatchy/Starling/blob/main/licenses/LXMF-LICENSE.txt",
+            onOpenLicense = { uriHandler.openUri(it) },
+        )
+        AcknowledgementCard(
+            name = "pySerial",
+            license = "BSD 3-Clause License",
+            detail = "Copyright © 2001–2020 Chris Liechti.",
+            licenseUrl = "https://github.com/Sidpatchy/Starling/blob/main/licenses/PySerial-LICENSE.txt",
+            onOpenLicense = { uriHandler.openUri(it) },
+        )
+        AcknowledgementCard(
+            name = "Python",
+            license = "Python Software Foundation License 2.0",
+            detail = "The Python runtime is distributed by the Python Software Foundation.",
+            licenseUrl = "https://docs.python.org/3/license.html",
+            onOpenLicense = { uriHandler.openUri(it) },
+        )
+        AcknowledgementCard(
+            name = "Kotlin, Compose, AndroidX, and kotlinx.coroutines",
+            license = "Apache License 2.0",
+            detail = "Open-source language, UI, platform, and concurrency libraries used by Starling.",
+            licenseUrl = "https://www.apache.org/licenses/LICENSE-2.0",
+            onOpenLicense = { uriHandler.openUri(it) },
+        )
+    }
+}
+
+@Composable
+private fun AcknowledgementCard(
+    name: String,
+    license: String,
+    detail: String,
+    licenseUrl: String,
+    onOpenLicense: (String) -> Unit,
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Paper)
+            .border(1.dp, Line, RoundedCornerShape(14.dp)).padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(5.dp),
+    ) {
+        Text(name, color = Ink, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+        Text(license, color = Accent, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+        Text(detail, color = Muted, fontSize = 12.sp, lineHeight = 18.sp)
+        TextButton(onClick = { onOpenLicense(licenseUrl) }) {
+            Text("View license")
         }
     }
 }
