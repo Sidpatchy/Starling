@@ -87,6 +87,7 @@ if len(apps) != 1:
 print(apps[0])
 PY
 )"
+python3 "$ROOT/packaging/ios/ensure_openssl_privacy_manifests.py" --check "$APP_PATH"
 INFO_PLIST="$APP_PATH/Info.plist"
 APP_BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$INFO_PLIST")"
 PROFILE_TEAM_ID="$(/usr/libexec/PlistBuddy -c 'Print :TeamIdentifier:0' "$WORK_DIR/profile.plist")"

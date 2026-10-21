@@ -231,6 +231,20 @@ jobs:
             "$app_path" \
             "artifacts/Starling-${{ needs.resolve-version.outputs.artifact_version }}-ios-unsigned.ipa"
 
+      - name: Verify OpenSSL privacy manifests in IPA
+        shell: bash
+        run: |
+          ipa_path="artifacts/Starling-${{ needs.resolve-version.outputs.artifact_version }}-ios-unsigned.ipa"
+          temp_directory="$(mktemp -d)"
+          trap 'rm -rf "$temp_directory"' EXIT
+          ditto -x -k "$ipa_path" "$temp_directory"
+          app_path="$(find "$temp_directory/Payload" -maxdepth 1 -type d -name '*.app' -print -quit)"
+          if [[ -z "$app_path" ]]; then
+            echo "The packaged IPA does not contain a Payload/*.app bundle." >&2
+            exit 1
+          fi
+          python3 packaging/ios/ensure_openssl_privacy_manifests.py --check "$app_path"
+
       - name: Upload unsigned IPA
         uses: actions/upload-artifact@v7
         with:

@@ -15,6 +15,8 @@ import tempfile
 from pathlib import Path
 from zipfile import ZipFile
 
+from ensure_openssl_privacy_manifests import ensure_manifests
+
 
 def fail(message: str) -> None:
     raise SystemExit(f"Error: {message}")
@@ -126,6 +128,8 @@ def validate_app(app: Path, modules: Path, framework_count: int) -> None:
         if not path.is_file():
             fail(f"required full-build component is missing: {path}")
 
+    ensure_manifests(app, check_only=True)
+
     app_info = plistlib.loads((app / "Info.plist").read_bytes())
     executable = app / app_info["CFBundleExecutable"]
     native_binaries = [
@@ -223,6 +227,7 @@ def main() -> None:
                 f"found stdlib={stdlib_count}, packages={package_count}"
             )
         framework_count = stdlib_count + package_count
+        ensure_manifests(app)
         validate_app(app, modules, framework_count)
 
         staged_ipa = temporary_path / "Starling-full-device.ipa"

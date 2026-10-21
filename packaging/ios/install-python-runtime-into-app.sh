@@ -82,6 +82,8 @@ install_python \
   "iosApp/Vendor/Python.xcframework" \
   "${RESOURCE_BUNDLE#"$APP_PATH"/}/PythonModules/$PYTHON_MODULE_SLICE"
 
+python3 "$ROOT/packaging/ios/ensure_openssl_privacy_manifests.py" "$APP_PATH"
+
 if ! find "$APP_PATH/Frameworks" -maxdepth 1 -type d \
   -name 'cryptography.hazmat.bindings._rust.framework' -print -quit | grep -q .; then
   echo "PyCA cryptography's signed Rust framework was not installed." >&2
