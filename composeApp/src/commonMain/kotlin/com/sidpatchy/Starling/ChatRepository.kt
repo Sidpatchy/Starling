@@ -150,8 +150,8 @@ interface ChatRepository {
     fun updateNetworkNickname(networkId: String, nickname: String?)
     fun setPreviewMode(enabled: Boolean)
     fun addRoom(networkId: String, name: String, topic: String): ChatRoom
-    fun addContact(member: ChatMember)
-    fun toggleContact(memberId: String)
+    fun addContact(member: ChatMember): ChatMember?
+    fun toggleContact(member: ChatMember)
     fun acceptContactRequest(requestId: String)
     fun ignoreContactRequest(requestId: String)
     fun blockContactRequest(requestId: String)
@@ -333,16 +333,33 @@ class LocalPreviewChatRepository : ChatRepository {
         return room
     }
 
-    override fun addContact(member: ChatMember) {
-        if (member.isSelf || member.id.isBlank()) return
-        if (knownMembersById[member.id] == null) {
-            _knownMembers.value = _knownMembers.value + member
+    override fun addContact(member: ChatMember): ChatMember? {
+        if (member.isSelf || member.id.isBlank()) return null
+        val address = member.address?.let(::normalizeLxmfAddress)
+        val existing = _knownMembers.value.firstOrNull { known ->
+            known.id == member.id || (address != null && normalizeLxmfAddress(known.address.orEmpty()) == address)
         }
-        _contactMemberIds.value = _contactMemberIds.value + member.id
+        val contact = existing?.copy(
+            displayName = member.displayName.ifBlank { existing.displayName },
+            address = address ?: existing.address,
+        ) ?: member.copy(address = address ?: member.address)
+        _knownMembers.value = if (existing == null) {
+            _knownMembers.value + contact
+        } else {
+            _knownMembers.value.map { if (it.id == existing.id) contact else it }
+        }
+        _contactMemberIds.value = _contactMemberIds.value + contact.id
+        return contact
     }
 
-    override fun toggleContact(memberId: String) {
-        if (knownMembersById[memberId]?.isSelf == true) return
+    override fun toggleContact(member: ChatMember) {
+        if (member.isSelf) return
+        val address = member.address?.let(::normalizeLxmfAddress)
+        val matching = _knownMembers.value.firstOrNull { known ->
+            known.id == member.id || (address != null && normalizeLxmfAddress(known.address.orEmpty()) == address)
+        }
+        if (matching?.isSelf == true) return
+        val memberId = matching?.id ?: member.id
         _contactMemberIds.value = if (memberId in _contactMemberIds.value) {
             _contactMemberIds.value - memberId
         } else {
@@ -352,15 +369,15 @@ class LocalPreviewChatRepository : ChatRepository {
 
     override fun acceptContactRequest(requestId: String) {
         val request = allContactRequests.value.firstOrNull { it.id == requestId } ?: return
-        addContact(request.sender)
+        val sender = addContact(request.sender) ?: request.sender
         val incomingMessage = ChatMessage(
             id = request.id,
-            author = request.sender.id,
+            author = sender.displayName,
             text = request.message,
             time = request.time,
         )
         directMessagesByMember.value = directMessagesByMember.value +
-            (request.sender.id to (directMessagesByMember.value[request.sender.id].orEmpty() + incomingMessage))
+            (sender.id to (directMessagesByMember.value[sender.id].orEmpty() + incomingMessage))
         allContactRequests.value = allContactRequests.value.filterNot { it.id == requestId }
         refreshVisibleRequests()
     }
@@ -472,6 +489,22 @@ data class ChatMember(
     val isSelf: Boolean = false,
     val address: String? = null,
 )
+
+/** Return a canonical 32-character LXMF delivery hash from a pasted hash or lxmf:// URI. */
+internal fun normalizeLxmfAddress(value: String): String? {
+    val trimmed = value.trim()
+    val hash = if (trimmed.startsWith("lxmf://", ignoreCase = true)) trimmed.substring(7) else trimmed
+    val normalized = hash.trim().lowercase()
+    return normalized.takeIf { it.length == 32 && it.all { character -> character in "0123456789abcdef" } }
+}
+
+internal fun hasSameLxmfAddress(first: ChatMember, second: ChatMember): Boolean {
+    val address = first.address?.let(::normalizeLxmfAddress) ?: return false
+    return second.address?.let(::normalizeLxmfAddress) == address
+}
+
+internal fun isChatMemberContact(member: ChatMember, knownMembers: List<ChatMember>, contactIds: Set<String>): Boolean =
+    member.id in contactIds || knownMembers.any { it.id in contactIds && hasSameLxmfAddress(member, it) }
 
 data class ChatContactRequest(
     val id: String,

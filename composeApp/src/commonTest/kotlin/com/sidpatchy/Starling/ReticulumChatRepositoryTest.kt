@@ -29,6 +29,7 @@ class ReticulumChatRepositoryTest {
         override val localDeliveryAddress = MutableStateFlow<String?>(null)
         override val events = MutableSharedFlow<ReticulumEvent>(extraBufferCapacity = 64)
         val sentRoomMessages = mutableListOf<String>()
+        val sentDirectMessages = mutableListOf<Pair<String, String>>()
         val connectConfigs = mutableListOf<ReticulumConnectionConfig>()
         var disconnectCalls = 0
         /** When non-null, the next sendRoomMessage call throws this instead of recording the message. */
@@ -46,7 +47,9 @@ class ReticulumChatRepositoryTest {
             sendRoomMessageException?.let { throw it }
             sentRoomMessages += body
         }
-        override suspend fun sendDirectMessage(address: String, body: String) = Unit
+        override suspend fun sendDirectMessage(address: String, body: String) {
+            sentDirectMessages += address to body
+        }
         override suspend fun setLocalDisplayName(displayName: String) = Unit
     }
 
@@ -328,7 +331,8 @@ class ReticulumChatRepositoryTest {
 
         f.repository.sendDirectMessage("a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4", "hello")
 
-        assertEquals("Start the Reticulum node before sending an LXMF message.", f.repository.lastError.value)
+        assertEquals("Start the Reticulum node before sending an LXMF message.", f.repository.directMessageError.value)
+        assertNull(f.repository.lastError.value)
         assertTrue(f.transport.connectConfigs.isEmpty())
     }
 
@@ -339,7 +343,8 @@ class ReticulumChatRepositoryTest {
 
         f.repository.sendDirectMessage("a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4", "hello")
 
-        assertEquals("The LXMF delivery identity is still starting. Try again in a moment.", f.repository.lastError.value)
+        assertEquals("The LXMF delivery identity is still starting. Try again in a moment.", f.repository.directMessageError.value)
+        assertNull(f.repository.lastError.value)
     }
 
     @Test
@@ -351,7 +356,8 @@ class ReticulumChatRepositoryTest {
 
         f.repository.sendDirectMessage("noaddr", "hello")
 
-        assertEquals("This contact has no valid LXMF delivery address. Add or update the contact with their 32-character address.", f.repository.lastError.value)
+        assertEquals("This contact has no valid LXMF delivery address. Add or update the contact with their 32-character address.", f.repository.directMessageError.value)
+        assertNull(f.repository.lastError.value)
     }
 
     @Test
@@ -363,7 +369,102 @@ class ReticulumChatRepositoryTest {
 
         f.repository.sendDirectMessage("sparrow", "hello direct")
 
+        assertNull(f.repository.directMessageError.value)
+        assertEquals(listOf("a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4" to "hello direct"), f.transport.sentDirectMessages)
+        assertEquals("sending", f.repository.directMessages("sparrow").first().single().deliveryState)
+    }
+
+    @Test
+    fun pendingDirectMessageUsesBridgeIdAndUpdatesDeliveryState() = runTest {
+        val f = newRepository()
+        f.transport.localDeliveryAddress.value = "0123456789abcdef0123456789abcdef"
+        f.repository.addContact(
+            ChatMember("sparrow", "Sparrow", address = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4"),
+        )
+
+        f.repository.sendDirectMessage("sparrow", "hello direct")
+        f.transport.events.emit(
+            ReticulumEvent.DirectMessage(
+                LxmfDirectMessage("bridge-message-id", "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4", "", "hello direct", 10, true, "queued"),
+            ),
+        )
+
+        val queued = f.repository.directMessages("sparrow").first().single()
+        assertEquals("bridge-message-id", queued.id)
+        assertEquals("queued", queued.deliveryState)
+
+        f.transport.events.emit(
+            ReticulumEvent.DeliveryStatus("bridge-message-id", "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4", "delivered"),
+        )
+        assertEquals("delivered", f.repository.directMessages("sparrow").first().single().deliveryState)
+    }
+
+    @Test
+    fun lxmfFailureMarksPendingMessageAndKeepsErrorInDmState() = runTest {
+        val f = newRepository()
+        f.transport.localDeliveryAddress.value = "0123456789abcdef0123456789abcdef"
+        f.repository.addContact(
+            ChatMember("sparrow", "Sparrow", address = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4"),
+        )
+        f.repository.sendDirectMessage("sparrow", "hello direct")
+
+        f.transport.events.emit(
+            ReticulumEvent.LxmfError("Could not discover destination", "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4"),
+        )
+
+        assertEquals("failed", f.repository.directMessages("sparrow").first().single().deliveryState)
+        assertEquals("Could not discover destination", f.repository.directMessageError.value)
         assertNull(f.repository.lastError.value)
+    }
+
+    @Test
+    fun contactsWithTheSameLxmfAddressReuseTheExistingMemberIdentity() = runTest {
+        val f = newRepository()
+        val address = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4"
+        val roomMember = ChatMember("identity-hash", "Moss", address = address)
+        f.repository.addContact(roomMember)
+
+        val added = f.repository.addContact(
+            ChatMember("lxmf-$address", "Local Moss", address = "LXMF://${address.uppercase()}"),
+        )
+
+        assertEquals("identity-hash", added?.id)
+        assertEquals(setOf("identity-hash"), f.repository.contactMemberIds.value)
+        assertEquals(1, f.repository.knownMembers.value.count { normalizeLxmfAddress(it.address.orEmpty()) == address })
+        assertEquals("Local Moss", f.repository.knownMembers.value.single { it.id == "identity-hash" }.displayName)
+    }
+
+    @Test
+    fun lxmfAddressNormalizationValidatesAndCanonicalizesDeliveryHashes() {
+        val address = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4"
+
+        assertEquals(address, normalizeLxmfAddress("  LXMF://${address.uppercase()}  "))
+        assertNull(normalizeLxmfAddress("lxmf://not-a-hash"))
+        assertNull(normalizeLxmfAddress("a1b2c3d4"))
+    }
+
+    @Test
+    fun togglingAnRrcMemberWithAContactAliasRemovesTheExistingContact() = runTest {
+        val f = newRepository()
+        val address = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4"
+        f.repository.addContact(ChatMember("lxmf-$address", "Moss", address = address))
+
+        f.repository.toggleContact(ChatMember("identity-hash", "Moss", address = address))
+
+        assertTrue(f.repository.contactMemberIds.value.isEmpty())
+    }
+
+    @Test
+    fun lxmfErrorsNeverBecomeRrcRoomMessagesOrRrcErrors() = runTest {
+        val f = newRepository()
+        f.transport.state.value = ReticulumConnectionState.Connected("Test Hub")
+        f.repository.send(f.room.id, "/who")
+
+        f.transport.events.emit(ReticulumEvent.LxmfError("Could not discover this LXMF destination.", "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4"))
+
+        assertTrue(f.repository.messages(f.room.id).first().isEmpty())
+        assertNull(f.repository.lastError.value)
+        assertEquals("Could not discover this LXMF destination.", f.repository.directMessageError.value)
     }
 
     @Test

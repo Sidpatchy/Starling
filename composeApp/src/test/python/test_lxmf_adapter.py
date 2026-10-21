@@ -95,6 +95,10 @@ class _FakeRNS:
         def __init__(self, *args, **kwargs):
             pass
 
+        @staticmethod
+        def hash(identity_hash, *aspects):
+            return bytes.fromhex(DELIVERY_HASH)
+
     class vendor:
         class platformutils:
             @staticmethod
@@ -272,6 +276,7 @@ class LxmfAdapterTest(unittest.TestCase):
                  if line.startswith("DIRECT_MESSAGE\t")]
         self.assertEqual(len(lines), 1)
         fields = lines[0].split("\t")
+        self.assertEqual(protocol.decode(fields[2]), DELIVERY_HASH)
         self.assertEqual(protocol.decode(fields[4]), "Hello 🌍")
         self.assertEqual(fields[6], "0")
 

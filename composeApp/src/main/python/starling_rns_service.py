@@ -95,7 +95,8 @@ def main():
                 try:
                     stop()
                 except Exception as error:
-                    emit("EVENT\tERROR\t{}\t".format(encode("{} shutdown failed: {}".format(
+                    event_type = "LXMF_ERROR" if label == "LXMF" else "ERROR"
+                    emit("EVENT\t{}\t{}\t".format(event_type, encode("{} shutdown failed: {}".format(
                         label, str(error) or error.__class__.__name__))))
             emit("STOPPED")
             return 0
@@ -106,22 +107,29 @@ def main():
                 else:
                     dispatch_rrc(command, starling_rrc)
             except Exception as error:
-                emit("EVENT\tERROR\t{}\t".format(encode(str(error) or error.__class__.__name__)))
+                event_type = "LXMF_ERROR" if command.startswith("LXMF_") else "ERROR"
+                emit("EVENT\t{}\t{}\t".format(event_type, encode(str(error) or error.__class__.__name__)))
 
         try:
             event_lines = starling_rrc.poll_event_lines()
             if event_lines:
                 for event_line in event_lines.splitlines():
                     emit("EVENT\t" + event_line)
+        except Exception as error:
+            emit("EVENT\tERROR\t{}\t".format(encode(str(error) or error.__class__.__name__)))
+        try:
             lxmf_lines = starling_lxmf.poll_event_lines()
             if lxmf_lines:
                 for event_line in lxmf_lines.splitlines():
                     emit("EVENT\t" + event_line)
-            if time.monotonic() >= next_status:
-                emit(status_line(starling_rns))
-                next_status = time.monotonic() + 2
         except Exception as error:
-            emit("EVENT\tERROR\t{}\t".format(encode(str(error) or error.__class__.__name__)))
+            emit("EVENT\tLXMF_ERROR\t{}\t".format(encode(str(error) or error.__class__.__name__)))
+        if time.monotonic() >= next_status:
+            try:
+                emit(status_line(starling_rns))
+            except Exception as error:
+                emit("EVENT\tERROR\t{}\t".format(encode(str(error) or error.__class__.__name__)))
+            next_status = time.monotonic() + 2
 
 
 if __name__ == "__main__":

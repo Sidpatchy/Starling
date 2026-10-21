@@ -168,11 +168,13 @@ def _delivery_received(message):
 
 
 def _deliver_verified_message(message):
-    source_hash = message.source_hash.hex()
+    import RNS
+
+    delivery_address = RNS.Destination.hash(message.source_hash, "lxmf", "delivery").hex()
     _emit(
         "direct_message",
         message_id=message.hash.hex(),
-        address=source_hash,
+        address=delivery_address,
         sender_name=_peer_name(message.source_hash),
         body=message.content_as_string() or "",
         timestamp=int((message.timestamp or time.time()) * 1000),

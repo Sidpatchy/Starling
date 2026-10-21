@@ -445,6 +445,20 @@ class BridgeProtocolTest(unittest.TestCase):
         lxmf.stop.assert_not_called()
         rns.disconnect_node.assert_not_called()
 
+    def test_ios_adapter_keeps_lxmf_command_and_poll_errors_out_of_rrc_events(self):
+        rns, rrc, lxmf = self.fake_runtime_modules()
+        lxmf.send_direct.side_effect = RuntimeError("LXMF send failed")
+        lxmf.poll_event_lines.side_effect = RuntimeError("LXMF event poll failed")
+        with patch.dict(sys.modules, {"starling_rns": rns, "starling_rrc": rrc, "starling_lxmf": lxmf}), \
+                patch.multiple(ios_runtime, _rns=rns, _rrc=rrc, _lxmf=lxmf):
+            command_error = ios_runtime.invoke("LXMF_SEND\tYWRkcmVzcw==\taGVsbG8=")
+            poll_errors = ios_runtime.invoke("POLL").splitlines()
+
+        self.assertTrue(command_error.startswith("EVENT\tLXMF_ERROR\t"))
+        self.assertEqual(protocol.decode(command_error.split("\t")[2]), "LXMF send failed")
+        self.assertTrue(any(line.startswith("EVENT\tLXMF_ERROR\t") for line in poll_errors))
+        self.assertFalse(any(line.startswith("EVENT\tERROR\t") for line in poll_errors))
+
     def test_ios_startup_failure_cleans_up_partial_runtime_and_preserves_start_error(self):
         rns, rrc, lxmf = self.fake_runtime_modules()
         rns.start_node.side_effect = RuntimeError("radio initialization failed")
@@ -473,8 +487,8 @@ class BridgeProtocolTest(unittest.TestCase):
             response = ios_runtime.invoke("STOP")
 
         self.assertTrue(response.endswith("STOPPED"))
-        self.assertIn(protocol.encode("RRC shutdown failed: room close failed"), response)
-        self.assertIn(protocol.encode("LXMF shutdown failed: LXMF close failed"), response)
+        self.assertIn("EVENT\tERROR\t" + protocol.encode("RRC shutdown failed: room close failed"), response)
+        self.assertIn("EVENT\tLXMF_ERROR\t" + protocol.encode("LXMF shutdown failed: LXMF close failed"), response)
         rns.disconnect_node.assert_called_once_with()
         self.assertIsNone(ios_runtime._rns)
         self.assertIsNone(ios_runtime._rrc)
@@ -490,6 +504,7 @@ rns.status.return_value = json.dumps({"running": True, "mode": "EMBEDDED"})
 rrc.poll_event_lines.return_value = lxmf.poll_event_lines.return_value = ""
 rrc.disconnect.side_effect = RuntimeError("room close failed")
 lxmf.stop.side_effect = RuntimeError("LXMF close failed")
+lxmf.send_direct.side_effect = RuntimeError("LXMF send failed")
 sys.modules.update(starling_rns=rns, starling_rrc=rrc, starling_lxmf=lxmf)
 import starling_rns_service
 code = starling_rns_service.main()
@@ -507,17 +522,18 @@ raise SystemExit(code)
         environment["PYTHONPATH"] = os.path.dirname(protocol.__file__)
         with tempfile.TemporaryDirectory(prefix="starling-bridge-test-") as data_dir:
             result = subprocess.run(
-                [sys.executable, "-c", script, data_dir], input=command + "\r\nLXMF_SET_NAME\t\nSTOP\n",
+                [sys.executable, "-c", script, data_dir], input=command + "\r\nLXMF_SET_NAME\t\nLXMF_SEND\tYWRkcmVzcw==\taGVsbG8=\nSTOP\n",
                 text=True, capture_output=True, env=environment, timeout=10,
             )
             with open(os.path.join(data_dir, "starling-rns.log"), encoding="utf-8") as log:
                 diagnostics = result.stdout + result.stderr + log.read()
         self.assertEqual(result.returncode, 0, diagnostics)
         self.assertTrue(result.stdout.startswith("READY\tRUNNING\t"), diagnostics)
-        shutdown_events = [line.split("\t") for line in result.stdout.splitlines() if line.startswith("EVENT\tERROR\t")]
-        self.assertEqual([protocol.decode(fields[2]) for fields in shutdown_events], [
-            "RRC shutdown failed: room close failed",
-            "LXMF shutdown failed: LXMF close failed",
+        bridge_events = [line.split("\t") for line in result.stdout.splitlines() if line.startswith("EVENT\t")]
+        self.assertEqual([(fields[1], protocol.decode(fields[2])) for fields in bridge_events], [
+            ("LXMF_ERROR", "LXMF send failed"),
+            ("ERROR", "RRC shutdown failed: room close failed"),
+            ("LXMF_ERROR", "LXMF shutdown failed: LXMF close failed"),
         ], diagnostics)
         self.assertTrue(result.stdout.endswith("STOPPED\n"), diagnostics)
 

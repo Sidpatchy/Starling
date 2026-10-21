@@ -26,10 +26,13 @@ class RrcBridgeProtocolTest {
     }
 
     @Test
-    fun lxmfBridgeErrorsDecodeAsSharedEvents() {
-        val parsed = parseRrcBridgeEvent("LXMF_ERROR\t${encodeBridgeBase64("IFAC rejected the peer")}\t")
+    fun lxmfBridgeErrorsDecodeAsDirectMessageEvents() {
+        val address = "0123456789abcdef0123456789abcdef"
+        val parsed = parseRrcBridgeEvent(
+            "LXMF_ERROR\t${encodeBridgeBase64("IFAC rejected the peer")}\t${encodeBridgeBase64(address)}",
+        )
 
-        assertEquals(ReticulumEvent.Error("IFAC rejected the peer"), parsed?.event)
+        assertEquals(ReticulumEvent.LxmfError("IFAC rejected the peer", address), parsed?.event)
     }
 
     @Test

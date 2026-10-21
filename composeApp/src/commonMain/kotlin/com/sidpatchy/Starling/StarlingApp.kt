@@ -182,9 +182,12 @@ fun StarlingApp(
     val activeHubNetworkId by remember(liveChatRepository) {
         liveChatRepository?.activeHubNetworkId ?: flowOf(null)
     }.collectAsState(initial = null)
-    val reticulumConnectionError by remember(liveChatRepository) {
-        liveChatRepository?.lastError ?: flowOf(null)
+    val rrcError by remember(liveChatRepository) {
+        liveChatRepository?.rrcError ?: flowOf(null)
     }.collectAsState(initial = null)
+    val directMessageError by remember(liveChatRepository) {
+        liveChatRepository?.directMessageError ?: flowOf(null)
+    }.collectAsState(initial = liveChatRepository?.directMessageError?.value)
     val localDeliveryAddress by remember(liveChatRepository) {
         liveChatRepository?.localDeliveryAddress ?: flowOf(null)
     }.collectAsState(initial = null)
@@ -215,7 +218,7 @@ fun StarlingApp(
     val managedIdentity = (identityState as? ReticulumIdentityState.Available)?.identity
     var identityNotice by remember { mutableStateOf<String?>(null) }
     val visibleConnectionState = if (previewMode) ReticulumConnectionState.Disconnected else reticulumConnectionState
-    val visibleConnectionError = if (previewMode) null else reticulumConnectionError
+    val visibleRrcError = if (previewMode) null else rrcError
     val visibleHubNetworkId = if (previewMode) null else activeHubNetworkId
     val visibleDeliveryAddress = if (previewMode) null else localDeliveryAddress
     val scope = rememberCoroutineScope()
@@ -548,7 +551,7 @@ fun StarlingApp(
                                 supportsReticulumProtocol = nodeController.supportsReticulumProtocol,
                                 supportsRNodeInterfaces = nodeController.supportsRNodeInterfaces,
                                 rrcState = visibleConnectionState,
-                                rrcError = visibleConnectionError,
+                                rrcError = visibleRrcError,
                                 localDeliveryAddress = visibleDeliveryAddress,
                                 showNavigationButton = !showDesktopNavigation,
                                 onOpenNavigation = { showDesktopNavigation = true },
@@ -622,7 +625,7 @@ fun StarlingApp(
                                 bubbleStyle = uiSettings.bubbleStyle,
                                 denseMessages = uiSettings.denseMessages,
                                 isLive = visibleDeliveryAddress != null,
-                                error = visibleConnectionError,
+                                error = directMessageError,
                                 onMemberClick = { selectedMember = selectedDirectMessage },
                                 showNavigationButton = !showDesktopNavigation,
                                 onOpenNavigation = { showDesktopNavigation = true },
@@ -666,7 +669,7 @@ fun StarlingApp(
                                 compact = false,
                                 membersVisible = showMembersPanel,
                                 isLive = visibleConnectionState is ReticulumConnectionState.Connected && visibleHubNetworkId == selectedRoom.networkId,
-                                error = visibleConnectionError,
+                                error = visibleRrcError,
                                 onToggleMembers = { showMembersPanel = !showMembersPanel },
                                 showNavigationButton = !showDesktopNavigation,
                                 onOpenNavigation = { showDesktopNavigation = true },
@@ -678,6 +681,7 @@ fun StarlingApp(
                             MembersPane(
                                 members = members,
                                 contactMemberIds = contactMemberIds,
+                                knownMembers = knownMembers,
                                 onMemberClick = { selectedMember = it },
                             )
                         }
@@ -805,7 +809,7 @@ fun StarlingApp(
                                 supportsReticulumProtocol = nodeController.supportsReticulumProtocol,
                                 supportsRNodeInterfaces = nodeController.supportsRNodeInterfaces,
                                 rrcState = visibleConnectionState,
-                                rrcError = visibleConnectionError,
+                                rrcError = visibleRrcError,
                                 localDeliveryAddress = visibleDeliveryAddress,
                                 onStartNode = { config -> scope.launch { nodeController.start(config) } },
                                 onDisconnectNode = {
@@ -877,7 +881,7 @@ fun StarlingApp(
                                 bubbleStyle = uiSettings.bubbleStyle,
                                 denseMessages = uiSettings.denseMessages,
                                 isLive = visibleDeliveryAddress != null,
-                                error = visibleConnectionError,
+                                error = directMessageError,
                                 compact = true,
                                 onOpenNavigation = { scope.launch { drawerState.open() } },
                                 onMemberClick = { selectedMember = selectedDirectMessage },
@@ -917,7 +921,7 @@ fun StarlingApp(
                                 compact = true,
                                 membersVisible = false,
                                 isLive = visibleConnectionState is ReticulumConnectionState.Connected && visibleHubNetworkId == selectedRoom.networkId,
-                                error = visibleConnectionError,
+                                error = visibleRrcError,
                                 onToggleMembers = { showMembersDrawer = true },
                                 onOpenNavigation = { scope.launch { drawerState.open() } },
                                 onMemberClick = { selectedMember = it },
@@ -946,6 +950,7 @@ fun StarlingApp(
                                             MembersPane(
                                                 members = members,
                                                 contactMemberIds = contactMemberIds,
+                                                knownMembers = knownMembers,
                                                 drawer = true,
                                                 onMemberClick = {
                                                     selectedMember = it
@@ -995,16 +1000,27 @@ fun StarlingApp(
                 AddContactDialog(
                     previewMode = previewMode,
                     onAdd = { displayName, address ->
-                        if (previewMode) {
-                            val slug = displayName.trim().lowercase().filter { it.isLetterOrDigit() || it == '-' }
+                        val cleanName = displayName.trim()
+                        val added = if (previewMode) {
+                            val slug = cleanName.lowercase().filter { it.isLetterOrDigit() || it == '-' }
                                 .ifBlank { "contact" }
-                            repository.addContact(ChatMember("preview-local-$slug", displayName.trim()))
+                            repository.addContact(ChatMember("preview-local-$slug", cleanName))
                         } else {
-                            val normalizedAddress = address.trim()
-                            val idAddress = normalizedAddress.removePrefix("lxmf://").removePrefix("LXMF://").lowercase()
-                            repository.addContact(ChatMember("lxmf-$idAddress", displayName.trim(), address = normalizedAddress))
+                            val normalizedAddress = normalizeLxmfAddress(address) ?: return@AddContactDialog
+                            val known = knownMembers.firstOrNull {
+                                normalizeLxmfAddress(it.address.orEmpty()) == normalizedAddress
+                            }
+                            val contact = known?.copy(displayName = cleanName, address = normalizedAddress)
+                                ?: ChatMember("lxmf-$normalizedAddress", cleanName, address = normalizedAddress)
+                            repository.addContact(contact)
                         }
-                        showAddContact = false
+                        if (added != null) {
+                            selectedDirectMessageId = added.id
+                            showContactRequests = false
+                            showSettings = false
+                            showIdentityPage = false
+                            showAddContact = false
+                        }
                     },
                     onDismiss = { showAddContact = false },
                 )
@@ -1059,8 +1075,8 @@ fun StarlingApp(
                 MemberProfileDialog(
                     member = if (previewMode) member.copy(address = null) else member,
                     sharedRooms = repository.sharedRooms(member.id),
-                    isContact = member.id in contactMemberIds,
-                    onToggleContact = { repository.toggleContact(member.id) },
+                    isContact = isChatMemberContact(member, knownMembers, contactMemberIds),
+                    onToggleContact = { repository.toggleContact(member) },
                     onDismiss = { selectedMember = null },
                 )
             }
@@ -1326,6 +1342,8 @@ private fun AddContactDialog(
 ) {
     var displayName by rememberSaveable { mutableStateOf("") }
     var address by rememberSaveable { mutableStateOf("") }
+    val normalizedAddress = normalizeLxmfAddress(address)
+    val addressError = !previewMode && address.isNotBlank() && normalizedAddress == null
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Add contact", color = Ink) },
@@ -1333,7 +1351,7 @@ private fun AddContactDialog(
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
                     if (previewMode) "Add a demo-only contact. No LXMF address is needed and nothing is sent."
-                    else "Add someone by their shareable LXMF address. Adding them saves the contact but doesn’t start a conversation.",
+                    else "Add someone by their LXMF delivery address. Starling will open the conversation when they’re added.",
                     color = Muted,
                     fontSize = 12.sp,
                 )
@@ -1348,16 +1366,24 @@ private fun AddContactDialog(
                         value = address,
                         onValueChange = { address = it },
                         label = { Text("LXMF address") },
+                        isError = addressError,
+                        supportingText = {
+                            Text(
+                                if (addressError) "Enter a 32-character hexadecimal address or lxmf:// address."
+                                else "Paste a 32-character delivery hash, optionally prefixed with lxmf://.",
+                                color = if (addressError) ErrorText else Muted,
+                                fontSize = 10.sp,
+                            )
+                        },
                         singleLine = true,
                     )
-                    Text("QR scanning isn’t available yet. Paste the 32-character delivery hash or an lxmf:// address.", color = Muted, fontSize = 10.sp)
                 }
             }
         },
         confirmButton = {
             TextButton(
-                enabled = displayName.isNotBlank() && (previewMode || address.isNotBlank()),
-                onClick = { onAdd(displayName, address) },
+                enabled = displayName.isNotBlank() && (previewMode || normalizedAddress != null),
+                onClick = { onAdd(displayName.trim(), normalizedAddress.orEmpty()) },
             ) { Text("Add contact", color = Accent) }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel", color = Muted) } },
@@ -1792,7 +1818,7 @@ private fun RoomSidebar(
             }
             if (contacts.isEmpty()) {
                 Text(
-                    "Add someone by LXMF address or QR.",
+                    "Add a contact by LXMF address to start a conversation.",
                     modifier = Modifier.padding(start = 22.dp, end = 16.dp, bottom = 8.dp),
                     color = Muted,
                     fontSize = 11.sp,
@@ -2153,10 +2179,11 @@ private fun ChatHeader(
 private fun MembersPane(
     members: List<ChatMember>,
     contactMemberIds: Set<String>,
+    knownMembers: List<ChatMember>,
     drawer: Boolean = false,
     onMemberClick: (ChatMember) -> Unit,
 ) {
-    val contactsHere = members.filter { !it.isSelf && it.id in contactMemberIds }
+    val contactsHere = members.filter { !it.isSelf && isChatMemberContact(it, knownMembers, contactMemberIds) }
     val otherMembers = members.filterNot { it in contactsHere }.sortedByDescending { it.isSelf }
     val panelModifier = if (drawer) {
         Modifier.width(282.dp).fillMaxHeight().background(Paper).padding(18.dp)
@@ -2191,7 +2218,7 @@ private fun MembersPane(
         otherMembers.forEach { member ->
             MemberRow(
                 member = member,
-                isContact = member.id in contactMemberIds,
+                isContact = isChatMemberContact(member, knownMembers, contactMemberIds),
                 onClick = { if (!member.isSelf) onMemberClick(member) },
             )
         }

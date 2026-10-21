@@ -213,6 +213,7 @@ sealed interface ReticulumEvent {
     data class RoomMessageReceived(val message: RrcRoomMessage) : ReticulumEvent
     data class DirectMessage(val message: LxmfDirectMessage) : ReticulumEvent
     data class DeliveryStatus(val messageId: String, val address: String, val state: String) : ReticulumEvent
+    data class LxmfError(val message: String, val address: String? = null) : ReticulumEvent
     data class MembersChanged(val roomId: String, val members: List<ChatMember>) : ReticulumEvent
     data class Error(
         val message: String,

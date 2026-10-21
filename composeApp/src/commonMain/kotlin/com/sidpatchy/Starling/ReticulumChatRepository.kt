@@ -37,6 +37,7 @@ class ReticulumChatRepository(
     private val persistenceRequests = Channel<Unit>(Channel.CONFLATED)
     private var persistenceJob: Job? = null
     private var systemMessageSequence = 0L
+    private var pendingDirectMessageSequence = 0L
     private val lastServerCommandRoomId = MutableStateFlow<String?>(null)
     private val lastServerCommandName = MutableStateFlow<String?>(null)
     private val lastServerCommandText = MutableStateFlow<String?>(null)
@@ -69,7 +70,7 @@ class ReticulumChatRepository(
     private val liveMessages = MutableStateFlow(restoredState?.roomMessages.orEmpty())
     private val liveMembers = MutableStateFlow<Map<String, List<ChatMember>>>(emptyMap())
     private val discoveredMembers = MutableStateFlow(
-        restoredState?.members.orEmpty().filterNot { preview.isPreviewMember(it.id) },
+        mergeMembers(emptyList(), restoredState?.members.orEmpty().filterNot { preview.isPreviewMember(it.id) }),
     )
     private val localMember = MutableStateFlow(
         restoredState?.members?.firstOrNull { it.isSelf && !preview.isPreviewMember(it.id) },
@@ -86,7 +87,10 @@ class ReticulumChatRepository(
     ) { networkId, previewEnabled -> if (previewEnabled) null else networkId }
         .stateIn(scope, SharingStarted.Eagerly, null)
     private val liveContactMemberIds = MutableStateFlow(
-        restoredState?.contacts.orEmpty().filterNot(preview::isPreviewMember).toSet(),
+        normalizeContactIds(
+            restoredState?.contacts.orEmpty().filterNot(preview::isPreviewMember).toSet(),
+            discoveredMembers.value,
+        ),
     )
     private val liveBlockedMemberIds = MutableStateFlow(
         restoredState?.blockedMembers.orEmpty().filterNot(preview::isPreviewMember).toSet(),
@@ -96,8 +100,16 @@ class ReticulumChatRepository(
     )
     private val messageByRequestId = mutableMapOf<String, LxmfDirectMessage>()
     private val _lastError = MutableStateFlow<String?>(null)
-    val lastError: StateFlow<String?> = combine(
+    val rrcError: StateFlow<String?> = combine(
         _lastError,
+        preview.previewMode,
+    ) { error, previewEnabled -> if (previewEnabled) null else error }
+        .stateIn(scope, SharingStarted.Eagerly, null)
+    /** Backwards-compatible name for the RRC/chat error channel. */
+    val lastError: StateFlow<String?> = rrcError
+    private val _directMessageError = MutableStateFlow<String?>(null)
+    val directMessageError: StateFlow<String?> = combine(
+        _directMessageError,
         preview.previewMode,
     ) { error, previewEnabled -> if (previewEnabled) null else error }
         .stateIn(scope, SharingStarted.Eagerly, null)
@@ -193,7 +205,7 @@ class ReticulumChatRepository(
             }.collect { (nodeReady, nickname, previewEnabled) ->
                 if (nodeReady && !previewEnabled) {
                     runCatching { transport.setLocalDisplayName(nickname) }
-                        .onFailure { _lastError.value = it.message ?: "Could not update the LXMF identity nickname." }
+                        .onFailure { _directMessageError.value = it.message ?: "Could not update the LXMF identity nickname." }
                 }
             }
         }
@@ -363,6 +375,10 @@ class ReticulumChatRepository(
                             _lastError.value = event.message
                         }
                     }
+                    is ReticulumEvent.LxmfError -> {
+                        markPendingDirectMessages(event.address, "failed")
+                        _directMessageError.value = event.message
+                    }
                     is ReticulumEvent.DeliveryStatus -> updateDeliveryStatus(event)
                     is ReticulumEvent.RoomsChanged -> Unit // RRC core intentionally has no room enumeration command.
                 }
@@ -464,32 +480,63 @@ class ReticulumChatRepository(
         if (enabled) {
             _activeHubNetworkId.value = null
             _lastError.value = null
+            _directMessageError.value = null
             scope.launch { runCatching { transport.disconnect() } }
         }
         persistState()
     }
 
-    override fun addContact(member: ChatMember) {
-        if (member.isSelf || member.id.isBlank()) return
+    override fun addContact(member: ChatMember): ChatMember? {
+        if (member.isSelf) return null
         if (preview.previewMode.value) {
-            preview.addContact(member)
-            return
+            return preview.addContact(member)
         }
-        discoveredMembers.value = mergeMembers(discoveredMembers.value, listOf(member))
-        liveContactMemberIds.value = liveContactMemberIds.value + member.id
+        val address = member.address?.let(::normalizeLxmfAddress)
+        val candidate = member.copy(
+            id = member.id.ifBlank { address?.let { "lxmf-$it" }.orEmpty() },
+            address = address ?: member.address,
+        )
+        if (candidate.id.isBlank()) return null
+        val knownMember = knownMembers.value.firstOrNull {
+            it.id == candidate.id || (address != null && normalizeLxmfAddress(it.address.orEmpty()) == address)
+        }
+        val resolved = if (knownMember == null) candidate else mergeMember(knownMember, candidate.copy(id = knownMember.id))
+        if (resolved.isSelf) return null
+        discoveredMembers.value = mergeMembers(discoveredMembers.value, listOf(resolved))
+        val canonical = discoveredMembers.value.firstOrNull {
+            it.id == resolved.id || (address != null && normalizeLxmfAddress(it.address.orEmpty()) == address)
+        } ?: resolved
+        liveContactMemberIds.value = normalizeContactIds(liveContactMemberIds.value + canonical.id, discoveredMembers.value)
         persistState()
+        return canonical
     }
 
-    override fun toggleContact(memberId: String) {
+    override fun toggleContact(member: ChatMember) {
         if (preview.previewMode.value) {
-            preview.toggleContact(memberId)
+            preview.toggleContact(member)
             return
         }
-        if (memberId in liveContactMemberIds.value) {
-            liveContactMemberIds.value = liveContactMemberIds.value - memberId
+        if (member.isSelf) return
+        val address = member.address?.let(::normalizeLxmfAddress)
+        val knownMember = knownMembers.value.firstOrNull {
+            it.id == member.id || (address != null && normalizeLxmfAddress(it.address.orEmpty()) == address)
+        }
+        if (knownMember?.isSelf == true) return
+        val contactId = knownMember?.id ?: member.id
+        val existingContactId = liveContactMemberIds.value.firstOrNull { id ->
+            id == contactId || (address != null && knownMembers.value.any { known ->
+                known.id == id && normalizeLxmfAddress(known.address.orEmpty()) == address
+            })
+        }
+        if (existingContactId != null) {
+            liveContactMemberIds.value = liveContactMemberIds.value - existingContactId
         } else {
-            if (knownMembers.value.firstOrNull { it.id == memberId }?.isSelf == true) return
-            liveContactMemberIds.value = liveContactMemberIds.value + memberId
+            val resolved = knownMember?.let { mergeMember(it, member.copy(id = it.id)) } ?: member.copy(address = address ?: member.address)
+            discoveredMembers.value = mergeMembers(discoveredMembers.value, listOf(resolved))
+            val canonical = discoveredMembers.value.firstOrNull {
+                it.id == resolved.id || (address != null && normalizeLxmfAddress(it.address.orEmpty()) == address)
+            } ?: resolved
+            liveContactMemberIds.value = normalizeContactIds(liveContactMemberIds.value + canonical.id, discoveredMembers.value)
         }
         persistState()
     }
@@ -502,21 +549,20 @@ class ReticulumChatRepository(
         val message = messageByRequestId.remove(requestId)
         val request = _contactRequests.value.firstOrNull { it.id == requestId }
         if (request == null) return
+        val sender = addContact(request.sender) ?: return
         _contactRequests.value = _contactRequests.value.filterNot { it.id == requestId }
-        liveContactMemberIds.value = liveContactMemberIds.value + request.sender.id
-        if (message != null) receiveAcceptedDirect(request.sender, message)
+        if (message != null) receiveAcceptedDirect(sender, message)
         else {
-            discoveredMembers.value = mergeMembers(discoveredMembers.value, listOf(request.sender))
             val acceptedMessage = ChatMessage(
                 id = request.id,
-                author = request.sender.displayName,
+                author = sender.displayName,
                 text = request.message,
                 time = request.time,
                 timestampMillis = request.timestampMillis,
             )
-            val current = liveDirectMessages.value[request.sender.id].orEmpty()
+            val current = liveDirectMessages.value[sender.id].orEmpty()
             if (current.none { it.id == acceptedMessage.id }) {
-                liveDirectMessages.value = liveDirectMessages.value + (request.sender.id to (current + acceptedMessage))
+                liveDirectMessages.value = liveDirectMessages.value + (sender.id to (current + acceptedMessage))
             }
         }
         persistState()
@@ -633,26 +679,28 @@ class ReticulumChatRepository(
             return
         }
         val outgoing = parseOutgoingChatMessage(text) ?: return
+        _directMessageError.value = null
 
         val member = knownMembers.value.firstOrNull { it.id == memberId }
         val address = member?.address?.let(::normalizeLxmfAddress)
         if (!transport.nodeReady.value) {
-            _lastError.value = "Start the Reticulum node before sending an LXMF message."
+            _directMessageError.value = "Start the Reticulum node before sending an LXMF message."
             return
         }
         if (transport.localDeliveryAddress.value == null) {
-            _lastError.value = "The LXMF delivery identity is still starting. Try again in a moment."
+            _directMessageError.value = "The LXMF delivery identity is still starting. Try again in a moment."
             return
         }
         if (address == null) {
-            _lastError.value = "This contact has no valid LXMF delivery address. Add or update the contact with their 32-character address."
+            _directMessageError.value = "This contact has no valid LXMF delivery address. Add or update the contact with their 32-character address."
             return
         }
-        _lastError.value = null
+        val pendingMessage = appendPendingDirectMessage(memberId, outgoing.body)
         try {
             transport.sendDirectMessage(address, outgoing.body)
         } catch (error: Exception) {
-            _lastError.value = error.message ?: "Could not send the LXMF message."
+            updateDirectMessageDeliveryState(memberId, pendingMessage.id, "failed")
+            _directMessageError.value = error.message ?: "Could not send the LXMF message."
         }
     }
 
@@ -935,11 +983,11 @@ class ReticulumChatRepository(
             displayName = message.senderName.ifBlank { address.take(12) },
             address = address,
         )
-        if (member.id in liveBlockedMemberIds.value) return
+        if (isMemberBlocked(member)) return
         if (known == null && discoveredMembers.value.none { it.id == member.id }) {
             discoveredMembers.value = mergeMembers(discoveredMembers.value, listOf(member))
         }
-        if (message.isMine || member.id in contactMemberIds.value) {
+        if (message.isMine || isMemberContact(member)) {
             receiveAcceptedDirect(member, message)
             return
         }
@@ -977,10 +1025,65 @@ class ReticulumChatRepository(
             timestampMillis = timestampMillis,
         )
         val current = liveDirectMessages.value[member.id].orEmpty()
-        if (current.none { it.id == chatMessage.id }) {
+        if (current.any { it.id == chatMessage.id }) return
+        val pending = if (message.isMine) {
+            current.firstOrNull { it.isMine && it.deliveryState == "sending" && it.text == message.body }
+        } else {
+            null
+        }
+        if (pending != null) {
+            liveDirectMessages.value = liveDirectMessages.value +
+                (member.id to current.map { if (it.id == pending.id) chatMessage else it })
+            persistState()
+        } else {
             liveDirectMessages.value = liveDirectMessages.value + (member.id to (current + chatMessage))
             persistState()
         }
+    }
+
+    private fun appendPendingDirectMessage(memberId: String, body: String): ChatMessage {
+        val timestampMillis = Clock.System.now().toEpochMilliseconds()
+        val message = ChatMessage(
+            id = "lxmf-pending-$timestampMillis-${pendingDirectMessageSequence++}",
+            author = "you",
+            text = body,
+            time = formatChatTimestamp(timestampMillis, _uiSettings.value.timestampTimeZone),
+            isMine = true,
+            deliveryState = "sending",
+            timestampMillis = timestampMillis,
+        )
+        liveDirectMessages.value = liveDirectMessages.value +
+            (memberId to (liveDirectMessages.value[memberId].orEmpty() + message))
+        persistState()
+        return message
+    }
+
+    private fun updateDirectMessageDeliveryState(memberId: String, messageId: String, state: String) {
+        val messages = liveDirectMessages.value[memberId].orEmpty()
+        if (messages.none { it.id == messageId && it.deliveryState != state }) return
+        liveDirectMessages.value = liveDirectMessages.value +
+            (memberId to messages.map { if (it.id == messageId) it.copy(deliveryState = state) else it })
+        persistState()
+    }
+
+    private fun markPendingDirectMessages(address: String?, state: String) {
+        val normalizedAddress = address?.let(::normalizeLxmfAddress) ?: return
+        val memberIds = knownMembers.value.filter {
+            normalizeLxmfAddress(it.address.orEmpty()) == normalizedAddress
+        }.mapTo(mutableSetOf()) { it.id }
+        var changed = false
+        liveDirectMessages.value = liveDirectMessages.value.mapValues { (memberId, messages) ->
+            if (memberId !in memberIds) return@mapValues messages
+            messages.map { message ->
+                if (message.isMine && message.deliveryState == "sending") {
+                    changed = true
+                    message.copy(deliveryState = state)
+                } else {
+                    message
+                }
+            }
+        }
+        if (changed) persistState()
     }
 
     private fun updateDeliveryStatus(event: ReticulumEvent.DeliveryStatus) {
@@ -1034,25 +1137,51 @@ class ReticulumChatRepository(
             .onFailure { _lastError.value = "Could not save chat data: ${it.message ?: "storage error"}" }
     }
 
-    private fun normalizeLxmfAddress(value: String): String? {
-        val address = value.trim().lowercase().removePrefix("lxmf://")
-        return address.takeIf { it.length == 32 && it.all { character -> character.digitToIntOrNull(16) != null } }
-    }
-
     private fun mergeMembers(existing: List<ChatMember>, incoming: List<ChatMember>): List<ChatMember> {
-        val merged = existing.associateByTo(linkedMapOf()) { it.id }
+        val merged = existing.toMutableList()
         incoming.forEach { member ->
-            val old = merged[member.id]
-            merged[member.id] = if (old == null) member else mergeMember(old, member)
+            val index = merged.indexOfFirst { old -> old.id == member.id || hasSameLxmfAddress(old, member) }
+            if (index < 0) {
+                merged += member
+            } else {
+                val old = merged[index]
+                merged[index] = mergeMember(old, member.copy(id = old.id))
+            }
         }
-        return merged.values.toList()
+        return merged
     }
 
     private fun mergeMember(old: ChatMember, member: ChatMember): ChatMember = old.copy(
-        displayName = member.displayName.ifBlank { old.displayName },
+        displayName = member.displayName.takeIf { it.isNotBlank() && it != member.id.take(12) } ?: old.displayName.ifBlank { member.displayName },
         isSelf = old.isSelf || member.isSelf,
-        address = member.address ?: old.address,
+        address = member.address?.let(::normalizeLxmfAddress) ?: old.address ?: member.address,
     )
+
+    private fun normalizeContactIds(contactIds: Set<String>, members: List<ChatMember>): Set<String> =
+        contactIds.mapTo(mutableSetOf()) { contactId ->
+            val member = members.firstOrNull { it.id == contactId }
+            val address = member?.address?.let(::normalizeLxmfAddress)
+            if (address == null) contactId
+            else members.firstOrNull { normalizeLxmfAddress(it.address.orEmpty()) == address }?.id ?: contactId
+        }
+
+    private fun isMemberContact(member: ChatMember): Boolean {
+        if (member.id in liveContactMemberIds.value) return true
+        val address = member.address?.let(::normalizeLxmfAddress) ?: return false
+        return liveContactMemberIds.value.any { contactId ->
+            knownMembers.value.firstOrNull { it.id == contactId }
+                ?.address?.let(::normalizeLxmfAddress) == address
+        }
+    }
+
+    private fun isMemberBlocked(member: ChatMember): Boolean {
+        if (member.id in liveBlockedMemberIds.value) return true
+        val address = member.address?.let(::normalizeLxmfAddress) ?: return false
+        return liveBlockedMemberIds.value.any { blockedId ->
+            knownMembers.value.firstOrNull { it.id == blockedId }
+                ?.address?.let(::normalizeLxmfAddress) == address
+        }
+    }
 
     private fun classifySystemNotice(text: String): ChatSystemEventKind {
         val normalized = text.lowercase()

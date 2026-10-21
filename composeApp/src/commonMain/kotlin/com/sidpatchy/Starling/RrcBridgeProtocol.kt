@@ -74,7 +74,10 @@ fun parseRrcBridgeEvent(line: String): ParsedRrcBridgeEvent? {
             ),
         )
         "LXMF_ERROR" -> ParsedRrcBridgeEvent(
-            event = ReticulumEvent.Error(fields.getOrNull(1)?.decodeBridgeBase64().orEmpty().ifBlank { "LXMF error" }),
+            event = ReticulumEvent.LxmfError(
+                message = fields.getOrNull(1)?.decodeBridgeBase64().orEmpty().ifBlank { "LXMF error" },
+                address = fields.getOrNull(2)?.decodeBridgeBase64()?.ifBlank { null },
+            ),
         )
         "DIRECT_MESSAGE" -> {
             if (fields.size < 7) return null

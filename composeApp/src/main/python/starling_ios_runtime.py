@@ -36,21 +36,33 @@ def _prepare_rnode_interfaces(radios):
 def _emit_events(include_current=False):
     global _last_self_event
     result = []
-    for module in (_rrc, _lxmf):
+    for module, error_type in ((_rrc, "ERROR"), (_lxmf, "LXMF_ERROR")):
         if module is None:
             continue
-        lines = module.poll_event_lines()
-        if lines:
-            result.extend("EVENT\t" + line for line in lines.splitlines() if line)
+        try:
+            lines = module.poll_event_lines()
+            if lines:
+                result.extend("EVENT\t" + line for line in lines.splitlines() if line)
+        except Exception as error:
+            message = str(error) or error.__class__.__name__
+            result.append("EVENT\t{}\t{}\t".format(error_type, _encode(message)))
 
     if include_current:
-        current_lines = (
-            _rrc.current_connection_event_line() if _rrc is not None else None,
-            _rrc.current_self_event_line() if _rrc is not None else None,
-            _lxmf.current_local_address_event_line() if _lxmf is not None else None,
-            _lxmf.current_identity_event_line() if _lxmf is not None else None,
+        current_events = (
+            (_rrc, "ERROR", "current_connection_event_line"),
+            (_rrc, "ERROR", "current_self_event_line"),
+            (_lxmf, "LXMF_ERROR", "current_local_address_event_line"),
+            (_lxmf, "LXMF_ERROR", "current_identity_event_line"),
         )
-        for line in current_lines:
+        for module, error_type, method in current_events:
+            if module is None:
+                continue
+            try:
+                line = getattr(module, method)()
+            except Exception as error:
+                message = str(error) or error.__class__.__name__
+                result.append("EVENT\t{}\t{}\t".format(error_type, _encode(message)))
+                continue
             if not line:
                 continue
             if line.startswith("SELF\t"):
@@ -132,12 +144,16 @@ def _stop():
             try:
                 stop()
             except Exception as error:
-                errors.append("{} shutdown failed: {}".format(
-                    label, str(error) or error.__class__.__name__))
+                event_type = "LXMF_ERROR" if label == "LXMF" else "ERROR"
+                message = "{} shutdown failed: {}".format(label, str(error) or error.__class__.__name__)
+                errors.append((event_type, message))
     finally:
         _rns = _rrc = _lxmf = None
         _last_self_event = None
-    response = ["EVENT\tERROR\t{}\t".format(_encode(message)) for message in errors]
+    response = [
+        "EVENT\t{}\t{}\t".format(event_type, _encode(message))
+        for event_type, message in errors
+    ]
     response.append("STOPPED")
     return "\n".join(response)
 
@@ -178,4 +194,5 @@ def invoke(command):
         encoded = _encode(message)
         if action == "IOS_START":
             return "ERROR\t" + encoded
-        return "EVENT\tERROR\t{}\t".format(encoded)
+        event_type = "LXMF_ERROR" if action.startswith("LXMF_") else "ERROR"
+        return "EVENT\t{}\t{}\t".format(event_type, encoded)
