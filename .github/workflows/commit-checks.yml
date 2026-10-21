@@ -1,0 +1,52 @@
+name: Commit checks
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python-tests:
+    name: Python bridge tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+
+      - name: Test Python bridges
+        env:
+          PYTHONPATH: composeApp/src/main/python
+        run: python -m unittest discover -s composeApp/src/test/python -v
+
+      - name: Test workflow scripts
+        run: python -m unittest discover -s .github/scripts -p 'test_*.py' -v
+
+  desktop-tests:
+    name: Kotlin desktop tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up Java
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Run common and desktop tests
+        run: ./gradlew --no-daemon :composeApp:desktopTest

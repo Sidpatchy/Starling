@@ -1,6 +1,7 @@
 name: Build mobile artifacts
 
 on:
+  pull_request:
   release:
     types: [published]
   workflow_dispatch:
@@ -42,7 +43,7 @@ jobs:
 
   android-apk:
     name: Unsigned Android APK
-    if: github.event_name == 'release' || inputs.mobile_build == 'android-and-ios'
+    if: github.event_name == 'pull_request' || github.event_name == 'release' || inputs.mobile_build == 'android-and-ios'
     needs: resolve-version
     runs-on: ubuntu-latest
     steps:
