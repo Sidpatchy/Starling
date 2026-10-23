@@ -35,19 +35,22 @@ data class PersistedChatState(
     val localIdentityHash: String? = null,
     val globalNickname: String = "Starling",
     val uiSettings: StarlingUiSettings = StarlingUiSettings(),
+    val roomMemberIds: Map<String, Set<String>> = emptyMap(),
 )
 
 /** Small versioned text codec to avoid platform-specific serialization APIs. */
 object ChatStateCodec {
-    private const val HEADER = "STARLING_CHAT_STATE_V11"
-    private const val PREVIOUS_HEADER = "STARLING_CHAT_STATE_V10"
+    private const val HEADER = "STARLING_CHAT_STATE_V13"
+    private const val PREVIOUS_HEADER = "STARLING_CHAT_STATE_V12"
     private val LEGACY_HEADERS = setOf(
         "STARLING_CHAT_STATE_V1", "STARLING_CHAT_STATE_V2", "STARLING_CHAT_STATE_V3", "STARLING_CHAT_STATE_V4",
         "STARLING_CHAT_STATE_V5", "STARLING_CHAT_STATE_V6", "STARLING_CHAT_STATE_V7", "STARLING_CHAT_STATE_V8",
-        "STARLING_CHAT_STATE_V9",
-        PREVIOUS_HEADER,
+        "STARLING_CHAT_STATE_V9", "STARLING_CHAT_STATE_V10", "STARLING_CHAT_STATE_V11", PREVIOUS_HEADER,
     )
-    private val SYSTEM_EVENT_HEADERS = setOf("STARLING_CHAT_STATE_V9", PREVIOUS_HEADER, HEADER)
+    private val SYSTEM_EVENT_HEADERS = setOf(
+        "STARLING_CHAT_STATE_V9", "STARLING_CHAT_STATE_V10", "STARLING_CHAT_STATE_V11", PREVIOUS_HEADER, HEADER,
+    )
+    private val EVENT_TIMESTAMP_HEADERS = setOf("STARLING_CHAT_STATE_V11", PREVIOUS_HEADER, HEADER)
 
     fun encode(state: PersistedChatState): String = buildString {
         appendLine(HEADER)
@@ -80,10 +83,13 @@ object ChatStateCodec {
             appendRecord("N", network.id, network.name, network.hubDestination.orEmpty(), network.rrcNickname.orEmpty())
         }
         state.rooms.forEach { room ->
-            appendRecord("H", room.id, room.networkId, room.name, room.topic, room.members.toString())
+            appendRecord("H", room.id, room.networkId, room.name, room.topic, room.members.toString(), room.modes?.toStorageValue().orEmpty())
         }
         state.members.forEach { member ->
             appendRecord("M", member.id, member.displayName, member.isSelf.bit(), member.address.orEmpty())
+        }
+        state.roomMemberIds.forEach { (roomId, memberIds) ->
+            memberIds.forEach { memberId -> appendRecord("X", roomId, memberId) }
         }
         state.contacts.forEach { appendRecord("C", it) }
         state.blockedMembers.forEach { appendRecord("B", it) }
@@ -110,6 +116,7 @@ object ChatStateCodec {
         val networks = linkedMapOf<String, ChatNetwork>()
         val configuredRooms = linkedMapOf<String, ChatRoom>()
         val members = linkedMapOf<String, ChatMember>()
+        val roomMemberIds = linkedMapOf<String, MutableSet<String>>()
         val contacts = linkedSetOf<String>()
         val blocked = linkedSetOf<String>()
         val requests = linkedMapOf<String, ChatContactRequest>()
@@ -177,12 +184,18 @@ object ChatStateCodec {
                     networks[network.id] = network
                 }
                 "H" -> if (decoded.size >= 5 && decoded[0].isNotBlank() && decoded[1].isNotBlank()) {
-                    val room = ChatRoom(decoded[0], decoded[1], decoded[2], decoded[3], decoded[4].toIntOrNull() ?: 0)
+                    val room = ChatRoom(
+                        decoded[0], decoded[1], decoded[2], decoded[3], decoded[4].toIntOrNull() ?: 0,
+                        ChatRoomModes.fromStorageValue(decoded.getOrNull(5).orEmpty()),
+                    )
                     configuredRooms[room.id] = room
                 }
                 "M" -> if (decoded.size >= 4) {
                     val member = ChatMember(decoded[0], decoded[1], decoded[2] == "1", decoded[3].ifBlank { null })
                     members[member.id] = member
+                }
+                "X" -> if (decoded.size >= 2 && decoded[0].isNotBlank() && decoded[1].isNotBlank()) {
+                    roomMemberIds.getOrPut(decoded[0]) { linkedSetOf() }.add(decoded[1])
                 }
                 "C" -> decoded.firstOrNull()?.takeIf { it.isNotBlank() }?.let(contacts::add)
                 "B" -> decoded.firstOrNull()?.takeIf { it.isNotBlank() }?.let(blocked::add)
@@ -199,7 +212,8 @@ object ChatStateCodec {
                 }
                 "R", "D" -> if (decoded.size >= 8) {
                     val isSystem = decoded.getOrNull(9) == "1"
-                    val eventStride = if (header == HEADER) 4 else 3
+                    val hasEventTimestamps = header in EVENT_TIMESTAMP_HEADERS
+                    val eventStride = if (hasEventTimestamps) 4 else 3
                     val availableEventFields = (decoded.size - 11).coerceAtLeast(0)
                     val maxEventCount = availableEventFields / eventStride
                     val eventCount = decoded.getOrNull(10)?.toIntOrNull()?.coerceIn(0, maxEventCount) ?: 0
@@ -242,7 +256,7 @@ object ChatStateCodec {
                         authorId = decoded.getOrNull(8)?.ifBlank { null },
                         isSystem = isSystem,
                         systemEvents = systemEvents,
-                        timestampMillis = if (header == HEADER) {
+                        timestampMillis = if (hasEventTimestamps) {
                             decoded.getOrNull(11 + eventCount * eventStride)?.toLongOrNull()?.takeIf { it > 0 }
                         } else {
                             null
@@ -271,6 +285,7 @@ object ChatStateCodec {
             localIdentityHash = localIdentityHash,
             globalNickname = globalNickname,
             uiSettings = uiSettings,
+            roomMemberIds = roomMemberIds.mapValues { it.value.toSet() },
         )
     }
 

@@ -43,6 +43,7 @@ _pending_parts = []
 _pending_messages = []
 _welcome_timer = None
 _connect_generation = 0
+_presence_timer = None
 
 # Keepalive: once an RRC hub has welcomed the connection, Starling sends a
 # PING every _KEEPALIVE_INTERVAL seconds and expects the matching PONG back
@@ -51,6 +52,8 @@ _connect_generation = 0
 # outgoing messages.
 _KEEPALIVE_INTERVAL = 45.0
 _PONG_TIMEOUT = 15.0
+_PRESENCE_ANNOUNCEMENT_INTERVAL = 300.0
+_PRESENCE_NOTICE_BODY = "Starling presence: online"
 
 _keepalive_timer = None
 _pong_timer = None
@@ -230,7 +233,7 @@ def _link_established(link):
 
 
 def _link_closed(link):
-    global _link, _connection_state, _hub_name, _welcome_timer
+    global _link, _connection_state, _hub_name, _welcome_timer, _presence_timer
     with _lock:
         if link is not _link:
             return
@@ -246,9 +249,13 @@ def _link_closed(link):
         _hub_name = None
         timer = _welcome_timer
         _welcome_timer = None
+        presence_timer = _presence_timer
+        _presence_timer = None
         _cancel_keepalive_locked()
     if timer is not None:
         timer.cancel()
+    if presence_timer is not None:
+        presence_timer.cancel()
     _emit(
         "connection",
         state="disconnected" if was_active else "failed",
@@ -278,6 +285,64 @@ def _cancel_keepalive_locked():
         timer.cancel()
     if pong_timer is not None:
         pong_timer.cancel()
+
+
+def _cancel_presence_locked():
+    """Cancel the room-presence announcement timer. Callers must hold _lock."""
+    global _presence_timer
+    timer = _presence_timer
+    _presence_timer = None
+    if timer is not None:
+        timer.cancel()
+
+
+def _schedule_presence_announcement(link):
+    """Schedule a soft-presence NOTICE while this session has joined rooms."""
+    global _presence_timer
+    with _lock:
+        if link is not _link or _connection_state != "connected" or not _joined_rooms:
+            return
+        if _presence_timer is not None:
+            return
+        _presence_timer = threading.Timer(
+            _PRESENCE_ANNOUNCEMENT_INTERVAL,
+            _send_periodic_presence_announcement,
+            args=(link,),
+        )
+        _presence_timer.daemon = True
+        _presence_timer.start()
+
+
+def _send_room_presence_announcement(link, room):
+    """Broadcast Starling's optional soft-presence convention to one joined room."""
+    with _lock:
+        if (
+            link is None
+            or link is not _link
+            or _connection_state != "connected"
+            or room.casefold() not in _joined_rooms
+        ):
+            return
+        try:
+            _send(NOTICE, room=room, body=_PRESENCE_NOTICE_BODY, nickname=_display_name)
+        except Exception as error:
+            _emit(
+                "error",
+                message="Could not announce RRC room presence: " + (str(error) or "unknown send error"),
+                room=room,
+            )
+
+
+def _send_periodic_presence_announcement(link):
+    global _presence_timer
+    with _lock:
+        _presence_timer = None
+        if link is not _link or _connection_state != "connected":
+            return
+        rooms = list(_joined_rooms)
+    for room in rooms:
+        _send_room_presence_announcement(link, room)
+    _schedule_presence_announcement(link)
 
 
 def _schedule_keepalive(link):
@@ -421,6 +486,8 @@ def _packet_received(data, packet):
                 _emit("room_joined", room=room)
                 if member_ids:
                     _emit("members", room=room, member_ids=[(member_id, _lxmf_address_for_identity(member_id)) for member_id in member_ids])
+                _send_room_presence_announcement(_link, room)
+                _schedule_presence_announcement(_link)
                 _flush_pending_messages(room)
             else:
                 nickname = envelope.get(7) if isinstance(envelope.get(7), str) else ""
@@ -602,6 +669,7 @@ def disconnect():
         timer = _welcome_timer
         _welcome_timer = None
         _cancel_keepalive_locked()
+        _cancel_presence_locked()
         _joined_rooms.clear()
         _joining_rooms.clear()
         _parting_rooms.clear()
@@ -694,6 +762,8 @@ def part(room):
             _send(PART, room=room, nickname=_display_name)
             _joining_rooms.discard(room.casefold())
             _joined_rooms.discard(room.casefold())
+            if not _joined_rooms:
+                _cancel_presence_locked()
         elif _connection_state == "connecting":
             _pending_parts.append(room)
             _pending_joins[:] = [entry for entry in _pending_joins if entry.casefold() != room.casefold()]

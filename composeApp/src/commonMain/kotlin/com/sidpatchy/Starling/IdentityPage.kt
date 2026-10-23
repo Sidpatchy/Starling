@@ -88,6 +88,7 @@ internal fun IdentityPage(
     onBack: () -> Unit = {},
     showNavigationButton: Boolean = false,
     onOpenNavigation: () -> Unit = {},
+    onDismissKeyboard: () -> Unit = {},
     onManageNetwork: () -> Unit,
 ) {
     var globalNicknameDraft by rememberSaveable { mutableStateOf(globalNickname) }
@@ -106,12 +107,12 @@ internal fun IdentityPage(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (showBackButton) {
-                IconButton(onClick = onBack) {
+                IconButton(onClick = { onDismissKeyboard(); onBack() }) {
                     Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back to settings", tint = Accent)
                 }
                 Spacer(Modifier.width(6.dp))
             } else if (compact || showNavigationButton) {
-                NavigationToggle(onClick = onOpenNavigation)
+                NavigationToggle(onClick = { onDismissKeyboard(); onOpenNavigation() })
                 Spacer(Modifier.width(6.dp))
             }
             Text("Identity", color = Ink, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
@@ -184,13 +185,13 @@ internal fun IdentityPage(
                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                             ) {
                                 Button(
-                                    onClick = onCreateIdentity,
+                                    onClick = { onDismissKeyboard(); onCreateIdentity() },
                                     modifier = Modifier.weight(1f).height(identityActionHeight),
                                     enabled = identityMutable,
                                     colors = ButtonDefaults.buttonColors(containerColor = Accent),
                                 ) { Text("Create identity", textAlign = TextAlign.Center) }
                                 OutlinedButton(
-                                    onClick = { identityConfirmation = IdentityConfirmation.IMPORT },
+                                    onClick = { onDismissKeyboard(); identityConfirmation = IdentityConfirmation.IMPORT },
                                     modifier = Modifier.weight(1f).height(identityActionHeight),
                                     enabled = identityMutable,
                                 ) { Text("Import backup", textAlign = TextAlign.Center) }
@@ -201,31 +202,31 @@ internal fun IdentityPage(
                                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                                 ) {
                                     Button(
-                                        onClick = { identityConfirmation = IdentityConfirmation.EXPORT },
+                                        onClick = { onDismissKeyboard(); identityConfirmation = IdentityConfirmation.EXPORT },
                                         modifier = Modifier.weight(1f).height(identityActionHeight),
                                         enabled = !identityBusy,
                                         colors = ButtonDefaults.buttonColors(containerColor = Accent),
                                     ) { Text("Export backup", textAlign = TextAlign.Center) }
                                     OutlinedButton(
-                                        onClick = { identityConfirmation = IdentityConfirmation.REPLACE },
+                                        onClick = { onDismissKeyboard(); identityConfirmation = IdentityConfirmation.REPLACE },
                                         modifier = Modifier.weight(1f).height(identityActionHeight),
                                         enabled = identityMutable,
                                     ) { Text("Replace identity", textAlign = TextAlign.Center) }
                                 }
                                 TextButton(
-                                    onClick = { identityConfirmation = IdentityConfirmation.DELETE },
+                                    onClick = { onDismissKeyboard(); identityConfirmation = IdentityConfirmation.DELETE },
                                     enabled = identityMutable,
                                 ) { Text("Delete identity", color = ErrorText) }
                             }
                             is ReticulumIdentityState.Failed -> OutlinedButton(
-                                onClick = { identityConfirmation = IdentityConfirmation.IMPORT },
+                                onClick = { onDismissKeyboard(); identityConfirmation = IdentityConfirmation.IMPORT },
                                 enabled = identityMutable,
                             ) { Text("Import identity backup") }
                             ReticulumIdentityState.Loading -> Unit
                         }
                         if (nodeState != ReticulumNodeState.Stopped && identityState != ReticulumIdentityState.Loading) {
                             Text("Disconnect the node before creating, replacing, or deleting an identity.", color = Muted, fontSize = 11.sp)
-                            TextButton(onClick = onDisconnectNode, enabled = !identityBusy) { Text("Disconnect node") }
+                            TextButton(onClick = { onDismissKeyboard(); onDisconnectNode() }, enabled = !identityBusy) { Text("Disconnect node") }
                         }
                         if (identityBusy) {
                             Text(
@@ -283,7 +284,7 @@ internal fun IdentityPage(
                 )
                 Button(
                     enabled = normalizedGlobalNickname != globalNickname,
-                    onClick = { onGlobalNicknameChange(normalizedGlobalNickname) },
+                    onClick = { onDismissKeyboard(); onGlobalNicknameChange(normalizedGlobalNickname) },
                     colors = ButtonDefaults.buttonColors(containerColor = Accent),
                 ) {
                     Text("Save global nickname")
@@ -311,6 +312,7 @@ internal fun IdentityPage(
                             HubNicknameEditor(
                                 network = network,
                                 globalNickname = globalNickname,
+                                onDismissKeyboard = onDismissKeyboard,
                                 onSave = { onNetworkNicknameChange(network.id, it) },
                             )
                         }
@@ -336,7 +338,7 @@ internal fun IdentityPage(
                 fontSize = 12.sp,
                 lineHeight = 18.sp,
             )
-            Button(onClick = onManageNetwork, colors = ButtonDefaults.buttonColors(containerColor = Accent)) {
+            Button(onClick = { onDismissKeyboard(); onManageNetwork() }, colors = ButtonDefaults.buttonColors(containerColor = Accent)) {
                 Text("Network settings")
             }
         }
@@ -391,6 +393,7 @@ private fun rrcConnectionSummary(state: ReticulumConnectionState): String = when
 private fun HubNicknameEditor(
     network: ChatNetwork,
     globalNickname: String,
+    onDismissKeyboard: () -> Unit,
     onSave: (String?) -> Unit,
 ) {
     var nicknameDraft by rememberSaveable(network.id) { mutableStateOf(network.rrcNickname.orEmpty()) }
@@ -417,7 +420,7 @@ private fun HubNicknameEditor(
         )
         Button(
             enabled = normalizedNickname != network.rrcNickname,
-            onClick = { onSave(normalizedNickname) },
+            onClick = { onDismissKeyboard(); onSave(normalizedNickname) },
             colors = ButtonDefaults.buttonColors(containerColor = Accent),
         ) {
             Text(if (normalizedNickname == null) "Use global nickname" else "Save hub nickname")

@@ -11,7 +11,7 @@ class ChatStateCodecTest {
         val state = PersistedChatState(previewMode = false, preferredHubNetworkId = "hub")
 
         assertEquals(
-            "STARLING_CHAT_STATE_V11\nP\tMA==\nU\taHVi\nG\tU3Rhcmxpbmc=\nA\tU1lTVEVN\tMA==\tMA==\tU1lTVEVN\tMA==\n",
+            "STARLING_CHAT_STATE_V13\nP\tMA==\nU\taHVi\nG\tU3Rhcmxpbmc=\nA\tU1lTVEVN\tMA==\tMA==\tU1lTVEVN\tMA==\n",
             ChatStateCodec.encode(state),
         )
     }
@@ -39,7 +39,7 @@ class ChatStateCodecTest {
         val state = PersistedChatState(
             previewMode = false,
             networks = listOf(ChatNetwork("hub", "Mesh 🌍", "0123456789abcdef0123456789abcdef", rrcNickname = "Operator")),
-            rooms = listOf(ChatRoom("room", "hub", "general", text, 2)),
+            rooms = listOf(ChatRoom("room", "hub", "general", text, 2, ChatRoomModes(true, true, false, true, false, true, true))),
             members = listOf(member, ChatMember("self", "You", isSelf = true)),
             contacts = setOf(member.id),
             blockedMembers = setOf("blocked"),
@@ -56,6 +56,7 @@ class ChatStateCodecTest {
             activeHubNetworkId = "hub",
             localIdentityHash = "11223344556677889900aabbccddeeff",
             globalNickname = "Mesh 🌍",
+            roomMemberIds = mapOf("room" to setOf(member.id, "self")),
             uiSettings = StarlingUiSettings(
                 ThemePreference.DARK,
                 bubbleStyle = true,
@@ -136,6 +137,27 @@ class ChatStateCodecTest {
     }
 
     @Test
+    fun versionElevenRoomRecordsWithoutModeStateRemainReadable() {
+        val roomRecord = listOf("H", "room", "hub", "general", "old topic", "2")
+            .joinToString("\t") { value -> if (value == "H") value else Base64TextCodec.encode(value) }
+
+        val room = ChatStateCodec.decode("STARLING_CHAT_STATE_V11\n$roomRecord\n")?.rooms?.single()
+
+        assertEquals(ChatRoom("room", "hub", "general", "old topic", 2), room)
+    }
+
+    @Test
+    fun versionTwelveStateMigratesWithRoomModesButWithoutCachedMembers() {
+        val roomRecord = listOf("H", "room", "hub", "general", "topic", "3", "1100100")
+            .joinToString("\t") { value -> if (value == "H") value else Base64TextCodec.encode(value) }
+
+        val state = ChatStateCodec.decode("STARLING_CHAT_STATE_V12\n$roomRecord\n")
+
+        assertEquals(ChatRoom("room", "hub", "general", "topic", 3, ChatRoomModes(true, true, false, false, true)), state?.rooms?.single())
+        assertEquals(emptyMap(), state?.roomMemberIds)
+    }
+
+    @Test
     fun versionEightSystemRepeatCountsMigrateToExpandableNotices() {
         val oldRecord = listOf(
             "R", "room", "message", "Hub", "Room is unregistered", "20:47",
@@ -161,7 +183,7 @@ class ChatStateCodecTest {
     @Test
     fun unknownHeadersAreRejectedAndUnknownOrIncompleteRecordsAreIgnored() {
         assertNull(ChatStateCodec.decode(""))
-        assertNull(ChatStateCodec.decode("STARLING_CHAT_STATE_V12\n"))
+        assertNull(ChatStateCodec.decode("STARLING_CHAT_STATE_V14\n"))
         assertNull(ChatStateCodec.decode("not a chat state"))
         assertEquals(
             PersistedChatState(),

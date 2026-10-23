@@ -57,8 +57,8 @@ internal enum class SettingsSection(val label: String, val summary: String) {
     APPEARANCE("Appearance", "Theme and chat display"),
     NETWORK("Network", "Preview, node, and interface settings"),
     MESSAGING("Messaging", "RRC rooms and LXMF direct messages"),
-    OPEN_SOURCE("Open source", "Licenses and acknowledgements"),
     IDENTITY("Identity", "Identity keys and nicknames"),
+    OPEN_SOURCE("Open source", "Licenses and acknowledgements"),
 }
 
 internal enum class SettingsBackTarget {
@@ -73,13 +73,17 @@ internal fun settingsBackTarget(isWideLayout: Boolean, showSectionIndex: Boolean
 private fun RuntimeModeSelection(
     selected: ReticulumRuntimeMode,
     enabled: Boolean,
+    onDismissKeyboard: () -> Unit,
     onSelect: (ReticulumRuntimeMode) -> Unit,
 ) {
     Column(Modifier.selectableGroup()) {
         listOf(ReticulumRuntimeMode.EMBEDDED, ReticulumRuntimeMode.EXISTING_SHARED_INSTANCE).forEach { mode ->
             Row(
                 modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).clip(RoundedCornerShape(8.dp))
-                    .selectable(selected = selected == mode, enabled = enabled, role = Role.RadioButton) { onSelect(mode) },
+                    .selectable(selected = selected == mode, enabled = enabled, role = Role.RadioButton) {
+                        onDismissKeyboard()
+                        onSelect(mode)
+                    },
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 RadioButton(selected = selected == mode, onClick = null, enabled = enabled)
@@ -104,6 +108,7 @@ private fun NetworkHubPicker(
     networks: List<ChatNetwork>,
     selectedNetwork: ChatNetwork?,
     enabled: Boolean,
+    onDismissKeyboard: () -> Unit,
     onSelected: (ChatNetwork) -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
@@ -111,7 +116,10 @@ private fun NetworkHubPicker(
         Row(
             modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).clip(RoundedCornerShape(8.dp)).background(Canvas)
                 .border(1.dp, Line, RoundedCornerShape(8.dp))
-                .clickable(enabled = enabled && networks.isNotEmpty(), role = Role.Button) { expanded = true }
+                .clickable(enabled = enabled && networks.isNotEmpty(), role = Role.Button) {
+                    onDismissKeyboard()
+                    expanded = true
+                }
                 .semantics {
                     stateDescription = if (expanded) "Options shown" else "Options hidden"
                 }
@@ -172,6 +180,7 @@ internal fun SettingsPage(
     localDeliveryAddress: String?,
     showNavigationButton: Boolean = false,
     onOpenNavigation: () -> Unit = {},
+    onDismissKeyboard: () -> Unit = {},
     onStartNode: (ReticulumNodeConfig) -> Unit,
     onDisconnectNode: () -> Unit,
     onConnectHub: (ReticulumConnectionConfig) -> Unit,
@@ -310,6 +319,7 @@ internal fun SettingsPage(
             ) {
                 IconButton(
                     onClick = {
+                        onDismissKeyboard()
                         when (backTarget) {
                             SettingsBackTarget.SETTINGS_INDEX -> onShowSectionIndex()
                             SettingsBackTarget.EXIT_SETTINGS -> onBack()
@@ -332,7 +342,7 @@ internal fun SettingsPage(
                 )
                 if (showNavigationButton) {
                     Spacer(Modifier.weight(1f))
-                    NavigationToggle { onOpenNavigation() }
+                    NavigationToggle { onDismissKeyboard(); onOpenNavigation() }
                 }
             }
         }
@@ -358,7 +368,10 @@ internal fun SettingsPage(
                                         .selectable(
                                             selected = themePreference == option,
                                             role = Role.RadioButton,
-                                        ) { onThemeChange(option) },
+                                        ) {
+                                            onDismissKeyboard()
+                                            onThemeChange(option)
+                                        },
                                     verticalAlignment = Alignment.CenterVertically,
                                 ) {
                                     RadioButton(selected = themePreference == option, onClick = null)
@@ -369,7 +382,10 @@ internal fun SettingsPage(
                     Spacer(Modifier.height(8.dp))
                     Row(
                         modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
-                            .toggleable(value = bubbleStyle, role = Role.Switch, onValueChange = onBubbleStyleChange)
+                            .toggleable(value = bubbleStyle, role = Role.Switch) {
+                                onDismissKeyboard()
+                                onBubbleStyleChange(it)
+                            }
                             .semantics(mergeDescendants = true) {},
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
@@ -382,7 +398,10 @@ internal fun SettingsPage(
                     Spacer(Modifier.height(8.dp))
                     Row(
                         modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
-                            .toggleable(value = denseMessages, role = Role.Switch, onValueChange = onDenseMessagesChange)
+                            .toggleable(value = denseMessages, role = Role.Switch) {
+                                onDismissKeyboard()
+                                onDenseMessagesChange(it)
+                            }
                             .semantics(mergeDescendants = true) {},
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
@@ -395,7 +414,10 @@ internal fun SettingsPage(
                     Spacer(Modifier.height(8.dp))
                     Row(
                         modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
-                            .toggleable(value = reduceMotion, role = Role.Switch, onValueChange = onReduceMotionChange)
+                            .toggleable(value = reduceMotion, role = Role.Switch) {
+                                onDismissKeyboard()
+                                onReduceMotionChange(it)
+                            }
                             .semantics(mergeDescendants = true) {},
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -415,7 +437,10 @@ internal fun SettingsPage(
                                     .selectable(
                                         selected = timestampTimeZone == option,
                                         role = Role.RadioButton,
-                                    ) { onTimestampTimeZoneChange(option) },
+                                    ) {
+                                        onDismissKeyboard()
+                                        onTimestampTimeZoneChange(option)
+                                    },
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 RadioButton(selected = timestampTimeZone == option, onClick = null)
@@ -472,6 +497,7 @@ internal fun SettingsPage(
                     Row(
                         modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
                             .toggleable(value = previewMode, role = Role.Switch) {
+                                onDismissKeyboard()
                                 connectionInputError = null
                                 onPreviewModeChange(it)
                             }
@@ -518,6 +544,7 @@ internal fun SettingsPage(
                             RuntimeModeSelection(
                                 selected = runtimeMode,
                                 enabled = !isRunning && !isStarting && nodeSupported,
+                                onDismissKeyboard = onDismissKeyboard,
                                 onSelect = { runtimeModeName = it.name; connectionInputError = null },
                             )
                         }
@@ -543,7 +570,11 @@ internal fun SettingsPage(
                                     Row(verticalAlignment = Alignment.CenterVertically) {
                                         Text("TCP connection ${index + 1}", modifier = Modifier.weight(1f), color = Ink, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                                         if ((tcpPeers.size > 1 || rnodeInterfaces.isNotEmpty()) && !isRunning && !isStarting) {
-                                            TextButton(onClick = { tcpPeers = tcpPeers.filterIndexed { i, _ -> i != index }; connectionInputError = null }) {
+                                            TextButton(onClick = {
+                                                onDismissKeyboard()
+                                                tcpPeers = tcpPeers.filterIndexed { i, _ -> i != index }
+                                                connectionInputError = null
+                                            }) {
                                                 Text("Remove", color = ErrorText)
                                             }
                                         }
@@ -594,7 +625,10 @@ internal fun SettingsPage(
                                 Text("IFAC values are per connection and must match that peer. Leave both blank to disable IFAC.", color = Muted, fontSize = 10.sp)
                             }
                         if (!isRunning && !isStarting) {
-                            TextButton(onClick = { tcpPeers = tcpPeers + ReticulumTcpPeer("", 4242) }) {
+                            TextButton(onClick = {
+                                onDismissKeyboard()
+                                tcpPeers = tcpPeers + ReticulumTcpPeer("", 4242)
+                            }) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Icon(Icons.Filled.Add, contentDescription = null, tint = Accent, modifier = Modifier.size(18.dp))
                                     Spacer(Modifier.width(4.dp))
@@ -613,6 +647,7 @@ internal fun SettingsPage(
                                             Text("RNode radio ${index + 1}", modifier = Modifier.weight(1f), color = Ink, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                                             if (!isRunning && !isStarting) {
                                                 TextButton(onClick = {
+                                                    onDismissKeyboard()
                                                     rnodeInterfaces = rnodeInterfaces.filterIndexed { radioIndex, _ -> radioIndex != index }
                                                     connectionInputError = null
                                                 }) {
@@ -725,6 +760,7 @@ internal fun SettingsPage(
                                 )
                                 if (!isRunning && !isStarting) {
                                     TextButton(onClick = {
+                                        onDismissKeyboard()
                                         if (tcpPeers.size == 1 && tcpPeers.single().host.isBlank()) {
                                             tcpPeers = emptyList()
                                         }
@@ -813,7 +849,7 @@ internal fun SettingsPage(
                                 )
                                 Text(nodeActionBlockedReason, color = Muted, fontSize = 11.sp, lineHeight = 16.sp)
                                 if (!identityAvailable) {
-                                    TextButton(onClick = onManageIdentity) { Text("Set up identity") }
+                                    TextButton(onClick = { onDismissKeyboard(); onManageIdentity() }) { Text("Set up identity") }
                                 }
                             }
                         }
@@ -821,6 +857,7 @@ internal fun SettingsPage(
                         Button(
                             enabled = nodeActionEnabled,
                             onClick = {
+                                onDismissKeyboard()
                                 if (isRunning) {
                                     onDisconnectNode()
                                 } else {
@@ -881,6 +918,7 @@ internal fun SettingsPage(
                             networks = configuredNetworks,
                             selectedNetwork = selectedHubNetwork,
                             enabled = rrcState !is ReticulumConnectionState.Connected && rrcState !is ReticulumConnectionState.Connecting,
+                            onDismissKeyboard = onDismissKeyboard,
                             onSelected = {
                                 selectedHubNetworkId = it.id
                                 onPreferredHubNetworkChange(it.id)
@@ -913,6 +951,7 @@ internal fun SettingsPage(
                         Button(
                             enabled = if (rrcActive || rrcBusy) true else nodeState is ReticulumNodeState.Running && selectedHubNetwork != null,
                             onClick = {
+                                onDismissKeyboard()
                                 if (rrcActive || rrcBusy) onDisconnectHub()
                                 else selectedHubNetwork?.hubDestination?.let { destination ->
                                     onConnectHub(ReticulumConnectionConfig(destination, selectedRrcNickname, selectedHubNetwork.id))
@@ -959,6 +998,7 @@ internal fun SettingsPage(
                     selectedSection = selectedSection,
                     onSectionSelected = onSectionSelected,
                     onManageIdentity = onManageIdentity,
+                    onDismissKeyboard = onDismissKeyboard,
                 )
                 Column(Modifier.weight(1f).fillMaxHeight().background(Canvas)) {
                     Text(
@@ -977,6 +1017,7 @@ internal fun SettingsPage(
                 selectedSection = selectedSection,
                 onSectionSelected = onSectionSelected,
                 onManageIdentity = onManageIdentity,
+                onDismissKeyboard = onDismissKeyboard,
             )
         } else {
             sectionContent(Modifier.fillMaxSize(), 16.dp)
@@ -1072,6 +1113,7 @@ private fun SettingsSectionNavigation(
     selectedSection: SettingsSection,
     onSectionSelected: (SettingsSection) -> Unit,
     onManageIdentity: () -> Unit,
+    onDismissKeyboard: () -> Unit,
 ) {
     Column(
         modifier = modifier.background(Paper).verticalScroll(rememberScrollState()).padding(16.dp),
@@ -1085,6 +1127,7 @@ private fun SettingsSectionNavigation(
                 modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
                     .background(if (isSelected) PaleAccent else Color.Transparent)
                     .clickable(role = Role.Button) {
+                        onDismissKeyboard()
                         if (section == SettingsSection.IDENTITY) onManageIdentity()
                         else onSectionSelected(section)
                     }

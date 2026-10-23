@@ -1,11 +1,27 @@
 package com.sidpatchy.Starling
 
 import androidx.compose.ui.window.ComposeUIViewController
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
+import kotlinx.coroutines.flow.MutableSharedFlow
+import platform.Foundation.NSNotificationCenter
+import platform.Foundation.NSOperationQueue
+import platform.UIKit.UIApplicationDidBecomeActiveNotification
 import platform.UIKit.UIViewController
 
 /** iOS host for the shared preview and live RNS/RRC/LXMF repository. */
 fun MainViewController(runtime: IosPythonRuntime, documents: IosIdentityDocuments): UIViewController = ComposeUIViewController {
+    val foregroundEvents = remember { MutableSharedFlow<Unit>(extraBufferCapacity = 1) }
+    DisposableEffect(Unit) {
+        val observer = NSNotificationCenter.defaultCenter.addObserverForName(
+            UIApplicationDidBecomeActiveNotification,
+            null,
+            NSOperationQueue.mainQueue,
+        ) {
+            foregroundEvents.tryEmit(Unit)
+        }
+        onDispose { NSNotificationCenter.defaultCenter.removeObserver(observer) }
+    }
     val nodeController = remember(runtime) { IosReticulumNodeController(runtime) }
     val transport = remember(nodeController) { IosReticulumTransport(nodeController) }
     val repository = remember(transport) {
@@ -32,5 +48,6 @@ fun MainViewController(runtime: IosPythonRuntime, documents: IosIdentityDocument
         nodeController = nodeController,
         liveChatRepository = repository,
         identityManager = identityManager,
+        foregroundEvents = foregroundEvents,
     )
 }

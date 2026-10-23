@@ -69,6 +69,14 @@ class ReticulumChatRepository(
         .stateIn(scope, SharingStarted.Eagerly, if (restoredPreviewMode) null else _localIdentityHash.value)
     private val liveMessages = MutableStateFlow(restoredState?.roomMessages.orEmpty())
     private val liveMembers = MutableStateFlow<Map<String, List<ChatMember>>>(emptyMap())
+    private val cachedRoomMemberIds = MutableStateFlow(
+        restoredState?.let { state ->
+            (state.roomMemberIds.keys + state.roomMessages.keys).associateWith { roomId ->
+                state.roomMemberIds[roomId].orEmpty() + state.roomMessages[roomId].orEmpty().mapNotNull { it.authorId }
+            }.mapValues { (_, memberIds) -> memberIds.filterNot(preview::isPreviewMember).toSet() }
+                .filterValues { it.isNotEmpty() }
+        }.orEmpty(),
+    )
     private val discoveredMembers = MutableStateFlow(
         mergeMembers(emptyList(), restoredState?.members.orEmpty().filterNot { preview.isPreviewMember(it.id) }),
     )
@@ -195,6 +203,7 @@ class ReticulumChatRepository(
                     lastServerCommandText.value = null
                     pendingSelfNicknameChange = null
                     pendingSelfNicknameRooms.clear()
+                    liveMembers.value = emptyMap()
                     joinMutex.withLock { joinedRoomNames.clear() }
                 }
             }
@@ -232,7 +241,10 @@ class ReticulumChatRepository(
                                     it.networkId == networkId && it.name.equals(event.roomId, ignoreCase = true)
                                 }
                                 if (room != null) {
-                                    localMember.value?.let { addLiveMember(room.id, it) }
+                                    localMember.value?.let {
+                                        addLiveMember(room.id, it)
+                                        cacheRoomMembers(room.id, listOf(it))
+                                    }
                                     pendingSelfNicknameChange?.let { (oldName, newName) ->
                                         if (pendingSelfNicknameRooms.remove(room.id)) {
                                             appendSystemMessage(
@@ -271,7 +283,10 @@ class ReticulumChatRepository(
                             if (networkId != null) {
                                 preview.rooms.value.filter {
                                     it.networkId == networkId && "${it.networkId}:${it.name.lowercase()}" in joinedRoomNames
-                                }.forEach { addLiveMember(it.id, self) }
+                                }.forEach {
+                                    addLiveMember(it.id, self)
+                                    cacheRoomMembers(it.id, listOf(self))
+                                }
                             }
                         }
                         if (changed) persistState()
@@ -282,6 +297,7 @@ class ReticulumChatRepository(
                             preview.rooms.value.firstOrNull {
                                 it.networkId == networkId && it.name.equals(event.roomId, ignoreCase = true)
                             }?.let { room ->
+                                liveMembers.value = liveMembers.value - room.id
                                 appendSystemMessage(room, "You left #${room.name}", localMember.value?.id, kind = ChatSystemEventKind.LEAVE)
                             }
                         }
@@ -315,6 +331,7 @@ class ReticulumChatRepository(
                         val merged = current.toMutableMap().apply { putAll(members.associateBy { it.id }) }
                         localMember.value?.let { if (it.id !in merged) merged[it.id] = it }
                         liveMembers.value = liveMembers.value + (chatRoomId to merged.values.toList())
+                        cacheRoomMembers(chatRoomId, merged.values)
                         discoveredMembers.value = mergeMembers(discoveredMembers.value, members)
                         persistState()
                     }
@@ -325,6 +342,7 @@ class ReticulumChatRepository(
                         val member = markSelf(event.member)
                         val previous = current[member.id]
                         liveMembers.value = liveMembers.value + (chatRoomId to (current + (member.id to member)).values.toList())
+                        cacheRoomMembers(chatRoomId, listOf(member))
                         discoveredMembers.value = mergeMembers(discoveredMembers.value, listOf(member))
                         val systemEvent = when {
                             previous == null -> ChatSystemEventKind.JOIN to "${member.displayName} joined #${room.name}"
@@ -342,6 +360,7 @@ class ReticulumChatRepository(
                         val currentMembers = liveMembers.value[room.id].orEmpty()
                         val departingMember = currentMembers.firstOrNull { it.id == event.memberId }
                         liveMembers.value = liveMembers.value + (room.id to currentMembers.filterNot { it.id == event.memberId })
+                        departingMember?.let { cacheRoomMembers(room.id, listOf(it)) }
                         appendSystemMessage(
                             room,
                             "${departingMember?.displayName ?: event.memberId.take(12)} left #${room.name}",
@@ -418,6 +437,27 @@ class ReticulumChatRepository(
         } else emptyList()
     }
 
+    override fun offlineMembers(roomId: String): Flow<List<ChatMember>> = combine(
+        cachedRoomMemberIds,
+        knownMembers,
+        members(roomId),
+        preview.previewMode,
+    ) { cachedByRoom, known, present, previewEnabled ->
+        if (previewEnabled) {
+            emptyList()
+        } else {
+            val presentIds = present.mapTo(mutableSetOf()) { it.id }
+            val knownById = known.associateBy { it.id }
+            cachedByRoom[roomId].orEmpty().asSequence()
+                .filterNot { it in presentIds }
+                .mapNotNull(knownById::get)
+                .filterNot { it.isSelf }
+                .distinctBy { it.id }
+                .sortedBy { it.displayName.lowercase() }
+                .toList()
+        }
+    }
+
     override fun directMessages(memberId: String): Flow<List<ChatMessage>> = combine(
         preview.directMessages(memberId),
         liveDirectMessages,
@@ -438,6 +478,29 @@ class ReticulumChatRepository(
 
     override fun addNetwork(name: String, hubDestination: String): ChatNetwork =
         preview.addNetwork(name, hubDestination).also { if (!preview.previewMode.value) persistState() }
+
+    override fun removeNetwork(networkId: String) {
+        if (preview.networks.value.none { it.id == networkId }) return
+        val removedRoomIds = preview.rooms.value.filter { it.networkId == networkId }.mapTo(mutableSetOf()) { it.id }
+        val wasActiveHub = _activeHubNetworkId.value == networkId
+
+        preview.removeNetwork(networkId)
+        liveMessages.value = liveMessages.value - removedRoomIds
+        liveMembers.value = liveMembers.value - removedRoomIds
+        cachedRoomMemberIds.value = cachedRoomMemberIds.value - removedRoomIds
+        if (wasActiveHub) saveActiveHubNetworkId(null)
+        if (_preferredHubNetworkId.value == networkId) savePreferredHubNetworkId(null)
+        if (preview.previewMode.value) return
+
+        persistState()
+        if (wasActiveHub) {
+            scope.launch {
+                runCatching { transport.disconnect() }
+                    .onFailure { _lastError.value = it.message ?: "Could not disconnect from the removed RRC hub." }
+                joinMutex.withLock { joinedRoomNames.clear() }
+            }
+        }
+    }
 
     override fun restoreNetwork(network: ChatNetwork) = preview.restoreNetwork(network)
 
@@ -461,6 +524,7 @@ class ReticulumChatRepository(
 
         liveMessages.value = liveMessages.value - roomId
         liveMembers.value = liveMembers.value - roomId
+        cachedRoomMemberIds.value = cachedRoomMemberIds.value - roomId
         persistState()
         scope.launch {
             joinMutex.withLock {
@@ -746,6 +810,8 @@ class ReticulumChatRepository(
         lastServerCommandName.value = null
         lastServerCommandText.value = null
         saveActiveHubNetworkId(network.id)
+        transport.disconnect()
+        joinMutex.withLock { joinedRoomNames.clear() }
         transport.connect(
             ReticulumConnectionConfig(network.hubDestination.orEmpty(), nicknameForNetwork(network), network.id)
         )
@@ -901,6 +967,29 @@ class ReticulumChatRepository(
         val room = matchingRoom(message.roomId)
             ?: (if (message.roomId.isBlank() && message.isNotice) roomForServerResponse() else null)
             ?: return
+        if (message.isNotice) {
+            val stateUpdate = parseRrcRoomStateUpdate(room.name, message.body)
+            if (stateUpdate != null && preview.updateRoomState(room.id, stateUpdate)) persistState()
+        }
+        if (message.isNotice && message.body == RRC_PRESENCE_NOTICE_BODY && message.senderId.isNotBlank()) {
+            val member = markSelf(
+                ChatMember(
+                    id = message.senderId,
+                    displayName = message.senderName,
+                    isSelf = message.isMine,
+                    address = message.senderLxmfAddress,
+                ),
+            )
+            if (member.isSelf) {
+                localMember.value = member
+            } else {
+                discoveredMembers.value = mergeMembers(discoveredMembers.value, listOf(member))
+            }
+            addLiveMember(room.id, member)
+            cacheRoomMembers(room.id, listOf(member))
+            persistState()
+            return
+        }
         val isPendingHelpReply = lastServerCommandName.value == "help" && lastServerCommandRoomId.value == room.id
         val isEchoedSlashCommand = message.isMine && message.body.startsWith('/') &&
             lastServerCommandRoomId.value == room.id &&
@@ -967,6 +1056,7 @@ class ReticulumChatRepository(
                 displayName = sender,
                 address = message.senderLxmfAddress ?: current[member.id]?.address,
             ) ?: member))).values.toList())
+            cacheRoomMembers(room.id, listOf(member))
             discoveredMembers.value = mergeMembers(discoveredMembers.value, listOf(member))
             if (member.isSelf) addLiveMember(room.id, member)
         }
@@ -1114,6 +1204,19 @@ class ReticulumChatRepository(
         liveMembers.value = liveMembers.value + (roomId to merged.values.toList())
     }
 
+    private fun cacheRoomMembers(roomId: String, members: Collection<ChatMember>) {
+        val additions = members.asSequence()
+            .map { it.id.trim() }
+            .filter { it.isNotEmpty() && !preview.isPreviewMember(it) }
+            .toSet()
+        if (additions.isEmpty()) return
+        val current = cachedRoomMemberIds.value[roomId].orEmpty()
+        val updated = current + additions
+        if (updated == current) return
+        cachedRoomMemberIds.value = cachedRoomMemberIds.value + (roomId to updated)
+        persistState()
+    }
+
     private fun persistCurrentState() {
         val state = PersistedChatState(
             previewMode = preview.previewMode.value,
@@ -1123,6 +1226,7 @@ class ReticulumChatRepository(
             globalNickname = _globalNickname.value,
             networks = preview.persistedNetworks(),
             rooms = preview.persistedRooms(),
+            roomMemberIds = cachedRoomMemberIds.value,
             activeHubNetworkId = _activeHubNetworkId.value,
             members = mergeMembers(discoveredMembers.value, listOfNotNull(localMember.value))
                 .filterNot { preview.isPreviewMember(it.id) },

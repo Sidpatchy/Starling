@@ -53,6 +53,7 @@ class _FakeTimer:
     instances = []
 
     def __init__(self, interval, function, args=(), kwargs=None):
+        self.interval = interval
         self.function = function
         self.args = args
         self.cancelled = False
@@ -79,6 +80,7 @@ def _connected_state(**overrides):
         "_pending_messages": [],
         "_pending_joins": [],
         "_pending_parts": [],
+        "_presence_timer": None,
         "_events": queue.Queue(),
         "_display_name": "Moss",
         "_identity": _FakeIdentity(),
@@ -106,6 +108,7 @@ class RrcAdapterTest(unittest.TestCase):
         rrc._destination = None
         rrc._welcome_timer = None
         rrc._connect_generation = 0
+        rrc._presence_timer = None
         rrc._keepalive_timer = None
         rrc._pong_timer = None
         rrc._outstanding_ping = None
@@ -137,6 +140,7 @@ class RrcAdapterTest(unittest.TestCase):
         rrc._destination = None
         rrc._welcome_timer = None
         rrc._connect_generation = 0
+        rrc._presence_timer = None
         rrc._keepalive_timer = None
         rrc._pong_timer = None
         rrc._outstanding_ping = None
@@ -332,23 +336,25 @@ class RrcAdapterTest(unittest.TestCase):
             send.assert_called_once_with(rrc.JOIN, room="general", nickname="Moss")
             self.assertIn("general", rrc._joining_rooms)
 
-    def _connected_state(self, link):
-        return patch.multiple(
-            rrc,
-            _connection_state="connected",
-            _link=link,
-            _joined_rooms=set(),
-            _joining_rooms=set(),
-            _parting_rooms=set(),
-            _pending_messages=[],
-            _pending_joins=[],
-            _pending_parts=[],
-            _events=queue.Queue(),
-            _display_name="Moss",
-            _identity=_FakeIdentity(),
-            _destination=None,
-            _welcome_timer=None,
-        )
+    def _connected_state(self, link, **overrides):
+        state = {
+            "_connection_state": "connected",
+            "_link": link,
+            "_joined_rooms": set(),
+            "_joining_rooms": set(),
+            "_parting_rooms": set(),
+            "_pending_messages": [],
+            "_pending_joins": [],
+            "_pending_parts": [],
+            "_presence_timer": None,
+            "_events": queue.Queue(),
+            "_display_name": "Moss",
+            "_identity": _FakeIdentity(),
+            "_destination": None,
+            "_welcome_timer": None,
+        }
+        state.update(overrides)
+        return patch.multiple(rrc, **state)
 
     def test_keepalive_sends_ping_and_reschedules_after_matching_pong(self):
         _FakeTimer.instances = []
@@ -491,6 +497,53 @@ class RrcAdapterTest(unittest.TestCase):
             self.assertEqual(len(due), 1, "WELCOME must schedule the keepalive")
             due[0].fire()
             send.assert_any_call(rrc.PING, body=unittest.mock.ANY)
+
+    def test_joined_room_announces_presence_and_repeats_periodically(self):
+        _FakeTimer.instances = []
+        link = _FakeLink()
+        with patch.object(rrc.threading, "Timer", _FakeTimer), self._connected_state(
+            link,
+            _joining_rooms={"general"},
+        ), patch.object(rrc, "_send") as send:
+            rrc._packet_received(
+                rrc.cbor_encode({0: rrc.PROTOCOL_VERSION, 1: rrc.JOINED, 5: "General"}),
+                link,
+            )
+
+            expected_presence = {
+                "room": "General",
+                "body": rrc._PRESENCE_NOTICE_BODY,
+                "nickname": "Moss",
+            }
+            send.assert_called_once_with(rrc.NOTICE, **expected_presence)
+            timer = next(t for t in _FakeTimer.instances if not t.cancelled and not t.fired)
+            self.assertEqual(rrc._PRESENCE_ANNOUNCEMENT_INTERVAL, timer.interval)
+
+            timer.fire()
+
+            send.assert_called_with(
+                rrc.NOTICE,
+                room="general",
+                body=rrc._PRESENCE_NOTICE_BODY,
+                nickname="Moss",
+            )
+            self.assertEqual(2, send.call_count)
+            self.assertTrue(any(not t.cancelled and not t.fired for t in _FakeTimer.instances))
+
+    def test_disconnect_cancels_room_presence_announcement(self):
+        _FakeTimer.instances = []
+        link = _FakeLink()
+        with patch.object(rrc.threading, "Timer", _FakeTimer), self._connected_state(
+            link,
+            _joined_rooms={"general"},
+        ), patch.object(rrc, "_send"):
+            rrc._schedule_presence_announcement(link)
+            self.assertIsNotNone(rrc._presence_timer)
+
+            rrc.disconnect()
+
+            self.assertIsNone(rrc._presence_timer)
+            self.assertTrue(all(timer.cancelled for timer in _FakeTimer.instances))
 
     def test_incoming_ping_is_answered_with_matching_pong(self):
         _FakeTimer.instances = []

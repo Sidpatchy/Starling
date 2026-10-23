@@ -277,15 +277,128 @@ class ReticulumChatRepositoryTest {
         f.transport.state.value = ReticulumConnectionState.Failed("The hub is not accepting messages.")
         connectActiveHub(f)
         f.transport.connectConfigs.clear()
+        f.transport.disconnectCalls = 0
 
         f.repository.reconnectActiveHub()
 
         assertEquals(f.network.id, f.repository.activeHubNetworkId.value)
+        assertEquals(1, f.transport.disconnectCalls)
         assertEquals(1, f.transport.connectConfigs.size)
         assertEquals(HUB, f.transport.connectConfigs.single().hubDestination)
         assertEquals("Starling", f.transport.connectConfigs.single().displayName)
         assertEquals(f.network.id, f.transport.connectConfigs.single().networkId)
         assertNull(f.repository.lastError.value)
+    }
+
+    @Test
+    fun removeNetworkRemovesSavedRoomsAndDisconnectsActiveHub() = runTest {
+        val f = newRepository()
+        connectActiveHub(f)
+        f.repository.savePreferredHubNetworkId(f.network.id)
+
+        f.repository.removeNetwork(f.network.id)
+        advanceUntilIdle()
+
+        assertTrue(f.repository.networks.value.none { it.id == f.network.id })
+        assertTrue(f.repository.rooms.value.none { it.networkId == f.network.id })
+        assertNull(f.repository.activeHubNetworkId.value)
+        assertNull(f.repository.preferredHubNetworkId.value)
+        assertEquals(1, f.transport.disconnectCalls)
+    }
+
+    @Test
+    fun roomInfoAndModeNoticesUpdateTheSavedTopicAndPermissions() = runTest {
+        val f = newRepository()
+        connectActiveHub(f)
+
+        f.transport.events.emit(
+            ReticulumEvent.RoomMessageReceived(
+                RrcRoomMessage(
+                    id = "room-info",
+                    roomId = f.room.name,
+                    senderId = "hub",
+                    senderName = "Hub",
+                    body = "room ${f.room.name}: registered; mode=+inrt; topic=Live topic",
+                    timestampMillis = 100,
+                    isMine = false,
+                    isNotice = true,
+                ),
+            ),
+        )
+        advanceUntilIdle()
+
+        val withSnapshot = f.repository.rooms.value.single { it.id == f.room.id }
+        assertEquals("Live topic", withSnapshot.topic)
+        assertEquals(
+            ChatRoomModes(inviteOnly = true, topicOpsOnly = true, noOutsideMessages = true, registered = true),
+            withSnapshot.modes,
+        )
+
+        f.transport.events.emit(
+            ReticulumEvent.RoomMessageReceived(
+                RrcRoomMessage(
+                    id = "mode-update",
+                    roomId = f.room.name,
+                    senderId = "hub",
+                    senderName = "Hub",
+                    body = "mode for ${f.room.name} is now: +imnrt",
+                    timestampMillis = 200,
+                    isMine = false,
+                    isNotice = true,
+                ),
+            ),
+        )
+        advanceUntilIdle()
+
+        val afterModeUpdate = f.repository.rooms.value.single { it.id == f.room.id }
+        assertEquals(true, afterModeUpdate.modes?.moderated)
+        assertEquals(true, afterModeUpdate.modes?.inviteOnly)
+        assertEquals("Live topic", afterModeUpdate.topic)
+    }
+
+    @Test
+    fun presenceNoticeRefreshesTheRoomRosterWithoutAddingAChatMessage() = runTest {
+        val f = newRepository()
+        connectActiveHub(f)
+        f.transport.state.value = ReticulumConnectionState.Connected("Test Hub")
+
+        f.transport.events.emit(
+            ReticulumEvent.RoomMessageReceived(
+                RrcRoomMessage(
+                    id = "presence-heartbeat",
+                    roomId = f.room.name,
+                    senderId = "abcdef0123456789abcdef0123456789",
+                    senderName = "Other Client",
+                    body = RRC_PRESENCE_NOTICE_BODY,
+                    timestampMillis = 100,
+                    isMine = false,
+                    isNotice = true,
+                ),
+            ),
+        )
+        advanceUntilIdle()
+
+        assertEquals("Other Client", f.repository.members(f.room.id).first().single().displayName)
+        assertTrue(f.repository.messages(f.room.id).first().none { it.text == RRC_PRESENCE_NOTICE_BODY })
+    }
+
+    @Test
+    fun previouslySeenRoomMembersMoveToOfflineListWhenHubDisconnects() = runTest {
+        val f = newRepository()
+        connectActiveHub(f)
+        f.transport.state.value = ReticulumConnectionState.Connected("Test Hub")
+        val member = ChatMember("cached-member", "Cached member")
+        f.transport.events.emit(ReticulumEvent.MembersChanged(f.room.name, listOf(member)))
+        advanceUntilIdle()
+
+        assertEquals(listOf(member), f.repository.members(f.room.id).first())
+        assertTrue(f.repository.offlineMembers(f.room.id).first().isEmpty())
+
+        f.transport.state.value = ReticulumConnectionState.Disconnected
+        advanceUntilIdle()
+
+        assertTrue(f.repository.members(f.room.id).first().isEmpty())
+        assertEquals(listOf(member), f.repository.offlineMembers(f.room.id).first())
     }
 
     @Test

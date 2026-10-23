@@ -14,6 +14,7 @@ data class ChatRoom(
     val name: String,
     val topic: String,
     val members: Int,
+    val modes: ChatRoomModes? = null,
 )
 
 data class ChatNetwork(
@@ -142,8 +143,10 @@ interface ChatRepository {
     fun messages(roomId: String): Flow<List<ChatMessage>>
     fun directMessages(memberId: String): Flow<List<ChatMessage>>
     fun members(roomId: String): Flow<List<ChatMember>>
+    fun offlineMembers(roomId: String): Flow<List<ChatMember>>
     fun sharedRooms(memberId: String): List<ChatRoom>
     fun addNetwork(name: String, hubDestination: String): ChatNetwork
+    fun removeNetwork(networkId: String)
     fun restoreNetwork(network: ChatNetwork)
     fun restoreRoom(room: ChatRoom)
     fun removeRoom(roomId: String)
@@ -253,6 +256,8 @@ class LocalPreviewChatRepository : ChatRepository {
         membersByRoom[roomId].orEmpty().mapNotNull(knownMembersById::get),
     )
 
+    override fun offlineMembers(roomId: String): Flow<List<ChatMember>> = flowOf(emptyList())
+
     override fun sharedRooms(memberId: String): List<ChatRoom> =
         _rooms.value.filter { memberId in membersByRoom[it.id].orEmpty() }
 
@@ -279,6 +284,15 @@ class LocalPreviewChatRepository : ChatRepository {
         return network
     }
 
+    override fun removeNetwork(networkId: String) {
+        if (allNetworks.value.none { it.id == networkId }) return
+        val removedRoomIds = allRooms.value.filter { it.networkId == networkId }.mapTo(mutableSetOf()) { it.id }
+        allNetworks.value = allNetworks.value.filterNot { it.id == networkId }
+        allRooms.value = allRooms.value.filterNot { it.networkId == networkId }
+        allMessagesByRoom.value = allMessagesByRoom.value - removedRoomIds
+        refreshVisibleConfiguration()
+    }
+
     override fun restoreNetwork(network: ChatNetwork) {
         val destination = network.hubDestination?.trim()?.lowercase().orEmpty()
         if (destination.length == 32 && destination.all { it in "0123456789abcdef" } &&
@@ -295,6 +309,32 @@ class LocalPreviewChatRepository : ChatRepository {
             allRooms.value = allRooms.value + normalizedRoom
             refreshVisibleConfiguration()
         }
+    }
+
+    internal fun updateRoomState(roomId: String, update: RrcRoomStateUpdate): Boolean {
+        val roomIndex = allRooms.value.indexOfFirst { it.id == roomId }
+        if (roomIndex < 0) return false
+        val rooms = allRooms.value.toMutableList()
+        val oldRoom = rooms[roomIndex]
+        val updatedRoom = when (update) {
+            is RrcRoomStateUpdate.Snapshot -> oldRoom.copy(topic = update.topic, modes = update.modes)
+            is RrcRoomStateUpdate.Topic -> oldRoom.copy(topic = update.value)
+            is RrcRoomStateUpdate.Modes -> oldRoom.copy(modes = update.value)
+            is RrcRoomStateUpdate.Registration -> {
+                val currentModes = oldRoom.modes ?: ChatRoomModes()
+                val newModes = if (update.registered) {
+                    currentModes.copy(registered = true, noOutsideMessages = true, topicOpsOnly = true)
+                } else {
+                    currentModes.copy(registered = false)
+                }
+                oldRoom.copy(modes = newModes)
+            }
+        }
+        if (updatedRoom == oldRoom) return false
+        rooms[roomIndex] = updatedRoom
+        allRooms.value = rooms
+        refreshVisibleConfiguration()
+        return true
     }
 
     override fun removeRoom(roomId: String) {
