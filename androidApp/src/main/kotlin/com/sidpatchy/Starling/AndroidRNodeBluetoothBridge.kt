@@ -12,11 +12,15 @@ import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.ParcelUuid
+import androidx.core.content.ContextCompat
 import java.io.IOException
 import java.net.InetAddress
 import java.net.InetSocketAddress
@@ -53,6 +57,17 @@ internal class AndroidRNodeBluetoothBridge(context: Context) {
     @Volatile private var writeType = BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
     private var writeInProgress = false
     private var writeChunkSize = DEFAULT_WRITE_CHUNK
+    private var adapterStateReceiverRegistered = false
+    private val retryScan = Runnable { startScan() }
+
+    private val adapterStateReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action != BluetoothAdapter.ACTION_STATE_CHANGED) return
+            when (intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR)) {
+                BluetoothAdapter.STATE_TURNING_OFF, BluetoothAdapter.STATE_OFF -> handleAdapterOff()
+            }
+        }
+    }
 
     private val scanCallback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
@@ -91,7 +106,7 @@ internal class AndroidRNodeBluetoothBridge(context: Context) {
                 failStartup("Android Bluetooth scanning failed (code $errorCode).")
             } else if (running) {
                 closeTcpClient()
-                mainHandler.postDelayed({ startScan() }, RECONNECT_SCAN_DELAY_MS)
+                scheduleScanRetry()
             }
         }
     }
@@ -242,6 +257,7 @@ internal class AndroidRNodeBluetoothBridge(context: Context) {
                 isDaemon = true
                 start()
             }
+            registerAdapterStateReceiver()
 
             val manager = appContext.getSystemService(Context.BLUETOOTH_SERVICE) as? android.bluetooth.BluetoothManager
                 ?: return stopWithError("Bluetooth is not available on this device.")
@@ -280,6 +296,11 @@ internal class AndroidRNodeBluetoothBridge(context: Context) {
                 startupLatch = null
             }
             running = false
+            mainHandler.removeCallbacks(retryScan)
+            if (adapterStateReceiverRegistered) {
+                adapterStateReceiverRegistered = false
+                runCatching { appContext.unregisterReceiver(adapterStateReceiver) }
+            }
             runCatching { scanner?.stopScan(scanCallback) }
             scanner = null
             runCatching { gatt?.disconnect() }
@@ -322,12 +343,49 @@ internal class AndroidRNodeBluetoothBridge(context: Context) {
             failStartup(message)
         } else if (running) {
             closeTcpClient()
-            mainHandler.postDelayed({ startScan() }, RECONNECT_SCAN_DELAY_MS)
+            scheduleScanRetry()
         }
+    }
+
+    private fun scheduleScanRetry() {
+        mainHandler.removeCallbacks(retryScan)
+        mainHandler.postDelayed(retryScan, RECONNECT_SCAN_DELAY_MS)
     }
 
     private fun stopScan() {
         runCatching { scanner?.stopScan(scanCallback) }
+    }
+
+    private fun registerAdapterStateReceiver() {
+        synchronized(lock) {
+            if (!running || adapterStateReceiverRegistered) return
+            // The adapter state is a protected system broadcast, but it is not
+            // always sent by the system UID, so the receiver must be exported.
+            ContextCompat.registerReceiver(
+                appContext,
+                adapterStateReceiver,
+                IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED),
+                ContextCompat.RECEIVER_EXPORTED,
+            )
+            adapterStateReceiverRegistered = true
+        }
+    }
+
+    /**
+     * Android does not reliably report a GATT disconnect when Bluetooth is
+     * switched off. Drop the link the same way as a lost RNode; the scan retry
+     * then keeps failing until the adapter is back on and the RNode is found.
+     */
+    private fun handleAdapterOff() {
+        if (!running) return
+        val message = "Bluetooth was turned off."
+        val activeGatt = synchronized(lock) { gatt }
+        if (activeGatt != null) {
+            handleGattDisconnect(activeGatt, message)
+        } else {
+            stopScan()
+            handleScanRestartFailure(message)
+        }
     }
 
     private fun failStartup(message: String) {
@@ -464,6 +522,13 @@ internal class AndroidRNodeBluetoothBridge(context: Context) {
             }
         } catch (_: SecurityException) {
             BluetoothGatt.GATT_FAILURE
+        } catch (_: Exception) {
+            // The Bluetooth stack can die under an active connection, for
+            // example when the adapter is switched off, and the write then
+            // throws instead of reporting a status. That is a lost link, not
+            // a reason to take down the RNS process.
+            handleGattDisconnect(work.first, "The BLE RNode connection was lost.")
+            return
         }
         if (status != BluetoothGatt.GATT_SUCCESS) {
             synchronized(lock) {
