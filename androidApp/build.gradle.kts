@@ -34,6 +34,9 @@ chaquopy {
         pip {
             install("rns==1.5.7")
             install("lxmf==1.2.0")
+            // BLE peer protocol (MIT). Core package only: the Linux driver's
+            // optional dependencies are not installed and Starling supplies its own driver.
+            install("git+https://github.com/torlando-tech/ble-reticulum.git@63557acfe5c923dcdafeb7bc37508bf835f16514")
         }
     }
     sourceSets {

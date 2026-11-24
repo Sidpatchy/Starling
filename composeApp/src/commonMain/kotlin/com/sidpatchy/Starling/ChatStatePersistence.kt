@@ -78,6 +78,7 @@ object ChatStateCodec {
                     radio.spreadingFactor.toString(), radio.codingRate.toString(),
                 )
             }
+            if (config.blePeeringEnabled) appendRecord("E", true.bit())
         }
         state.networks.forEach { network ->
             appendRecord("N", network.id, network.name, network.hubDestination.orEmpty(), network.rrcNickname.orEmpty())
@@ -125,6 +126,7 @@ object ChatStateCodec {
         var nodeMode: ReticulumRuntimeMode? = null
         val tcpPeers = mutableListOf<ReticulumTcpPeer>()
         val rnodeInterfaces = mutableListOf<ReticulumRNodeInterface>()
+        var blePeeringEnabled = false
         var preferredHubNetworkId: String? = null
         var activeHubNetworkId: String? = null
         var localIdentityHash: String? = null
@@ -174,6 +176,7 @@ object ChatStateCodec {
                         codingRate = decoded[5].toIntOrNull() ?: 0,
                     )
                 }
+                "E" -> blePeeringEnabled = decoded.firstOrNull() == "1"
                 "N" -> if (decoded.size >= 3 && decoded[0].isNotBlank() && decoded[2].isNotBlank()) {
                     val network = ChatNetwork(
                         id = decoded[0],
@@ -278,7 +281,12 @@ object ChatStateCodec {
             roomMessages = rooms,
             directMessages = direct,
             nodeConfig = nodeMode?.let { mode ->
-                ReticulumNodeConfig(mode = mode, tcpPeers = tcpPeers, rnodeInterfaces = rnodeInterfaces)
+                ReticulumNodeConfig(
+                    mode = mode,
+                    tcpPeers = tcpPeers,
+                    rnodeInterfaces = rnodeInterfaces,
+                    blePeeringEnabled = blePeeringEnabled,
+                )
             },
             preferredHubNetworkId = preferredHubNetworkId,
             activeHubNetworkId = activeHubNetworkId,

@@ -32,9 +32,11 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         WindowCompat.setDecorFitsSystemWindows(window, false)
         requestHighRefreshRate()
-        val controller = AndroidReticulumNodeController(applicationContext) {
-            requestRNodeBluetoothPermissions()
-        }
+        val controller = AndroidReticulumNodeController(
+            applicationContext,
+            requestBluetoothPermissions = { requestBluetoothPermissions(rnodeBluetoothPermissions()) },
+            requestBlePeeringPermissions = { requestBluetoothPermissions(AndroidBlePeerBridge.requiredPermissions()) },
+        )
         val reticulumTransport = AndroidReticulumTransport(applicationContext)
         val chat = ReticulumChatRepository(
             LocalPreviewChatRepository(),
@@ -90,12 +92,16 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private suspend fun requestRNodeBluetoothPermissions(): Boolean = withContext(Dispatchers.Main.immediate) {
-        val requiredPermissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+    private fun rnodeBluetoothPermissions(): Array<String> =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)
         } else {
             arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
         }
+
+    private suspend fun requestBluetoothPermissions(
+        requiredPermissions: Array<String>,
+    ): Boolean = withContext(Dispatchers.Main.immediate) {
         val missingPermissions = requiredPermissions.filter {
             ContextCompat.checkSelfPermission(this@MainActivity, it) != PackageManager.PERMISSION_GRANTED
         }
