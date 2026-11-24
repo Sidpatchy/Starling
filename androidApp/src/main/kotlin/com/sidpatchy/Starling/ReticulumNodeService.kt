@@ -33,7 +33,7 @@ class ReticulumNodeService : Service() {
     private var tcpPeersJson = "[]"
     private var rnodeInterfacesJson = "[]"
     private var rpcKeyHex = ""
-    private val rnodeBluetoothBridge = AndroidRNodeBluetoothBridge(this)
+    private val rnodeBluetoothBridge by lazy { AndroidRNodeBluetoothBridge(this) }
     private val processWatchBinder = Binder()
     private var pythonModule: com.chaquo.python.PyObject? = null
     private var rrcModule: com.chaquo.python.PyObject? = null
