@@ -9,8 +9,9 @@ internal fun sidebarSelectionForVisiblePage(
     showSettings: Boolean = false,
     showIdentityPage: Boolean = false,
     showContactRequests: Boolean = false,
+    showNearby: Boolean = false,
 ): SidebarSelection = when {
-    showSettings || showIdentityPage || showContactRequests -> SidebarSelection()
+    showSettings || showIdentityPage || showContactRequests || showNearby -> SidebarSelection()
     directMessageId != null -> SidebarSelection(directMessageId = directMessageId)
     else -> SidebarSelection(roomId = roomId)
 }

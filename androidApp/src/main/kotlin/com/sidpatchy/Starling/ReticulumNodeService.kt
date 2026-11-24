@@ -14,6 +14,7 @@ import android.os.IBinder
 import android.os.Looper
 import android.os.Process
 import android.util.Log
+import com.chaquo.python.Kwarg
 import com.chaquo.python.Python
 import com.chaquo.python.android.AndroidPlatform
 import org.json.JSONArray
@@ -34,6 +35,8 @@ class ReticulumNodeService : Service() {
     private var rnodeInterfacesJson = "[]"
     private var rpcKeyHex = ""
     private val rnodeBluetoothBridge by lazy { AndroidRNodeBluetoothBridge(this) }
+    private val blePeerBridge by lazy { AndroidBlePeerBridge(this) }
+    @Volatile private var blePeersEnabled = false
     private val processWatchBinder = Binder()
     private var pythonModule: com.chaquo.python.PyObject? = null
     private var rrcModule: com.chaquo.python.PyObject? = null
@@ -46,6 +49,7 @@ class ReticulumNodeService : Service() {
     private var lastNodeRNodeStatusJson = "[]"
     /** The Bluetooth RNode this run connected to, reported so a saved name can become a device id. */
     @Volatile private var resolvedBleRNode: ResolvedBleRNode? = null
+    private var lastNodeBlePeerStatusJson = "{}"
     @Volatile private var stopping = false
     @Volatile private var lifecycleGeneration = 0L
 
@@ -80,13 +84,16 @@ class ReticulumNodeService : Service() {
                 } else if (pythonModule != null) {
                     publishRuntimeStatus()
                 } else {
-                    publish(lastNodeState, lastNodeMessage, lastNodeShared, lastNodeTcpStatusJson, lastNodeRNodeStatusJson)
+                    publish(
+                        lastNodeState, lastNodeMessage, lastNodeShared, lastNodeTcpStatusJson, lastNodeRNodeStatusJson,
+                        lastNodeBlePeerStatusJson,
+                    )
                     if (lastNodeState == STATE_STOPPED || lastNodeState == STATE_FAILED) stopSelf(startId)
                 }
             }
             ACTION_RRC_CONNECT, ACTION_RRC_DISCONNECT, ACTION_RRC_JOIN, ACTION_RRC_PART, ACTION_RRC_SEND ->
                 handleRrcCommand(intent)
-            ACTION_LXMF_SEND, ACTION_LXMF_SET_NAME -> handleLxmfCommand(intent)
+            ACTION_LXMF_SEND, ACTION_LXMF_SET_NAME, ACTION_LXMF_ANNOUNCE -> handleLxmfCommand(intent)
             ACTION_RRC_STATUS -> publishRrcCurrentState()
             else -> stopSelf(startId)
         }
@@ -100,6 +107,7 @@ class ReticulumNodeService : Service() {
         tcpPeersJson = intent.getStringExtra(EXTRA_TCP_PEERS).orEmpty().ifBlank { "[]" }
         rnodeInterfacesJson = intent.getStringExtra(EXTRA_RNODE_INTERFACES).orEmpty().ifBlank { "[]" }
         rpcKeyHex = intent.getStringExtra(EXTRA_RPC_KEY).orEmpty()
+        blePeersEnabled = mode == ReticulumRuntimeMode.EMBEDDED && intent.getBooleanExtra(EXTRA_BLE_PEERS, false)
 
         val generation = lifecycleGeneration + 1
         lifecycleGeneration = generation
@@ -120,6 +128,10 @@ class ReticulumNodeService : Service() {
                 rrcModule = Python.getInstance().getModule("starling_rrc")
                 lxmfModule = Python.getInstance().getModule("starling_lxmf")
                 if (generation != lifecycleGeneration) return@execute
+                if (blePeersEnabled) {
+                    // The Python BLE driver created by RNS reaches Android through this bridge.
+                    Python.getInstance().getModule("starling_ble_android").callAttr("set_bridge", blePeerBridge)
+                }
                 val result = module.callAttr(
                     "start_node",
                     noBackupFilesDir.resolve("reticulum").absolutePath,
@@ -127,6 +139,7 @@ class ReticulumNodeService : Service() {
                     tcpPeersJson,
                     rpcKeyHex,
                     rnodeInterfacesJson,
+                    Kwarg("ble_peers", blePeersEnabled),
                 ).toString()
                 if (generation != lifecycleGeneration) return@execute
                 try {
@@ -147,6 +160,7 @@ class ReticulumNodeService : Service() {
             } catch (error: Exception) {
                 Log.e(TAG, "Reticulum startup failed", error)
                 rnodeBluetoothBridge.stop()
+                runCatching { blePeerBridge.stop() }
                 handler.post {
                     if (generation != lifecycleGeneration) return@post
                     publish(STATE_FAILED, message = error.message ?: error.javaClass.simpleName)
@@ -182,6 +196,9 @@ class ReticulumNodeService : Service() {
             }
             runCatching { rnodeBluetoothBridge.stop() }
                 .onFailure { Log.w(TAG, "BLE RNode bridge shutdown failed", it) }
+            // Detaching the interface already stops the bridge; this covers a failed shutdown.
+            runCatching { blePeerBridge.stop() }
+                .onFailure { Log.w(TAG, "BLE peer bridge shutdown failed", it) }
             handler.post {
                 publish(STATE_STOPPED)
                 publishRrcEventLine("LOCAL_ADDRESS\t")
@@ -201,6 +218,9 @@ class ReticulumNodeService : Service() {
             val shared = json.optBoolean("shared_instance_connected", false)
             val tcpStatusJson = json.optJSONArray("tcp_interfaces")?.toString() ?: "[]"
             val rnodeStatusJson = json.optJSONArray("rnode_interfaces")?.toString() ?: "[]"
+            val blePeers = json.optJSONObject("ble_peers")
+            val blePeersActive = blePeers?.optBoolean("enabled", false) == true
+            val blePeerCount = blePeers?.optInt("peer_count", 0) ?: 0
             val peers = json.optJSONArray("tcp_interfaces")
             val radios = json.optJSONArray("rnode_interfaces")
             var onlineCount = 0
@@ -220,6 +240,7 @@ class ReticulumNodeService : Service() {
                 shared = shared,
                 tcpStatusJson = tcpStatusJson,
                 rnodeStatusJson = rnodeStatusJson,
+                blePeerStatusJson = blePeers?.toString() ?: "{}",
             )
             val notificationText = when {
                 shared -> "Using the existing local Reticulum instance"
@@ -227,6 +248,7 @@ class ReticulumNodeService : Service() {
                     "$onlineCount TCP and $onlineRadioCount RNode connections online"
                 radios != null && radios.length() > 0 -> "$onlineRadioCount of ${radios.length()} RNode radios online"
                 peers != null && peers.length() > 0 -> "$onlineCount of ${peers.length()} TCP connections online"
+                blePeersActive -> blePeerStatusText(blePeerCount, blePeers?.optBoolean("bluetooth_on", true) == false)
                 else -> "Reticulum node is running"
             }
             updateForegroundNotification(notificationText)
@@ -270,13 +292,19 @@ class ReticulumNodeService : Service() {
 
     private fun handleLxmfCommand(intent: Intent) {
         val module = lxmfModule
+        val isAnnounce = intent.action == ACTION_LXMF_ANNOUNCE
         if (module == null) {
-            publishLxmfError("Start the Reticulum node before sending LXMF messages.")
+            publishLxmfError(
+                if (isAnnounce) "Start the Reticulum node before announcing."
+                else "Start the Reticulum node before sending LXMF messages.",
+            )
             return
         }
         rrcWorker.execute {
             try {
-                if (intent.action == ACTION_LXMF_SET_NAME) {
+                if (isAnnounce) {
+                    module.callAttr("announce")
+                } else if (intent.action == ACTION_LXMF_SET_NAME) {
                     module.callAttr("set_display_name", intent.getStringExtra(EXTRA_DISPLAY_NAME).orEmpty())
                 } else {
                     module.callAttr(
@@ -287,8 +315,13 @@ class ReticulumNodeService : Service() {
                 }
                 drainLxmfEvents()
             } catch (error: Exception) {
-                Log.w(TAG, "LXMF send failed", error)
-                publishLxmfError(error.message ?: "Could not send the LXMF message.")
+                if (isAnnounce) {
+                    Log.w(TAG, "LXMF announce failed", error)
+                    publishLxmfError(error.message ?: "Could not announce the LXMF address.")
+                } else {
+                    Log.w(TAG, "LXMF send failed", error)
+                    publishLxmfError(error.message ?: "Could not send the LXMF message.")
+                }
             }
         }
     }
@@ -351,18 +384,21 @@ class ReticulumNodeService : Service() {
         shared: Boolean = false,
         tcpStatusJson: String = "[]",
         rnodeStatusJson: String = "[]",
+        blePeerStatusJson: String = "{}",
     ) {
         lastNodeState = state
         lastNodeMessage = message
         lastNodeShared = shared
         lastNodeTcpStatusJson = tcpStatusJson
         lastNodeRNodeStatusJson = rnodeStatusJson
+        lastNodeBlePeerStatusJson = blePeerStatusJson
         val intent = Intent(ACTION_STATE)
             .setPackage(packageName)
             .putExtra(EXTRA_STATE, state)
             .putExtra(EXTRA_MODE, mode.name)
             .putExtra(EXTRA_TCP_STATUS, tcpStatusJson)
             .putExtra(EXTRA_RNODE_STATUS, rnodeStatusJson)
+            .putExtra(EXTRA_BLE_PEER_STATUS, blePeerStatusJson)
             .putExtra(EXTRA_SHARED, shared)
             .putExtra(EXTRA_MESSAGE, message)
             .putExtra(EXTRA_RNODE_BLE_ID, resolvedBleRNode?.id.orEmpty())
@@ -421,6 +457,7 @@ class ReticulumNodeService : Service() {
         handler.removeCallbacks(pollStatus)
         handler.removeCallbacks(pollRrcEvents)
         runCatching { rnodeBluetoothBridge.stop() }
+        runCatching { blePeerBridge.stop() }
         // This service has its own process. Reticulum is a process singleton;
         // clearing that interpreter on shutdown makes a later user reconnect
         // start from a clean state without killing the UI process.
@@ -463,11 +500,14 @@ class ReticulumNodeService : Service() {
         const val ACTION_RRC_STATUS = "com.sidpatchy.Starling.action.RRC_STATUS"
         const val ACTION_LXMF_SEND = "com.sidpatchy.Starling.action.LXMF_SEND"
         const val ACTION_LXMF_SET_NAME = "com.sidpatchy.Starling.action.LXMF_SET_NAME"
+        const val ACTION_LXMF_ANNOUNCE = "com.sidpatchy.Starling.action.LXMF_ANNOUNCE"
         const val EXTRA_MODE = "mode"
         const val EXTRA_TCP_PEERS = "tcp_peers"
         const val EXTRA_TCP_STATUS = "tcp_status"
         const val EXTRA_RNODE_INTERFACES = "rnode_interfaces"
         const val EXTRA_RNODE_STATUS = "rnode_status"
+        const val EXTRA_BLE_PEERS = "ble_peers"
+        const val EXTRA_BLE_PEER_STATUS = "ble_peer_status"
         const val EXTRA_STATE = "state"
         const val EXTRA_SHARED = "shared"
         const val EXTRA_RPC_KEY = "rpc_key"

@@ -75,6 +75,42 @@ class RrcBridgeProtocolTest {
     }
 
     @Test
+    fun nearbyPeopleCarryBothReadingsAndASanitisedName() {
+        val address = "ABCDEF0123456789abcdef0123456789"
+        val line = listOf(
+            "NEARBY_PEER", encodeBridgeBase64(address), encodeBridgeBase64("Wr\u202Een\n"),
+            "1800000000000", "1", "1799999000000", "4", encodeBridgeBase64("rnode"),
+        ).joinToString("\t")
+
+        assertEquals(
+            ReticulumEvent.NearbyPeerHeard(
+                NearbyPeer(
+                    address = address.lowercase(),
+                    name = "Wren",
+                    bleHeardMillis = 1_800_000_000_000L,
+                    bleHops = 1,
+                    networkHeardMillis = 1_799_999_000_000L,
+                    networkHops = 4,
+                    networkKind = "rnode",
+                ),
+            ),
+            parseRrcBridgeEvent(line)?.event,
+        )
+    }
+
+    @Test
+    fun nearbyPeopleWithoutAValidAddressOrAnyReadingAreIgnored() {
+        fun line(address: String, bleHeard: String, networkHeard: String) = listOf(
+            "NEARBY_PEER", encodeBridgeBase64(address), encodeBridgeBase64("Wren"),
+            bleHeard, "1", networkHeard, "2", encodeBridgeBase64("tcp"),
+        ).joinToString("\t")
+
+        assertEquals(null, parseRrcBridgeEvent(line("short", "1800000000000", "0")))
+        assertEquals(null, parseRrcBridgeEvent(line("abcdef0123456789abcdef0123456789", "0", "0")))
+        assertEquals(null, parseRrcBridgeEvent("NEARBY_PEER\t${encodeBridgeBase64("abcdef0123456789abcdef0123456789")}"))
+    }
+
+    @Test
     fun noticesKeepTheirSystemFlagAndMayBeDeliveredWithoutARoom() {
         val line = listOf(
             "MESSAGE", encodeBridgeBase64("notice-1"), "", encodeBridgeBase64("hub"),

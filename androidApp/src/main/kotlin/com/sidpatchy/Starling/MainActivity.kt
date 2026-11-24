@@ -53,6 +53,7 @@ class MainActivity : ComponentActivity() {
         val controller = AndroidReticulumNodeController(
             applicationContext,
             requestBluetoothPermissions = { requestBluetoothPermissions(rnodeBluetoothPermissions()) },
+            requestBlePeeringPermissions = { requestBluetoothPermissions(AndroidBlePeerBridge.requiredPermissions()) },
             rnodeBlePicker = picker,
         )
         val reticulumTransport = AndroidReticulumTransport(applicationContext)

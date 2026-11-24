@@ -79,6 +79,8 @@ internal fun IdentityPage(
     onExportIdentity: () -> Unit,
     onDeleteIdentity: () -> Unit,
     onDisconnectNode: () -> Unit,
+    canAnnounce: Boolean = false,
+    onAnnounce: () -> Unit = {},
     globalNickname: String,
     networks: List<ChatNetwork>,
     onGlobalNicknameChange: (String) -> Unit,
@@ -161,8 +163,12 @@ internal fun IdentityPage(
                             if (localDeliveryAddress.isNullOrBlank()) {
                                 Text("Not available right now.", color = Muted, fontSize = 12.sp)
                             } else {
-                                SelectionContainer {
-                                    Text("lxmf://$localDeliveryAddress", color = Accent, fontSize = 13.sp, fontFamily = FontFamily.Monospace)
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    SelectionContainer(Modifier.weight(1f)) {
+                                        Text("lxmf://$localDeliveryAddress", color = Accent, fontSize = 13.sp, fontFamily = FontFamily.Monospace)
+                                    }
+                                    Spacer(Modifier.width(8.dp))
+                                    AnnounceButton(enabled = canAnnounce, onAnnounce = { onDismissKeyboard(); onAnnounce() })
                                 }
                             }
                         }
@@ -373,8 +379,8 @@ private fun reticulumNodeSummary(state: ReticulumNodeState): String = when (stat
     is ReticulumNodeState.Running -> when {
         state.sharedInstanceConnected -> "Attached to the existing local RNS shared instance."
         else -> {
-            val online = state.onlineTcpPeerIds.size + state.onlineRNodePorts.size
-            val total = state.tcpPeers.size + state.rnodeInterfaces.size
+            val online = state.onlineInterfaceCount
+            val total = state.configuredInterfaceCount
             if (total == 0) "Running without a configured interface."
             else "$online of $total configured interfaces online."
         }

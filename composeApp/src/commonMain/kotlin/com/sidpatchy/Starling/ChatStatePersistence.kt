@@ -36,6 +36,8 @@ data class PersistedChatState(
     val globalNickname: String = "Starling",
     val uiSettings: StarlingUiSettings = StarlingUiSettings(),
     val roomMemberIds: Map<String, Set<String>> = emptyMap(),
+    /** People heard over network interfaces; Bluetooth readings are not stored. */
+    val nearbyPeers: List<NearbyPeer> = emptyList(),
 )
 
 /** Small versioned text codec to avoid platform-specific serialization APIs. */
@@ -79,6 +81,7 @@ object ChatStateCodec {
                     radio.bleName.orEmpty(), radio.pairedByStarling.bit(),
                 )
             }
+            if (config.blePeeringEnabled) appendRecord("E", true.bit())
         }
         state.networks.forEach { network ->
             appendRecord("N", network.id, network.name, network.hubDestination.orEmpty(), network.rrcNickname.orEmpty())
@@ -101,6 +104,12 @@ object ChatStateCodec {
                 request.isPreview.bit(), request.timestampMillis?.toString().orEmpty(),
             )
         }
+        state.nearbyPeers.filter { it.networkHeardMillis > 0 && !it.isPreview }.forEach { peer ->
+            appendRecord(
+                "Y", peer.address, peer.name, peer.networkHeardMillis.toString(),
+                peer.networkHops.toString(), peer.networkKind,
+            )
+        }
         state.roomMessages.forEach { (roomId, messages) ->
             messages.forEach { appendMessage("R", roomId, it) }
         }
@@ -121,11 +130,13 @@ object ChatStateCodec {
         val contacts = linkedSetOf<String>()
         val blocked = linkedSetOf<String>()
         val requests = linkedMapOf<String, ChatContactRequest>()
+        val nearbyPeers = linkedMapOf<String, NearbyPeer>()
         val rooms = linkedMapOf<String, MutableList<ChatMessage>>()
         val direct = linkedMapOf<String, MutableList<ChatMessage>>()
         var nodeMode: ReticulumRuntimeMode? = null
         val tcpPeers = mutableListOf<ReticulumTcpPeer>()
         val rnodeInterfaces = mutableListOf<ReticulumRNodeInterface>()
+        var blePeeringEnabled = false
         var preferredHubNetworkId: String? = null
         var activeHubNetworkId: String? = null
         var localIdentityHash: String? = null
@@ -177,6 +188,7 @@ object ChatStateCodec {
                         pairedByStarling = decoded.getOrNull(7) == "1",
                     )
                 }
+                "E" -> blePeeringEnabled = decoded.firstOrNull() == "1"
                 "N" -> if (decoded.size >= 3 && decoded[0].isNotBlank() && decoded[2].isNotBlank()) {
                     val network = ChatNetwork(
                         id = decoded[0],
@@ -212,6 +224,19 @@ object ChatStateCodec {
                         timestampMillis = decoded.getOrNull(8)?.toLongOrNull()?.takeIf { it > 0 },
                     )
                     requests[request.id] = request
+                }
+                "Y" -> if (decoded.size >= 5) {
+                    val address = normalizeLxmfAddress(decoded[0])
+                    val heardMillis = decoded[2].toLongOrNull() ?: 0L
+                    if (address != null && heardMillis > 0) {
+                        nearbyPeers[address] = NearbyPeer(
+                            address = address,
+                            name = sanitizeNearbyName(decoded[1]),
+                            networkHeardMillis = heardMillis,
+                            networkHops = decoded[3].toIntOrNull() ?: 0,
+                            networkKind = decoded[4],
+                        )
+                    }
                 }
                 "R", "D" -> if (decoded.size >= 8) {
                     val isSystem = decoded.getOrNull(9) == "1"
@@ -281,7 +306,12 @@ object ChatStateCodec {
             roomMessages = rooms,
             directMessages = direct,
             nodeConfig = nodeMode?.let { mode ->
-                ReticulumNodeConfig(mode = mode, tcpPeers = tcpPeers, rnodeInterfaces = rnodeInterfaces)
+                ReticulumNodeConfig(
+                    mode = mode,
+                    tcpPeers = tcpPeers,
+                    rnodeInterfaces = rnodeInterfaces,
+                    blePeeringEnabled = blePeeringEnabled,
+                )
             },
             preferredHubNetworkId = preferredHubNetworkId,
             activeHubNetworkId = activeHubNetworkId,
@@ -289,6 +319,7 @@ object ChatStateCodec {
             globalNickname = globalNickname,
             uiSettings = uiSettings,
             roomMemberIds = roomMemberIds.mapValues { it.value.toSet() },
+            nearbyPeers = nearbyPeers.values.toList(),
         )
     }
 

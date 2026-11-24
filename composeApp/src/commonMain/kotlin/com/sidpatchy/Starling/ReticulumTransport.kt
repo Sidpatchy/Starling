@@ -64,15 +64,17 @@ data class ReticulumNodeConfig(
     val tcpPeers: List<ReticulumTcpPeer> = emptyList(),
     val rnodeInterfaces: List<ReticulumRNodeInterface> = emptyList(),
     val existingInstanceRpcKeyHex: String? = null,
+    /** Android only: peer directly with nearby phones over Bluetooth LE. */
+    val blePeeringEnabled: Boolean = false,
 ) {
     fun validationError(supportsBleRNodes: Boolean = false): String? {
         if (mode == ReticulumRuntimeMode.EXISTING_SHARED_INSTANCE && !isValidReticulumRpcKey(existingInstanceRpcKeyHex.orEmpty())) {
             return "Enter the existing local RNS instance's RPC key as at least 32 hexadecimal characters."
         }
-        if (mode != ReticulumRuntimeMode.EMBEDDED && (tcpPeers.isNotEmpty() || rnodeInterfaces.isNotEmpty())) {
+        if (mode != ReticulumRuntimeMode.EMBEDDED && (tcpPeers.isNotEmpty() || rnodeInterfaces.isNotEmpty() || blePeeringEnabled)) {
             return "Interfaces can only be configured for Starling's embedded node."
         }
-        if (mode == ReticulumRuntimeMode.EMBEDDED && tcpPeers.isEmpty() && rnodeInterfaces.isEmpty()) {
+        if (mode == ReticulumRuntimeMode.EMBEDDED && tcpPeers.isEmpty() && rnodeInterfaces.isEmpty() && !blePeeringEnabled) {
             return "Add a TCP peer or an RNode interface before starting the embedded node."
         }
         val invalidPeer = tcpPeers.firstOrNull { it.validationError() != null }
@@ -118,10 +120,22 @@ sealed interface ReticulumNodeState {
         val sharedInstanceConnected: Boolean = false,
         val rnodeInterfaces: List<ReticulumRNodeInterface> = emptyList(),
         val onlineRNodePorts: Set<String> = emptySet(),
+        val blePeeringEnabled: Boolean = false,
+        /** The Bluetooth peer interface is up; it may still have no peers. */
+        val blePeeringOnline: Boolean = false,
+        val blePeerCount: Int = 0,
+        /** Bluetooth peering is waiting for the device's Bluetooth to be turned on. */
+        val blePeeringBluetoothOff: Boolean = false,
     ) : ReticulumNodeState {
         val tcpInterfaceOnline: Boolean get() = onlineTcpPeerIds.isNotEmpty()
         val rnodeInterfaceOnline: Boolean get() = onlineRNodePorts.isNotEmpty()
-        val interfaceOnline: Boolean get() = tcpInterfaceOnline || rnodeInterfaceOnline || sharedInstanceConnected
+        val interfaceOnline: Boolean get() =
+            tcpInterfaceOnline || rnodeInterfaceOnline || sharedInstanceConnected || blePeerCount > 0
+        /** Bluetooth peering counts as one interface however many peers it has. */
+        val configuredInterfaceCount: Int get() =
+            tcpPeers.size + rnodeInterfaces.size + if (blePeeringEnabled) 1 else 0
+        val onlineInterfaceCount: Int get() =
+            onlineTcpPeerIds.size + onlineRNodePorts.size + if (blePeeringEnabled && blePeeringOnline) 1 else 0
     }
     data class Failed(val message: String) : ReticulumNodeState
     data class Unavailable(val reason: String) : ReticulumNodeState
@@ -141,6 +155,8 @@ interface ReticulumNodeController {
     val rnodeBlePicker: RNodeBlePicker? get() = null
     /** The Bluetooth RNode the running node connected to, once known. */
     val resolvedBleRNode: StateFlow<ResolvedBleRNode?> get() = NO_RESOLVED_BLE_RNODE
+    /** Whether this platform can peer with nearby devices over Bluetooth LE. */
+    val supportsBlePeering: Boolean get() = false
     suspend fun start(config: ReticulumNodeConfig)
     suspend fun disconnect()
     suspend fun refreshState() = Unit
@@ -230,6 +246,8 @@ sealed interface ReticulumEvent {
     data class DirectMessage(val message: LxmfDirectMessage) : ReticulumEvent
     data class DeliveryStatus(val messageId: String, val address: String, val state: String) : ReticulumEvent
     data class LxmfError(val message: String, val address: String? = null) : ReticulumEvent
+    /** A verified LXMF delivery announce from someone else, merged with earlier readings. */
+    data class NearbyPeerHeard(val peer: NearbyPeer) : ReticulumEvent
     data class MembersChanged(val roomId: String, val members: List<ChatMember>) : ReticulumEvent
     data class Error(
         val message: String,
@@ -259,6 +277,8 @@ interface ReticulumTransport {
     suspend fun sendRoomMessage(roomId: String, body: String, isAction: Boolean = false)
     suspend fun sendDirectMessage(address: String, body: String)
     suspend fun setLocalDisplayName(displayName: String)
+    /** Announce the local LXMF delivery address on every interface. */
+    suspend fun announce()
 }
 
 /** Factory boundary for platform-specific chat transports. */

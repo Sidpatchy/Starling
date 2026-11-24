@@ -78,6 +78,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -134,6 +135,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.time.Clock
 
 private val EMPTY_CHAT_ROOM = ChatRoom("empty", "", "", "", 0)
 private val SidebarEdgeInset = 12.dp
@@ -184,6 +186,19 @@ fun StarlingApp(
     val contactMemberIds by repository.contactMemberIds.collectAsState()
     val knownMembers by repository.knownMembers.collectAsState()
     val contactRequests by repository.contactRequests.collectAsState()
+    val blockedMemberIds by repository.blockedMemberIds.collectAsState()
+    val nearbyPeers by repository.nearbyPeers.collectAsState()
+    // Expiry and "last heard" labels move with the clock, not only with new announces.
+    val nearbyNowMillis by produceState(Clock.System.now().toEpochMilliseconds(), nearbyPeers) {
+        value = Clock.System.now().toEpochMilliseconds()
+        while (true) {
+            delay(30_000)
+            value = Clock.System.now().toEpochMilliseconds()
+        }
+    }
+    val nearbyListing = remember(nearbyPeers, nearbyNowMillis, knownMembers, contactMemberIds) {
+        buildNearbyListing(nearbyPeers, nearbyNowMillis, knownMembers, contactMemberIds)
+    }
     val reticulumNodeState by nodeController.state.collectAsState()
     val reticulumConnectionState by remember(liveChatRepository) {
         liveChatRepository?.connectionState ?: flowOf(ReticulumConnectionState.Disconnected)
@@ -303,6 +318,11 @@ fun StarlingApp(
     var returnToSettingsAfterIdentity by rememberSaveable { mutableStateOf(false) }
     var showIdentityPage by rememberSaveable { mutableStateOf(false) }
     var showContactRequests by rememberSaveable { mutableStateOf(false) }
+    var showNearby by rememberSaveable { mutableStateOf(false) }
+    // The details dialog keeps the row it was opened from, so it can outlive the entry.
+    var nearbyDetail by remember { mutableStateOf<NearbyRow?>(null) }
+    var nearbyNameRequest by remember { mutableStateOf<NearbyPeer?>(null) }
+    var nearbyAddedAddress by remember { mutableStateOf<String?>(null) }
     var showAddContact by rememberSaveable { mutableStateOf(false) }
     var showAddNetwork by rememberSaveable { mutableStateOf(false) }
     var addChannelToNetworkId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -339,6 +359,7 @@ fun StarlingApp(
     var autoConnectAttempted by remember(liveChatRepository) { mutableStateOf(false) }
     val hasBackDestination = showAddContact || showAddNetwork || addChannelToNetworkId != null ||
         roomToManage != null || networkToInspect != null || selectedMember != null || showMembersDrawer ||
+        nearbyNameRequest != null || nearbyDetail != null || showNearby ||
         showContactRequests || showIdentityPage || showSettings || selectedDirectMessageId != null
     PlatformBackHandler(enabled = hasBackDestination) {
         if (keyboardVisible) {
@@ -352,7 +373,10 @@ fun StarlingApp(
                 showAddContact -> showAddContact = false
                 networkToInspect != null -> networkToInspect = null
                 showMembersDrawer -> showMembersDrawer = false
+                nearbyNameRequest != null -> nearbyNameRequest = null
+                nearbyDetail != null -> nearbyDetail = null
                 showContactRequests -> showContactRequests = false
+                showNearby -> showNearby = false
                 showIdentityPage -> {
                     showIdentityPage = false
                     if (returnToSettingsAfterIdentity) {
@@ -371,6 +395,7 @@ fun StarlingApp(
             selectedDirectMessageId = null
             selectedMember = null
             showContactRequests = false
+            showNearby = false
             showIdentityPage = false
             networkToInspect = null
         }
@@ -381,6 +406,7 @@ fun StarlingApp(
         showIdentityPage = true
         showSettings = false
         showContactRequests = false
+        showNearby = false
         selectedDirectMessageId = null
     }
     val onGreeterContinueInPreview: () -> Unit = {
@@ -399,6 +425,57 @@ fun StarlingApp(
             showIdentityPage = false
             networkToInspect = null
         }
+        // Sample and live people never share a dialog.
+        nearbyDetail = null
+        nearbyNameRequest = null
+        nearbyAddedAddress = null
+    }
+    val nodeRunning = !previewMode && reticulumNodeState is ReticulumNodeState.Running
+    val nearbyBadgeCount = if (nodeRunning) nearbyListing.newBluetoothCount else 0
+    val openNearby: () -> Unit = {
+        selectedDirectMessageId = null
+        showNearby = true
+        showContactRequests = false
+        showSettings = false
+        showIdentityPage = false
+    }
+    val announceNow: () -> Unit = { scope.launch { liveChatRepository?.announce() } }
+    val addNearbyContact: (NearbyRow) -> Unit = { row ->
+        if (row.peer.name.isBlank()) {
+            nearbyNameRequest = row.peer
+        } else if (repository.addContactFromAnnounce(row.peer) != null && nearbyDetail?.peer?.address == row.peer.address) {
+            nearbyAddedAddress = row.peer.address
+        }
+    }
+    val nearbyPage: @Composable (Boolean, Boolean, () -> Unit) -> Unit = { compact, showNavigationButton, onOpenNavigation ->
+        NearbyPeoplePage(
+            listing = nearbyListing,
+            nowMillis = nearbyNowMillis,
+            previewMode = previewMode,
+            nodeRunning = nodeRunning,
+            supportsBlePeering = nodeController.supportsBlePeering,
+            blePeeringEnabled = (reticulumNodeState as? ReticulumNodeState.Running)?.blePeeringEnabled == true,
+            onAnnounce = announceNow,
+            onAdd = addNearbyContact,
+            onDetails = { row ->
+                dismissKeyboard()
+                nearbyAddedAddress = null
+                nearbyDetail = row
+            },
+            onOpenSettings = {
+                showNearby = false
+                settingsSection = SettingsSection.NETWORK
+                showSettingsIndex = false
+                showSettings = true
+            },
+            compact = compact,
+            showNavigationButton = showNavigationButton,
+            onOpenNavigation = onOpenNavigation,
+        )
+    }
+    LaunchedEffect(nearbyDetail, blockedMemberIds, knownMembers) {
+        val open = nearbyDetail ?: return@LaunchedEffect
+        if (isNearbyPeerBlocked(open.peer, knownMembers, blockedMemberIds)) nearbyDetail = null
     }
     LaunchedEffect(nodeController, liveChatRepository, identityManager) {
         identityManager?.refresh()
@@ -541,6 +618,7 @@ fun StarlingApp(
         showSettings = showSettings,
         showIdentityPage = showIdentityPage,
         showContactRequests = showContactRequests,
+        showNearby = showNearby,
     )
     val directMessages by remember(selectedDirectMessageId) {
         selectedDirectMessageId?.let(repository::directMessages) ?: flowOf(emptyList())
@@ -573,11 +651,14 @@ fun StarlingApp(
                                 selectedRoomId = it
                                 selectedDirectMessageId = null
                                 showContactRequests = false
+                                showNearby = false
                                 showSettings = false
                                 showIdentityPage = false
                             },
-                            onContactSelected = { selectedDirectMessageId = it.id; showContactRequests = false; showSettings = false; showIdentityPage = false },
-                            onRequestsClick = { selectedDirectMessageId = null; showContactRequests = true; showSettings = false; showIdentityPage = false },
+                            onContactSelected = { selectedDirectMessageId = it.id; showContactRequests = false; showNearby = false; showSettings = false; showIdentityPage = false },
+                            onRequestsClick = { selectedDirectMessageId = null; showContactRequests = true; showNearby = false; showSettings = false; showIdentityPage = false },
+                            nearbyCount = nearbyBadgeCount,
+                            onNearbyClick = openNearby,
                             onAddContact = { showAddContact = true },
                             onAddNetwork = { showAddNetwork = true },
                             onAddChannel = { addChannelToNetworkId = it },
@@ -597,6 +678,7 @@ fun StarlingApp(
                                 showSettings = false
                                 returnToSettingsAfterIdentity = false
                                 showContactRequests = false
+                                showNearby = false
                                 selectedDirectMessageId = null
                             },
                         )
@@ -649,6 +731,7 @@ fun StarlingApp(
                                 rnodeBlePicker = nodeController.rnodeBlePicker,
                                 resolvedBleRNode = resolvedBleRNode,
                                 rnodeUpgradeNote = rnodeUpgradeNote,
+                                supportsBlePeering = nodeController.supportsBlePeering,
                                 rrcState = visibleConnectionState,
                                 rrcError = visibleRrcError,
                                 localDeliveryAddress = visibleDeliveryAddress,
@@ -680,6 +763,8 @@ fun StarlingApp(
                                 showNavigationButton = !showDesktopNavigation,
                                 onOpenNavigation = { dismissKeyboard(); showDesktopNavigation = true },
                             )
+                        } else if (showNearby) {
+                            nearbyPage(false, !showDesktopNavigation) { dismissKeyboard(); showDesktopNavigation = true }
                         } else if (showIdentityPage) {
                             IdentityPage(
                                 previewMode = previewMode,
@@ -697,6 +782,8 @@ fun StarlingApp(
                                 onExportIdentity = exportIdentity,
                                 onDeleteIdentity = deleteIdentity,
                                 onDisconnectNode = disconnectIdentityNode,
+                                canAnnounce = nodeRunning && liveChatRepository != null,
+                                onAnnounce = announceNow,
                                 globalNickname = globalNickname,
                                 networks = networks,
                                 onGlobalNicknameChange = { liveChatRepository?.saveGlobalNickname(it) },
@@ -750,6 +837,7 @@ fun StarlingApp(
                                             showIdentityPage = true
                                             showSettings = false
                                             showContactRequests = false
+                                            showNearby = false
                                             selectedDirectMessageId = null
                                         },
                                     )
@@ -782,7 +870,7 @@ fun StarlingApp(
                                 onSend = { text -> scope.launch { repository.send(selectedRoom.id, text) } },
                             )
                         }
-                        if (!forceGreeterVisible && rooms.isNotEmpty() && showMembersPanel && !showSettings && !showContactRequests && !showIdentityPage && selectedDirectMessage == null) {
+                        if (!forceGreeterVisible && rooms.isNotEmpty() && showMembersPanel && !showSettings && !showContactRequests && !showNearby && !showIdentityPage && selectedDirectMessage == null) {
                             MembersPane(
                                 members = members,
                                 offlineMembers = offlineMembers,
@@ -819,6 +907,7 @@ fun StarlingApp(
                                         selectedRoomId = roomId
                                         selectedDirectMessageId = null
                                         showContactRequests = false
+                                        showNearby = false
                                         showSettings = false
                                         showIdentityPage = false
                                         scope.launch { drawerState.close() }
@@ -826,6 +915,7 @@ fun StarlingApp(
                                     onContactSelected = { member ->
                                         selectedDirectMessageId = member.id
                                         showContactRequests = false
+                                        showNearby = false
                                         showSettings = false
                                         showIdentityPage = false
                                         scope.launch { drawerState.close() }
@@ -833,8 +923,14 @@ fun StarlingApp(
                                     onRequestsClick = {
                                         selectedDirectMessageId = null
                                         showContactRequests = true
+                                        showNearby = false
                                         showSettings = false
                                         showIdentityPage = false
+                                        scope.launch { drawerState.close() }
+                                    },
+                                    nearbyCount = nearbyBadgeCount,
+                                    onNearbyClick = {
+                                        openNearby()
                                         scope.launch { drawerState.close() }
                                     },
                                     onAddContact = { showAddContact = true },
@@ -864,6 +960,7 @@ fun StarlingApp(
                                         showSettings = false
                                         returnToSettingsAfterIdentity = false
                                         showContactRequests = false
+                                        showNearby = false
                                         selectedDirectMessageId = null
                                         scope.launch { drawerState.close() }
                                     },
@@ -922,6 +1019,7 @@ fun StarlingApp(
                                 rnodeBlePicker = nodeController.rnodeBlePicker,
                                 resolvedBleRNode = resolvedBleRNode,
                                 rnodeUpgradeNote = rnodeUpgradeNote,
+                                supportsBlePeering = nodeController.supportsBlePeering,
                                 rrcState = visibleConnectionState,
                                 rrcError = visibleRrcError,
                                 localDeliveryAddress = visibleDeliveryAddress,
@@ -953,6 +1051,8 @@ fun StarlingApp(
                                 compact = true,
                                 onOpenNavigation = { dismissKeyboard(); scope.launch { drawerState.open() } },
                             )
+                        } else if (showNearby) {
+                            nearbyPage(true, true) { dismissKeyboard(); scope.launch { drawerState.open() } }
                         } else if (showIdentityPage) {
                             IdentityPage(
                                 previewMode = previewMode,
@@ -970,6 +1070,8 @@ fun StarlingApp(
                                 onExportIdentity = exportIdentity,
                                 onDeleteIdentity = deleteIdentity,
                                 onDisconnectNode = disconnectIdentityNode,
+                                canAnnounce = nodeRunning && liveChatRepository != null,
+                                onAnnounce = announceNow,
                                 globalNickname = globalNickname,
                                 networks = networks,
                                 onGlobalNicknameChange = { liveChatRepository?.saveGlobalNickname(it) },
@@ -1023,6 +1125,7 @@ fun StarlingApp(
                                         showIdentityPage = true
                                         showSettings = false
                                         showContactRequests = false
+                                        showNearby = false
                                         selectedDirectMessageId = null
                                     },
                                     modifier = Modifier.fillMaxSize(),
@@ -1138,15 +1241,49 @@ fun StarlingApp(
                                 ?: ChatMember("lxmf-$normalizedAddress", cleanName, address = normalizedAddress)
                             repository.addContact(contact)
                         }
-                        if (added != null) {
-                            selectedDirectMessageId = added.id
-                            showContactRequests = false
-                            showSettings = false
-                            showIdentityPage = false
-                            showAddContact = false
-                        }
+                        // Adding a contact never opens or creates a conversation.
+                        if (added != null) showAddContact = false
                     },
                     onDismiss = { showAddContact = false },
+                )
+            }
+
+            nearbyDetail?.let { opened ->
+                val liveRow = nearbyListing.row(opened.peer.address)
+                val contact = nearbyContactFor(opened.peer, knownMembers, contactMemberIds)
+                NearbyPeerDialog(
+                    row = liveRow ?: opened.copy(
+                        contact = contact,
+                        displayName = contact?.displayName?.takeIf { it.isNotBlank() } ?: opened.peer.name,
+                    ),
+                    expired = liveRow == null,
+                    nowMillis = nearbyNowMillis,
+                    justAdded = nearbyAddedAddress == opened.peer.address,
+                    onAdd = { addNearbyContact(liveRow ?: opened) },
+                    onMessage = { member ->
+                        // Selecting a contact shows their timeline; nothing is created until a message is sent.
+                        selectedDirectMessageId = member.id
+                        showNearby = false
+                        showContactRequests = false
+                        showSettings = false
+                        showIdentityPage = false
+                        nearbyDetail = null
+                    },
+                    onDismiss = { nearbyDetail = null },
+                )
+            }
+
+            nearbyNameRequest?.let { peer ->
+                AddContactDialog(
+                    previewMode = previewMode,
+                    fixedAddress = peer.address,
+                    onAdd = { displayName, _ ->
+                        if (repository.addContactFromAnnounce(peer, displayName) != null) {
+                            if (nearbyDetail?.peer?.address == peer.address) nearbyAddedAddress = peer.address
+                            nearbyNameRequest = null
+                        }
+                    },
+                    onDismiss = { nearbyNameRequest = null },
                 )
             }
 
@@ -1172,6 +1309,7 @@ fun StarlingApp(
                             selectedRoomId = room.id
                             selectedDirectMessageId = null
                             showContactRequests = false
+                            showNearby = false
                             showSettings = false
                             addChannelToNetworkId = null
                         },
@@ -1471,19 +1609,22 @@ private fun AddContactDialog(
     previewMode: Boolean,
     onAdd: (displayName: String, address: String) -> Unit,
     onDismiss: () -> Unit,
+    /** Set when naming someone heard nearby: the address is shown but cannot be edited. */
+    fixedAddress: String? = null,
 ) {
     var displayName by rememberSaveable { mutableStateOf("") }
-    var address by rememberSaveable { mutableStateOf("") }
-    val normalizedAddress = normalizeLxmfAddress(address)
-    val addressError = !previewMode && address.isNotBlank() && normalizedAddress == null
+    var address by rememberSaveable { mutableStateOf(fixedAddress.orEmpty()) }
+    val normalizedAddress = fixedAddress ?: normalizeLxmfAddress(address)
+    val addressError = fixedAddress == null && !previewMode && address.isNotBlank() && normalizedAddress == null
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Add contact", color = Ink) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
-                    if (previewMode) "Add a demo-only contact. No LXMF address is needed and nothing is sent."
-                    else "Add someone by their LXMF delivery address. Starling will open the conversation when they’re added.",
+                    if (fixedAddress != null) "This person hasn’t shared a name. Choose one to remember them by."
+                    else if (previewMode) "Add a demo-only contact. No LXMF address is needed and nothing is sent."
+                    else "Add someone by their LXMF delivery address. They’ll appear under Direct Messages.",
                     color = Muted,
                     fontSize = 12.sp,
                 )
@@ -1493,7 +1634,15 @@ private fun AddContactDialog(
                     label = { Text("Name") },
                     singleLine = true,
                 )
-                if (!previewMode) {
+                if (fixedAddress != null) {
+                    OutlinedTextField(
+                        value = fixedAddress,
+                        onValueChange = {},
+                        label = { Text("LXMF address") },
+                        readOnly = true,
+                        textStyle = TextStyle(fontSize = 11.sp),
+                    )
+                } else if (!previewMode) {
                     OutlinedTextField(
                         value = address,
                         onValueChange = { address = it },
@@ -1514,7 +1663,7 @@ private fun AddContactDialog(
         },
         confirmButton = {
             TextButton(
-                enabled = displayName.isNotBlank() && (previewMode || normalizedAddress != null),
+                enabled = displayName.isNotBlank() && (fixedAddress != null || previewMode || normalizedAddress != null),
                 onClick = { onAdd(displayName.trim(), normalizedAddress.orEmpty()) },
             ) { Text("Add contact", color = Accent) }
         },
@@ -1984,6 +2133,8 @@ private fun RoomSidebar(
     onRoomSelected: (String) -> Unit,
     onContactSelected: (ChatMember) -> Unit,
     onRequestsClick: () -> Unit,
+    nearbyCount: Int,
+    onNearbyClick: () -> Unit,
     onAddContact: () -> Unit,
     onAddNetwork: () -> Unit,
     onAddChannel: (String) -> Unit,
@@ -2009,8 +2160,8 @@ private fun RoomSidebar(
         rrcState is ReticulumConnectionState.Connecting || rrcState == ReticulumConnectionState.Starting ->
             "Connecting to hub" to Color(0xFFE1A448)
         nodeState is ReticulumNodeState.Running -> {
-            val totalInterfaces = nodeState.tcpPeers.size + nodeState.rnodeInterfaces.size
-            val onlineInterfaces = nodeState.onlineTcpPeerIds.size + nodeState.onlineRNodePorts.size
+            val totalInterfaces = nodeState.configuredInterfaceCount
+            val onlineInterfaces = nodeState.onlineInterfaceCount
             when {
                 nodeState.sharedInstanceConnected -> "Shared RNS instance connected" to Color(0xFF48A868)
                 totalInterfaces == 0 -> "Reticulum running without interfaces" to Muted
@@ -2164,14 +2315,35 @@ private fun RoomSidebar(
             }
             if (contacts.isEmpty()) {
                 Text(
-                    "Add a contact by LXMF address to start a conversation.",
+                    "Add a contact by LXMF address, or find people under Nearby people.",
                     modifier = Modifier.padding(start = 22.dp, end = 16.dp, bottom = 8.dp),
                     color = Muted,
                     fontSize = 11.sp,
                 )
             }
             Row(
-                modifier = Modifier.fillMaxWidth().padding(start = SidebarEdgeInset, end = SidebarEdgeInset, top = 8.dp, bottom = 6.dp)
+                modifier = Modifier.fillMaxWidth().padding(start = SidebarEdgeInset, end = SidebarEdgeInset, top = 8.dp)
+                    .heightIn(min = InteractiveRowMinHeight).clip(RoundedCornerShape(9.dp))
+                    .clickable(role = Role.Button) { onDismissKeyboard(); onNearbyClick() }
+                    .padding(start = 10.dp, end = 8.dp, top = 7.dp, bottom = 7.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("Nearby people", modifier = Modifier.weight(1f), color = Ink, fontSize = 12.sp)
+                if (nearbyCount > 0) {
+                    Text(
+                        nearbyCount.toString(),
+                        // As with requests, give the bare number its meaning for screen readers.
+                        modifier = Modifier
+                            .semantics { contentDescription = nearbyBadgeDescription(nearbyCount) }
+                            .clip(CircleShape).background(PaleAccent).padding(horizontal = 7.dp, vertical = 3.dp),
+                        color = Accent,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(start = SidebarEdgeInset, end = SidebarEdgeInset, top = 2.dp, bottom = 6.dp)
                     .heightIn(min = InteractiveRowMinHeight).clip(RoundedCornerShape(9.dp))
                     .clickable(role = Role.Button) { onDismissKeyboard(); onRequestsClick() }
                     .padding(start = 10.dp, end = 8.dp, top = 7.dp, bottom = 7.dp),
@@ -2262,8 +2434,8 @@ private fun NetworkStatusDialog(
         is ReticulumNodeState.Running -> when {
             state.sharedInstanceConnected -> "Attached to an existing shared instance."
             else -> {
-                val online = state.onlineTcpPeerIds.size + state.onlineRNodePorts.size
-                val total = state.tcpPeers.size + state.rnodeInterfaces.size
+                val online = state.onlineInterfaceCount
+                val total = state.configuredInterfaceCount
                 if (total == 0) "Reticulum is running without configured interfaces."
                 else "$online of $total configured interfaces online."
             }
@@ -2661,7 +2833,7 @@ private fun MemberRow(member: ChatMember, isContact: Boolean, isOffline: Boolean
 }
 
 @Composable
-private fun MemberAvatar(member: ChatMember, size: androidx.compose.ui.unit.Dp = 30.dp) {
+internal fun MemberAvatar(member: ChatMember, size: androidx.compose.ui.unit.Dp = 30.dp) {
     Box(
         Modifier.size(size).clip(CircleShape).background(nickAvatarColor(member.displayName)),
         contentAlignment = Alignment.Center,
@@ -2733,7 +2905,7 @@ private fun PersonGlyph(color: Color) {
 }
 
 @Composable
-private fun PreviewNotice(message: String = "Messages stay on this device for now — RRC isn’t connected yet.") {
+internal fun PreviewNotice(message: String = "Messages stay on this device for now — RRC isn’t connected yet.") {
     val isLightTheme = LocalStarlingPalette.current == LightPalette
     val bannerBackground = if (isLightTheme) Color(0xFFFFF7E8) else Color(0xFF383226)
     val bannerAccent = if (isLightTheme) Color(0xFF986520) else Color(0xFFE1B86A)
@@ -3217,7 +3389,7 @@ private fun MessageComposer(
     }
 }
 
-private fun ircNickTextColor(nickname: String, darkTheme: Boolean): Color =
+internal fun ircNickTextColor(nickname: String, darkTheme: Boolean): Color =
     hslColor(ircNickHue(nickname), saturation = 0.70f, lightness = if (darkTheme) 0.72f else 0.25f)
 
 private fun nickAvatarColor(nickname: String): Color =

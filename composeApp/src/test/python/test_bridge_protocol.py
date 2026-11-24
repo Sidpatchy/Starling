@@ -394,7 +394,10 @@ class BridgeProtocolTest(unittest.TestCase):
         protocol.dispatch_lxmf("LXMF_SEND\t{}\t{}".format(protocol.encode("contact"), protocol.encode("Hello 🌍")), lxmf)
         lxmf.set_display_name.assert_called_once_with("")
         lxmf.send_direct.assert_called_once_with("contact", "Hello 🌍")
-        for command in ["UNKNOWN", "LXMF_SET_NAME", "LXMF_SEND\tZg=="]:
+        lxmf.announce.assert_not_called()
+        protocol.dispatch_lxmf("LXMF_ANNOUNCE", lxmf)
+        lxmf.announce.assert_called_once_with()
+        for command in ["UNKNOWN", "LXMF_SET_NAME", "LXMF_SEND\tZg==", "LXMF_ANNOUNCE\tunexpected"]:
             with self.subTest(command=command), self.assertRaises(ValueError):
                 protocol.dispatch_lxmf(command, lxmf)
 

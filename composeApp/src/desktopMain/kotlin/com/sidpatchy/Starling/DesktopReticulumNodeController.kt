@@ -201,6 +201,7 @@ class DesktopReticulumNodeController : ReticulumNodeController {
         extractBridgeResource("python/starling_rns.py", bridgeDirectory.resolve("starling_rns.py"))
         extractBridgeResource("python/starling_rrc.py", bridgeDirectory.resolve("starling_rrc.py"))
         extractBridgeResource("python/starling_lxmf.py", bridgeDirectory.resolve("starling_lxmf.py"))
+        extractBridgeResource("python/starling_nearby.py", bridgeDirectory.resolve("starling_nearby.py"))
         extractBridgeResource("python/starling_rns_service.py", bridgeDirectory.resolve("starling_rns_service.py"))
 
         return runtimePython

@@ -5,6 +5,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.content.ServiceConnection
 import android.os.Build
 import android.os.IBinder
@@ -21,6 +22,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 class AndroidReticulumNodeController(
     context: Context,
     private val requestBluetoothPermissions: suspend () -> Boolean = { false },
+    private val requestBlePeeringPermissions: suspend () -> Boolean = { false },
     override val rnodeBlePicker: RNodeBlePicker? = null,
 ) : ReticulumNodeController {
     private val appContext = context.applicationContext
@@ -31,6 +33,8 @@ class AndroidReticulumNodeController(
     override val supportsBleRNodes: Boolean = true
     private val _resolvedBleRNode = MutableStateFlow<ResolvedBleRNode?>(null)
     override val resolvedBleRNode: StateFlow<ResolvedBleRNode?> = _resolvedBleRNode.asStateFlow()
+    override val supportsBlePeering: Boolean =
+        appContext.packageManager.hasSystemFeature(PackageManager.FEATURE_BLUETOOTH_LE)
     private var pendingStateQuery: CompletableDeferred<ReticulumNodeState>? = null
     private var watchingServiceProcess = false
 
@@ -155,6 +159,17 @@ class AndroidReticulumNodeController(
             return
         }
 
+        if (config.blePeeringEnabled && !supportsBlePeering) {
+            _state.value = ReticulumNodeState.Failed("This device does not support Bluetooth peers.")
+            return
+        }
+        if (config.blePeeringEnabled && !requestBlePeeringPermissions()) {
+            _state.value = ReticulumNodeState.Failed(
+                "Bluetooth permission is required for Bluetooth peers. Grant it and try again.",
+            )
+            return
+        }
+
         _state.value = ReticulumNodeState.Starting(config.mode)
         val peersJson = JSONArray()
         config.tcpPeers.forEach { peer ->
@@ -185,6 +200,7 @@ class AndroidReticulumNodeController(
             putExtra(ReticulumNodeService.EXTRA_MODE, config.mode.name)
             putExtra(ReticulumNodeService.EXTRA_TCP_PEERS, peersJson.toString())
             putExtra(ReticulumNodeService.EXTRA_RNODE_INTERFACES, radiosJson.toString())
+            putExtra(ReticulumNodeService.EXTRA_BLE_PEERS, config.blePeeringEnabled)
             putExtra(ReticulumNodeService.EXTRA_RPC_KEY, config.existingInstanceRpcKeyHex.orEmpty())
         }
         try {
@@ -268,6 +284,9 @@ class AndroidReticulumNodeController(
                     )
                     if (radio.optBoolean("online")) onlineRNodePorts += port.lowercase()
                 }
+                val blePeers = runCatching {
+                    JSONObject(intent.getStringExtra(ReticulumNodeService.EXTRA_BLE_PEER_STATUS).orEmpty())
+                }.getOrElse { JSONObject() }
                 ReticulumNodeState.Running(
                     mode = mode,
                     tcpPeers = tcpPeers,
@@ -275,6 +294,10 @@ class AndroidReticulumNodeController(
                     sharedInstanceConnected = intent.getBooleanExtra(ReticulumNodeService.EXTRA_SHARED, false),
                     rnodeInterfaces = rnodeInterfaces,
                     onlineRNodePorts = onlineRNodePorts,
+                    blePeeringEnabled = blePeers.optBoolean("enabled", false),
+                    blePeeringOnline = blePeers.optBoolean("online", false),
+                    blePeerCount = blePeers.optInt("peer_count", 0),
+                    blePeeringBluetoothOff = !blePeers.optBoolean("bluetooth_on", true),
                 )
             }
             ReticulumNodeService.STATE_FAILED -> ReticulumNodeState.Failed(

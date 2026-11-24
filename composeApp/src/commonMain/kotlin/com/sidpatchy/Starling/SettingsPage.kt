@@ -179,6 +179,7 @@ internal fun SettingsPage(
     rnodeBlePicker: RNodeBlePicker? = null,
     resolvedBleRNode: ResolvedBleRNode? = null,
     rnodeUpgradeNote: String? = null,
+    supportsBlePeering: Boolean = false,
     rrcState: ReticulumConnectionState,
     rrcError: String?,
     localDeliveryAddress: String?,
@@ -246,6 +247,7 @@ internal fun SettingsPage(
             },
         ),
     ) { mutableStateOf(nodeConfig?.rnodeInterfaces.orEmpty()) }
+    var blePeeringEnabled by rememberSaveable { mutableStateOf(nodeConfig?.blePeeringEnabled ?: false) }
     var existingRpcKey by remember { mutableStateOf("") }
     var selectedHubNetworkId by rememberSaveable { mutableStateOf(preferredHubNetworkId.orEmpty()) }
     var connectionInputError by rememberSaveable { mutableStateOf<String?>(null) }
@@ -273,6 +275,7 @@ internal fun SettingsPage(
                 )
             },
             rnodeInterfaces = rnodeInterfaces.map { radio -> radio.copy(port = radio.port.trim()) },
+            blePeeringEnabled = supportsBlePeering && blePeeringEnabled,
         )
         ReticulumRuntimeMode.EXISTING_SHARED_INSTANCE -> ReticulumNodeConfig(
             mode = runtimeMode,
@@ -300,6 +303,7 @@ internal fun SettingsPage(
                 if (rnodeInterfaces.isEmpty() && state.rnodeInterfaces.isNotEmpty()) {
                     rnodeInterfaces = state.rnodeInterfaces
                 }
+                if (state.blePeeringEnabled) blePeeringEnabled = true
             }
             is ReticulumNodeState.Starting -> runtimeModeName = state.mode.name
             is ReticulumNodeState.PreparingRuntime -> Unit
@@ -311,13 +315,14 @@ internal fun SettingsPage(
         val resolved = resolvedBleRNode ?: return@LaunchedEffect
         upgradeRNodeBleInterfaces(rnodeInterfaces, resolved)?.let { (upgraded, _) -> rnodeInterfaces = upgraded }
     }
-    LaunchedEffect(runtimeModeName, tcpPeers, rnodeInterfaces) {
+    LaunchedEffect(runtimeModeName, tcpPeers, rnodeInterfaces, blePeeringEnabled) {
         onNodeConfigChange(
             ReticulumNodeConfig(
                 mode = runCatching { ReticulumRuntimeMode.valueOf(runtimeModeName) }
                     .getOrDefault(ReticulumRuntimeMode.EMBEDDED),
                 tcpPeers = tcpPeers,
                 rnodeInterfaces = rnodeInterfaces,
+                blePeeringEnabled = supportsBlePeering && blePeeringEnabled,
             ),
         )
     }
@@ -586,7 +591,7 @@ internal fun SettingsPage(
                                 ) {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
                                         Text("TCP connection ${index + 1}", modifier = Modifier.weight(1f), color = Ink, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                                        if ((tcpPeers.size > 1 || rnodeInterfaces.isNotEmpty()) && !isRunning && !isStarting) {
+                                        if ((tcpPeers.size > 1 || rnodeInterfaces.isNotEmpty() || (supportsBlePeering && blePeeringEnabled)) && !isRunning && !isStarting) {
                                             TextButton(onClick = {
                                                 onDismissKeyboard()
                                                 tcpPeers = tcpPeers.filterIndexed { i, _ -> i != index }
@@ -805,6 +810,31 @@ internal fun SettingsPage(
                             }
                                 }
                             }
+                            if (supportsBlePeering) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                                        .toggleable(
+                                            value = blePeeringEnabled,
+                                            enabled = !isRunning && !isStarting,
+                                            role = Role.Switch,
+                                        ) { enabled ->
+                                            onDismissKeyboard()
+                                            if (enabled && tcpPeers.size == 1 && tcpPeers.single().host.isBlank()) {
+                                                tcpPeers = emptyList()
+                                            }
+                                            blePeeringEnabled = enabled
+                                            connectionInputError = null
+                                        }
+                                        .semantics(mergeDescendants = true) {},
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Column(Modifier.weight(1f)) {
+                                        Text("Bluetooth peers", color = Ink, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                                        Text("Connect directly to nearby Reticulum devices over Bluetooth.", color = Muted, fontSize = 11.sp)
+                                    }
+                                    Switch(checked = blePeeringEnabled, onCheckedChange = null, enabled = !isRunning && !isStarting)
+                                }
+                            }
                         } else {
                             Text(
                                 "Advanced: attach to an RNS shared instance already running on this device. Its RPC key must match; default ports are 37428/37429.",
@@ -838,7 +868,14 @@ internal fun SettingsPage(
                                     state.tcpPeers.joinToString {
                                         "${it.host}:${it.port} ${if (it.id in state.onlineTcpPeerIds) "(online)" else if (supportsReticulumProtocol) "(retrying)" else "(offline)"}"
                                     }
+                                state.blePeeringEnabled -> ""
                                 else -> "RNS node is running without a configured interface."
+                            }.let { interfaces ->
+                                if (!state.blePeeringEnabled) interfaces
+                                else listOf(
+                                    interfaces,
+                                    blePeerStatusText(state.blePeerCount, state.blePeeringBluetoothOff) + ".",
+                                ).filter(String::isNotBlank).joinToString(" ")
                             }
                             is ReticulumNodeState.Starting -> "Starting the Reticulum node…"
                             is ReticulumNodeState.PreparingRuntime -> state.detail
@@ -1084,6 +1121,13 @@ private fun OpenSourceAcknowledgements() {
             license = "Reticulum License",
             detail = "Copyright © 2020–2025 Mark Qvist.",
             licenseUrl = "https://github.com/Sidpatchy/Starling/blob/main/licenses/LXMF-LICENSE.txt",
+            onOpenLicense = { uriHandler.openUri(it) },
+        )
+        AcknowledgementCard(
+            name = "ble-reticulum",
+            license = "MIT License",
+            detail = "Copyright © 2025 torlando-tech. Used for Bluetooth peers on Android.",
+            licenseUrl = "https://github.com/Sidpatchy/Starling/blob/main/licenses/BLE-Reticulum-LICENSE.txt",
             onOpenLicense = { uriHandler.openUri(it) },
         )
         AcknowledgementCard(
