@@ -77,7 +77,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: starling-linux-appimage-x86_64-${{ needs.resolve-version.outputs.artifact_version }}
-          path: composeApp/build/appimage/artifacts/Starling-${{ needs.resolve-version.outputs.artifact_version }}-x86_64.AppImage
+          path: composeApp/build/appimage/artifacts/Starling-${{ needs.resolve-version.outputs.app_version }}-x86_64.AppImage
           if-no-files-found: error
 
       - name: Upload Flatpak input image
@@ -193,6 +193,7 @@ jobs:
 
       - name: Build unsigned macOS DMG
         env:
+          APP_VERSION: ${{ needs.resolve-version.outputs.app_version }}
           ARTIFACT_VERSION: ${{ needs.resolve-version.outputs.artifact_version }}
           PACKAGE_VERSION: ${{ needs.resolve-version.outputs.package_version }}
         run: |
