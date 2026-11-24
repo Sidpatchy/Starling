@@ -31,6 +31,7 @@ python3 -m pip install --disable-pip-version-check --no-input --no-deps \
 cp "$ROOT/composeApp/src/main/python/starling_rns.py" "$TEMP_DIR/python-base/"
 cp "$ROOT/composeApp/src/main/python/starling_rrc.py" "$TEMP_DIR/python-base/"
 cp "$ROOT/composeApp/src/main/python/starling_lxmf.py" "$TEMP_DIR/python-base/"
+cp "$ROOT/composeApp/src/main/python/starling_nearby.py" "$TEMP_DIR/python-base/"
 cp "$ROOT/composeApp/src/main/python/starling_rns_service.py" "$TEMP_DIR/python-base/"
 cp "$ROOT/composeApp/src/main/python/starling_bridge_protocol.py" "$TEMP_DIR/python-base/"
 cp "$ROOT/composeApp/src/main/python/starling_identity.py" "$TEMP_DIR/python-base/"

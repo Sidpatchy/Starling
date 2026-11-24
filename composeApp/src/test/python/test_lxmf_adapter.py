@@ -91,6 +91,14 @@ class _FakeRNS:
         def request_path(hash_hex):
             pass
 
+        @staticmethod
+        def register_announce_handler(handler):
+            pass
+
+        @staticmethod
+        def deregister_announce_handler(handler):
+            pass
+
     class Destination:
         def __init__(self, *args, **kwargs):
             pass
