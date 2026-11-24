@@ -97,7 +97,7 @@ internal class AndroidRNodeBluetoothBridge(context: Context) {
                 }
                 if (connection == null) throw IOException("Android did not create a BLE connection.")
                 synchronized(lock) { gatt = connection }
-            }.onFailure { failStartup("Could not connect to the BLE RNode: ${it.message.orEmpty()}") }
+            }.onFailure { handleScanRestartFailure("Could not connect to the BLE RNode: ${it.message.orEmpty()}") }
         }
 
         override fun onScanFailed(errorCode: Int) {
@@ -124,7 +124,7 @@ internal class AndroidRNodeBluetoothBridge(context: Context) {
                         runCatching { gatt.requestMtu(185) }
                     }
                     if (!runCatching { gatt.discoverServices() }.getOrDefault(false)) {
-                        failStartup("Could not discover the BLE RNode services.")
+                        handleGattDisconnect(gatt, "Could not discover the BLE RNode services.")
                     }
                 }
                 BluetoothProfile.STATE_DISCONNECTED ->
@@ -140,14 +140,14 @@ internal class AndroidRNodeBluetoothBridge(context: Context) {
 
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
             if (status != BluetoothGatt.GATT_SUCCESS) {
-                failStartup("Could not inspect the BLE RNode services (status $status).")
+                handleGattDisconnect(gatt, "Could not inspect the BLE RNode services (status $status).")
                 return
             }
             val service = gatt.getService(SERVICE_UUID)
             val rx = service?.getCharacteristic(RX_UUID)
             val tx = service?.getCharacteristic(TX_UUID)
             if (rx == null || tx == null) {
-                failStartup("The BLE device does not provide the RNode Nordic UART service.")
+                handleGattDisconnect(gatt, "The BLE device does not provide the RNode Nordic UART service.")
                 return
             }
             val canWrite = rx.properties and BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE != 0 ||
@@ -155,12 +155,12 @@ internal class AndroidRNodeBluetoothBridge(context: Context) {
             val canNotify = tx.properties and BluetoothGattCharacteristic.PROPERTY_NOTIFY != 0 ||
                 tx.properties and BluetoothGattCharacteristic.PROPERTY_INDICATE != 0
             if (!canWrite || !canNotify) {
-                failStartup("The BLE device's UART characteristics are not compatible with an RNode.")
+                handleGattDisconnect(gatt, "The BLE device's UART characteristics are not compatible with an RNode.")
                 return
             }
             val cccd = tx.getDescriptor(CCCD_UUID)
             if (cccd == null || !runCatching { gatt.setCharacteristicNotification(tx, true) }.getOrDefault(false)) {
-                failStartup("Could not enable BLE RNode notifications.")
+                handleGattDisconnect(gatt, "Could not enable BLE RNode notifications.")
                 return
             }
             synchronized(lock) {
@@ -188,14 +188,14 @@ internal class AndroidRNodeBluetoothBridge(context: Context) {
                 }
             }.getOrDefault(BluetoothGatt.GATT_FAILURE)
             if (result != BluetoothGatt.GATT_SUCCESS) {
-                failStartup("Could not subscribe to BLE RNode notifications.")
+                handleGattDisconnect(gatt, "Could not subscribe to BLE RNode notifications.")
             }
         }
 
         override fun onDescriptorWrite(gatt: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) {
             if (descriptor.uuid != CCCD_UUID) return
             if (status != BluetoothGatt.GATT_SUCCESS) {
-                failStartup("The BLE RNode rejected UART notifications (status $status).")
+                handleGattDisconnect(gatt, "The BLE RNode rejected UART notifications (status $status).")
                 return
             }
             if (!openTcpServer(gatt)) {
@@ -393,6 +393,11 @@ internal class AndroidRNodeBluetoothBridge(context: Context) {
         }
     }
 
+    /**
+     * Drops a link that was lost or could not be set up. During startup that
+     * fails start() with [message]; afterwards the bridge goes back to
+     * retrying, so a failed reconnect cannot leave it idle.
+     */
     private fun handleGattDisconnect(disconnectedGatt: BluetoothGatt, message: String) {
         val wasCurrentGatt = synchronized(lock) {
             if (gatt !== disconnectedGatt) {
