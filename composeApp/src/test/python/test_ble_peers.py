@@ -396,6 +396,86 @@ class AndroidBleDriverTest(unittest.TestCase):
         self.assertEqual(bridge.named("connect"), [("connect", PEER)])
         self.assertLess(names.index("setIdentity"), names.index("connect"))
 
+    def _connect_central(self, now):
+        self.driver._clock = lambda: now[0]
+        self.driver.connect(PEER)
+        self.bridge.listener.bridge_connected(PEER, "central", list(PEER_IDENTITY), 512)
+        self.events.items.clear()
+
+    def test_central_link_is_dropped_when_the_peer_stops_answering(self):
+        now = [1000.0]
+        self._connect_central(now)
+
+        self.driver.send(PEER, b"one")
+        now[0] += 10
+        self.driver.send(PEER, b"two")
+        now[0] += ble.REPLY_TIMEOUT
+        with self.assertRaisesRegex(RuntimeError, "stopped answering"):
+            self.driver.send(PEER, b"three")
+
+        self.assertEqual([call[2] for call in self.bridge.named("writeRx")], [b"one", b"two"])
+        self.assertEqual(self.bridge.named("disconnect"), [("disconnect", PEER)])
+        self.assertIsNone(self.driver.get_peer_role(PEER))
+        self.assertEqual(self.events.items, [
+            ("error", "warning", "No data from " + PEER + " for 40s while sending; reconnecting"),
+            ("disconnected", PEER),
+        ])
+        # The driver may connect again, which repeats the identity handshake.
+        self.driver.connect(PEER)
+        self.assertEqual(len(self.bridge.named("connect")), 2)
+
+    def test_central_link_survives_while_the_peer_answers_or_nothing_is_sent(self):
+        now = [1000.0]
+        self._connect_central(now)
+
+        for _ in range(5):
+            self.driver.send(PEER, b"fragment")
+            now[0] += ble.REPLY_TIMEOUT * 2
+            self.bridge.listener.bridge_data(PEER, [1, 2, 3])
+        # Hours of silence in both directions, then a burst sent in one go.
+        now[0] += 7200
+        for _ in range(10):
+            self.driver.send(PEER, b"fragment")
+        now[0] += ble.REPLY_TIMEOUT - 1
+        self.driver.send(PEER, b"fragment")
+
+        self.assertEqual(self.bridge.named("disconnect"), [])
+        self.assertEqual(self.driver.get_peer_role(PEER), "central")
+
+    def test_reply_timeout_doubles_for_a_quiet_peer_and_resets_when_it_is_heard(self):
+        now = [1000.0]
+
+        def silent_sends(gap):
+            self._connect_central(now)
+            self.driver.send(PEER, b"one")
+            self.driver.send(PEER, b"two")
+            now[0] += gap
+            self.driver.send(PEER, b"three")
+
+        with self.assertRaises(RuntimeError):
+            silent_sends(ble.REPLY_TIMEOUT)
+        silent_sends(ble.REPLY_TIMEOUT)
+        now[0] += ble.REPLY_TIMEOUT
+        with self.assertRaises(RuntimeError):
+            self.driver.send(PEER, b"four")
+        self.assertEqual(self.driver._reply_timeouts[PEER_IDENTITY], ble.REPLY_TIMEOUT * 4)
+
+        self._connect_central(now)
+        self.bridge.listener.bridge_data(PEER, [1])
+        self.assertEqual(self.driver._reply_timeouts, {})
+        with self.assertRaises(RuntimeError):
+            silent_sends(ble.REPLY_TIMEOUT)
+
+    def test_peripheral_links_are_not_dropped_for_silence(self):
+        now = [1000.0]
+        self.driver._clock = lambda: now[0]
+        self.bridge.listener.bridge_connected(PEER, "peripheral", None, 182)
+        for _ in range(5):
+            self.driver.send(PEER, b"fragment")
+            now[0] += ble.REPLY_TIMEOUT_MAX
+        self.assertEqual(len(self.bridge.named("notifyTx")), 5)
+        self.assertEqual(self.bridge.named("disconnect"), [])
+
     def test_connection_failures_use_the_wording_the_interface_backs_off_on(self):
         self.driver.connect(PEER)
         self.driver.connect(PEER)
@@ -525,6 +605,22 @@ class StarlingBleInterfaceTest(unittest.TestCase):
         sent = self.bridge.named("writeRx")
         self.assertEqual(len(sent), 1)
         self.assertEqual(sent[0][2][5:], b"reticulum packet")
+
+    def test_silent_central_peer_is_disconnected_so_it_can_be_reconnected(self):
+        now = [1000.0]
+        self.interface.driver._clock = lambda: now[0]
+        self.bridge.listener.bridge_connected(PEER, "central", list(PEER_IDENTITY), 512)
+        peer_interface = self.interface.spawned_interfaces[PEER_IDENTITY.hex()[:16]]
+
+        peer_interface.process_outgoing(b"first packet")
+        peer_interface.process_outgoing(b"second packet")
+        now[0] += ble.REPLY_TIMEOUT
+        peer_interface.process_outgoing(b"third packet")
+
+        self.assertEqual(len(self.bridge.named("writeRx")), 2)
+        self.assertEqual(self.bridge.named("disconnect"), [("disconnect", PEER)])
+        self.assertEqual(self.interface.driver.connected_peers, [])
+        self.assertNotIn(PEER, self.interface.peers)
 
     def test_detach_stops_the_bridge(self):
         self.bridge.listener.bridge_connected(PEER, "central", list(PEER_IDENTITY), 512)

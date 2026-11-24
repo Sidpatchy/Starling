@@ -8,6 +8,7 @@ and GATT clients.
 """
 
 import threading
+import time
 
 from ble_reticulum.bluetooth_driver import BLEDevice, BLEDriverInterface, DriverState
 
@@ -22,6 +23,23 @@ UNKNOWN_LOCAL_ADDRESS = "00:00:00:00:00:00"
 POWER_MODES = ("aggressive", "balanced", "saver")
 IDENTITY_LENGTH = 16
 MINIMUM_PAYLOAD = 20
+
+# Liveness of links this device opened. The protocol has no signal for a peer
+# that has discarded its state for a link that is still up: it drops what it
+# is sent and stays silent. So a link is treated as dead once at least
+# UNANSWERED_SENDS fragments have been sent over REPLY_TIMEOUT seconds or more
+# with nothing received in between. The link is then closed, and the next
+# discovery pass reconnects and repeats the identity handshake.
+#
+# Only sending can trip this, so an idle link is never closed. REPLY_TIMEOUT
+# matches the 30 seconds after which ble-reticulum itself calls a connection
+# without data a zombie. A healthy peer may simply have nothing to say, so
+# the timeout doubles each time a link to the same peer is closed this way,
+# up to REPLY_TIMEOUT_MAX, and returns to REPLY_TIMEOUT when the peer is heard.
+REPLY_TIMEOUT = 30.0
+REPLY_TIMEOUT_MAX = 480.0
+UNANSWERED_SENDS = 3
+MAX_TRACKED_REPLY_TIMEOUTS = 64
 
 _bridge = None
 _interface_class = None
@@ -101,6 +119,9 @@ class AndroidBLEDriver(BLEDriverInterface):
         # ble-reticulum's peer selection reads these to skip in-flight attempts.
         self._connecting_peers = set()
         self._connecting_lock = threading.Lock()
+        # Peer identity (or address) -> the reply timeout currently applied to it.
+        self._reply_timeouts = {}
+        self._clock = time.monotonic
 
     # --- Lifecycle ---
 
@@ -242,6 +263,10 @@ class AndroidBLEDriver(BLEDriverInterface):
             raise RuntimeError("Not connected to " + address)
         payload = bytes(data)
         if role == ROLE_CENTRAL:
+            silent_for = self._note_send(address)
+            if silent_for is not None:
+                self._drop_silent_peer(address, silent_for)
+                raise RuntimeError("Bluetooth peer " + address + " stopped answering")
             delivered = self._bridge.writeRx(address, payload)
         else:
             delivered = self._bridge.notifyTx(address, payload)
@@ -339,7 +364,9 @@ class AndroidBLEDriver(BLEDriverInterface):
         identity = _as_bytes(identity) if role == ROLE_CENTRAL else None
         mtu = max(int(mtu), MINIMUM_PAYLOAD)
         with self._peers_lock:
-            self._peers[address] = {"role": role, "identity": identity, "mtu": mtu}
+            self._peers[address] = {
+                "role": role, "identity": identity, "mtu": mtu, "unanswered_since": None, "unanswered": 0,
+            }
         with self._connecting_lock:
             self._connecting_peers.discard(address)
         self._emit(self.on_device_connected, address, identity)
@@ -381,8 +408,12 @@ class AndroidBLEDriver(BLEDriverInterface):
         address = str(address)
         payload = _as_bytes(data)
         with self._peers_lock:
-            if address not in self._peers:
+            peer = self._peers.get(address)
+            if peer is None:
                 return
+            peer["unanswered_since"] = None
+            peer["unanswered"] = 0
+            self._reply_timeouts.pop(self._liveness_key(address, peer), None)
             listener = self._notify_callbacks.get(address)
         self._emit(self.on_data_received, address, payload)
         if listener is not None:
@@ -391,6 +422,42 @@ class AndroidBLEDriver(BLEDriverInterface):
     def bridge_error(self, severity, message):
         if self._running:
             self._emit(self.on_error, str(severity), str(message), None)
+
+    # --- Liveness of central links ---
+
+    @staticmethod
+    def _liveness_key(address, peer):
+        return peer["identity"] if peer["identity"] is not None else address
+
+    def _note_send(self, address):
+        """Count a fragment about to be sent. Returns how long the peer has
+        been silent when the link should be closed, otherwise None."""
+        now = self._clock()
+        with self._peers_lock:
+            peer = self._peers.get(address)
+            if peer is None:
+                return None
+            if peer["unanswered_since"] is None:
+                peer["unanswered_since"] = now
+                peer["unanswered"] = 1
+                return None
+            peer["unanswered"] += 1
+            silent_for = now - peer["unanswered_since"]
+            key = self._liveness_key(address, peer)
+            timeout = self._reply_timeouts.get(key, REPLY_TIMEOUT)
+            if peer["unanswered"] < UNANSWERED_SENDS or silent_for < timeout:
+                return None
+            if len(self._reply_timeouts) >= MAX_TRACKED_REPLY_TIMEOUTS:
+                self._reply_timeouts.clear()
+            self._reply_timeouts[key] = min(timeout * 2, REPLY_TIMEOUT_MAX)
+            return silent_for
+
+    def _drop_silent_peer(self, address, silent_for):
+        self._emit(
+            self.on_error, "warning",
+            "No data from " + address + " for " + str(int(silent_for)) + "s while sending; reconnecting", None,
+        )
+        self.disconnect(address)
 
     # --- Helpers ---
 
