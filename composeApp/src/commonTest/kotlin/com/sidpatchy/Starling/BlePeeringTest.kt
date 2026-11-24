@@ -170,6 +170,23 @@ class BlePeeringTest {
     }
 
     @Test
+    fun failedScansAreRetriedWithADoublingDelayUpToAMinute() {
+        assertEquals(listOf(2_000L, 4_000L, 8_000L, 16_000L, 32_000L, 60_000L), (1..6).map(::blePeerScanRetryDelayMs))
+        assertEquals(60_000L, blePeerScanRetryDelayMs(1_000))
+        assertEquals(2_000L, blePeerScanRetryDelayMs(0))
+    }
+
+    @Test
+    fun statusExplainsThatBluetoothIsOffInsteadOfCountingPeers() {
+        assertEquals("0 Bluetooth peers connected", blePeerStatusText(0, bluetoothOff = false))
+        assertEquals("1 Bluetooth peer connected", blePeerStatusText(1, bluetoothOff = false))
+        assertEquals(
+            "Bluetooth is off; Bluetooth peers will connect when it is turned on",
+            blePeerStatusText(0, bluetoothOff = true),
+        )
+    }
+
+    @Test
     fun platformsDoNotOfferBluetoothPeersUnlessTheyOptIn() {
         assertFalse(UnsupportedReticulumNodeController("unavailable").supportsBlePeering)
     }

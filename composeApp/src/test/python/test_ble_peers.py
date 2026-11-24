@@ -409,6 +409,30 @@ class AndroidBleDriverTest(unittest.TestCase):
         self.bridge.listener.bridge_connected(PEER, "central", list(PEER_IDENTITY), 512)
         self.assertEqual(self.driver.connected_peers, [PEER])
 
+    def test_driver_started_with_bluetooth_off_waits_and_resumes_when_it_is_on(self):
+        bridge = _FakeBridge()
+        driver = ble.AndroidBLEDriver(bridge=bridge)
+        events = _Events(driver)
+        driver.start(SERVICE_UUID, RX_UUID, TX_UUID, IDENTITY_UUID)
+        # The bridge accepts the start and reports that Bluetooth is off.
+        bridge.listener.bridge_adapter_state(False)
+        driver.set_identity(LOCAL_IDENTITY)
+        driver.start_scanning()
+        driver.start_advertising("ignored", LOCAL_IDENTITY)
+
+        self.assertFalse(driver.adapter_on)
+        self.assertIs(driver.state, DriverState.IDLE)
+        self.assertEqual(events.named("disconnected"), [])
+        self.assertEqual([item[1] for item in events.named("error")], ["warning"])
+        self.assertIn("Bluetooth is off", events.named("error")[0][2])
+
+        bridge.listener.bridge_adapter_state(True)
+
+        self.assertTrue(driver.adapter_on)
+        self.assertIs(driver.state, DriverState.SCANNING)
+        self.assertEqual(len(bridge.named("startScanning")), 1)
+        self.assertEqual(len(bridge.named("startAdvertising")), 1)
+
     def test_adapter_changes_are_ignored_once_the_driver_is_stopped(self):
         self.bridge.listener.bridge_connected(PEER, "central", list(PEER_IDENTITY), 512)
         self.driver.stop()
@@ -702,6 +726,24 @@ class StarlingBleInterfaceTest(unittest.TestCase):
         self.assertIn(peer_interface, RNS.Transport.interfaces)
         peer_interface.process_outgoing(b"after the restart")
         self.assertEqual(self.bridge.named("writeRx")[-1][2][5:], b"after the restart")
+
+    def test_status_reports_bluetooth_off_instead_of_an_online_interface(self):
+        import RNS
+
+        RNS.Transport.interfaces.append(self.interface)
+        self.bridge.listener.bridge_connected(PEER, "central", list(PEER_IDENTITY), 512)
+        self.assertEqual(
+            ble.interface_status(), {"enabled": True, "online": True, "peer_count": 1, "bluetooth_on": True},
+        )
+
+        self.bridge.listener.bridge_adapter_state(False)
+        self.assertEqual(
+            ble.interface_status(), {"enabled": True, "online": False, "peer_count": 0, "bluetooth_on": False},
+        )
+
+        self.bridge.listener.bridge_adapter_state(True)
+        self.assertTrue(ble.interface_status()["online"])
+        self.assertTrue(ble.interface_status()["bluetooth_on"])
 
     def test_detach_stops_the_bridge(self):
         self.bridge.listener.bridge_connected(PEER, "central", list(PEER_IDENTITY), 512)

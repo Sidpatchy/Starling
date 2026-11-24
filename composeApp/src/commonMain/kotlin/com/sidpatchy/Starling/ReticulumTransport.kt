@@ -117,6 +117,8 @@ sealed interface ReticulumNodeState {
         /** The Bluetooth peer interface is up; it may still have no peers. */
         val blePeeringOnline: Boolean = false,
         val blePeerCount: Int = 0,
+        /** Bluetooth peering is waiting for the device's Bluetooth to be turned on. */
+        val blePeeringBluetoothOff: Boolean = false,
     ) : ReticulumNodeState {
         val tcpInterfaceOnline: Boolean get() = onlineTcpPeerIds.isNotEmpty()
         val rnodeInterfaceOnline: Boolean get() = onlineRNodePorts.isNotEmpty()

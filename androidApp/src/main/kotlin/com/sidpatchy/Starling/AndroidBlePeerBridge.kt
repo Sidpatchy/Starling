@@ -143,6 +143,7 @@ internal class AndroidBlePeerBridge(context: Context) {
     private var adapterOn = false
     private var adapterReceiverRegistered = false
     private var restartAttempts = 0
+    private var scanRetryAttempts = 0
     private var scanMode = ScanSettings.SCAN_MODE_BALANCED
     private var connectionTimeoutMs = DEFAULT_CONNECTION_TIMEOUT_MS
     private var maxPeers = DEFAULT_MAX_PEERS
@@ -189,7 +190,11 @@ internal class AndroidBlePeerBridge(context: Context) {
     // Lifecycle (called by the Python driver)
     // ---------------------------------------------------------------------
 
-    /** Opens the GATT server. Returns a message for the user on failure, or null. */
+    /**
+     * Opens the GATT server. Returns a message for the user on failure, or
+     * null. With Bluetooth turned off this succeeds and the server, scanning,
+     * and advertising start when it is turned on.
+     */
     fun start(
         serviceUuid: String,
         rxUuid: String,
@@ -216,7 +221,6 @@ internal class AndroidBlePeerBridge(context: Context) {
         val manager = appContext.getSystemService(BluetoothManager::class.java)
             ?: return "Bluetooth is not available on this device."
         val bluetoothAdapter = manager.adapter ?: return "Bluetooth is not available on this device."
-        if (!bluetoothAdapter.isEnabled) return "Turn on Bluetooth to use Bluetooth peers."
         try {
             this.serviceUuid = UUID.fromString(serviceUuid)
             this.rxUuid = UUID.fromString(rxUuid)
@@ -226,6 +230,7 @@ internal class AndroidBlePeerBridge(context: Context) {
             return "The Bluetooth peer service identifiers are not valid."
         }
 
+        val enabled = runCatching { bluetoothAdapter.isEnabled }.getOrDefault(false)
         synchronized(lock) {
             this.listener = listener
             this.connectionTimeoutMs = (connectionTimeoutSeconds * 1000).toLong().coerceIn(5_000L, 120_000L)
@@ -235,15 +240,24 @@ internal class AndroidBlePeerBridge(context: Context) {
                 Thread(runnable, "starling-ble-peer-events").apply { isDaemon = true }
             }
             advertisingRequested = false
-            adapterOn = true
+            adapterOn = enabled
             restartAttempts = 0
+            scanRetryAttempts = 0
             running = true
         }
-        openServer(manager)?.let { message ->
-            stop()
-            return message
+        if (enabled) {
+            openServer(manager)?.let { message ->
+                stop()
+                return message
+            }
         }
         registerAdapterReceiver()
+        if (!enabled) {
+            Log.i(TAG, "Bluetooth is off; the peer service will start when it is turned on")
+            emit { it.adapterStateChanged(false) }
+            // It may have been turned on before the receiver was registered.
+            if (runCatching { bluetoothAdapter.isEnabled }.getOrDefault(false)) adapterTurnedOn()
+        }
         return null
     }
 
@@ -399,6 +413,7 @@ internal class AndroidBlePeerBridge(context: Context) {
         synchronized(lock) {
             if (!running || !adapterOn) return
             adapterOn = false
+            scanRetryAttempts = 0
             links = centralLinks.values.toList()
             peerCount = serverPeers.size
             centralLinks.clear()
@@ -598,12 +613,38 @@ internal class AndroidBlePeerBridge(context: Context) {
         }
     }
 
+    /**
+     * Starts the scan again after Android reported that it failed, waiting
+     * longer after each failure in a row. The scan stays wanted meanwhile.
+     */
+    private fun retryScanLater(reason: String) {
+        val attempt = synchronized(lock) {
+            if (!running || !scanning || !adapterOn) return
+            ++scanRetryAttempts
+        }
+        val delayMs = blePeerScanRetryDelayMs(attempt)
+        Log.i(TAG, "Bluetooth scanning failed ($reason); retry $attempt in $delayMs ms")
+        if (attempt == 1) emit { it.error("warning", "Bluetooth scanning failed ($reason); retrying.") }
+        mainHandler.removeCallbacks(scanRetry)
+        schedule(delayMs, scanRetry)
+    }
+
+    private val scanRetry = Runnable {
+        if (synchronized(lock) { running && scanning && adapterOn }) {
+            val message = beginScan()
+            if (message == null) Log.i(TAG, "Bluetooth scanning requested again after a failure")
+            else retryScanLater(message)
+        }
+    }
+
     fun stopScanning() {
         val leScanner = synchronized(lock) {
             scanning = false
+            scanRetryAttempts = 0
             scanner
         }
         mainHandler.removeCallbacks(scanRefresh)
+        mainHandler.removeCallbacks(scanRetry)
         runCatching { leScanner?.stopScan(scanCallback) }
     }
 
@@ -613,6 +654,7 @@ internal class AndroidBlePeerBridge(context: Context) {
             val now = SystemClock.elapsedRealtime()
             synchronized(lock) {
                 if (!running || !scanning) return
+                scanRetryAttempts = 0
                 val previous = lastDiscovery[address]
                 if (previous != null && now - previous < DISCOVERY_REPORT_INTERVAL_MS) return
                 if (lastDiscovery.size >= MAX_TRACKED_DISCOVERIES) lastDiscovery.clear()
@@ -625,8 +667,7 @@ internal class AndroidBlePeerBridge(context: Context) {
 
         override fun onScanFailed(errorCode: Int) {
             if (errorCode == SCAN_FAILED_ALREADY_STARTED) return
-            synchronized(lock) { scanning = false }
-            emit { it.error("warning", "Bluetooth scanning failed (code $errorCode).") }
+            retryScanLater("code $errorCode")
         }
     }
 

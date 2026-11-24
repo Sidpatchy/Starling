@@ -238,7 +238,7 @@ class ReticulumNodeService : Service() {
                     "$onlineCount TCP and $onlineRadioCount RNode connections online"
                 radios != null && radios.length() > 0 -> "$onlineRadioCount of ${radios.length()} RNode radios online"
                 peers != null && peers.length() > 0 -> "$onlineCount of ${peers.length()} TCP connections online"
-                blePeersActive -> "$blePeerCount Bluetooth ${if (blePeerCount == 1) "peer" else "peers"} connected"
+                blePeersActive -> blePeerStatusText(blePeerCount, blePeers?.optBoolean("bluetooth_on", true) == false)
                 else -> "Reticulum node is running"
             }
             updateForegroundNotification(notificationText)

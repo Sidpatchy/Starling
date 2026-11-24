@@ -177,6 +177,11 @@ class AndroidBLEDriver(BLEDriverInterface):
         return self._state
 
     @property
+    def adapter_on(self):
+        """False while the phone's Bluetooth is turned off."""
+        return self._adapter_on
+
+    @property
     def connected_peers(self):
         with self._peers_lock:
             return list(self._peers)
@@ -432,6 +437,7 @@ class AndroidBLEDriver(BLEDriverInterface):
     def bridge_adapter_state(self, enabled):
         """The phone's Bluetooth was turned off, or is usable again.
 
+        The bridge also reports Bluetooth being off when the driver starts.
         Turning Bluetooth off closes every link without a disconnect event,
         so they are all reported here, and attempts in flight are forgotten
         without counting as failures. Once Bluetooth is back the bridge has
@@ -454,7 +460,7 @@ class AndroidBLEDriver(BLEDriverInterface):
             self._notify_callbacks.clear()
         with self._connecting_lock:
             self._connecting_peers.clear()
-        self._emit(self.on_error, "warning", "Bluetooth was turned off; peers will reconnect when it is back on", None)
+        self._emit(self.on_error, "warning", "Bluetooth is off; peers will connect when it is turned on", None)
         for address in addresses:
             self._emit(self.on_device_disconnected, address)
 
@@ -544,11 +550,16 @@ def interface_status():
         for interface in RNS.Transport.interfaces:
             if interface.name == INTERFACE_NAME:
                 peers = getattr(interface, "spawned_interfaces", None) or {}
+                # With Bluetooth off the interface is waiting, not online, and a
+                # peer interface that has not been detached yet is not a peer.
+                bluetooth_on = bool(getattr(getattr(interface, "driver", None), "adapter_on", True))
+                connected = sum(1 for peer in peers.values() if getattr(peer, "online", False))
                 return {
                     "enabled": True,
-                    "online": bool(getattr(interface, "online", False)),
-                    "peer_count": sum(1 for peer in peers.values() if getattr(peer, "online", False)),
+                    "online": bluetooth_on and bool(getattr(interface, "online", False)),
+                    "peer_count": connected if bluetooth_on else 0,
+                    "bluetooth_on": bluetooth_on,
                 }
     except Exception:
         pass
-    return {"enabled": True, "online": False, "peer_count": 0}
+    return {"enabled": True, "online": False, "peer_count": 0, "bluetooth_on": True}

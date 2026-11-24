@@ -849,7 +849,7 @@ internal fun SettingsPage(
                                 if (!state.blePeeringEnabled) interfaces
                                 else listOf(
                                     interfaces,
-                                    "${state.blePeerCount} Bluetooth ${if (state.blePeerCount == 1) "peer" else "peers"} connected.",
+                                    blePeerStatusText(state.blePeerCount, state.blePeeringBluetoothOff) + ".",
                                 ).filter(String::isNotBlank).joinToString(" ")
                             }
                             is ReticulumNodeState.Starting -> "Starting the Reticulum node…"

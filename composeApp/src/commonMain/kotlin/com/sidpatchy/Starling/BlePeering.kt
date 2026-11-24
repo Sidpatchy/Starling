@@ -55,6 +55,23 @@ fun blePeerConnectionDirection(localAddress: String?, peerAddress: String?): Ble
 fun blePeerPayloadSize(attMtu: Int): Int =
     (attMtu - BLE_ATT_HEADER_SIZE).coerceIn(BLE_MINIMUM_PAYLOAD, BLE_MAXIMUM_ATTRIBUTE_LENGTH)
 
+/**
+ * How long to wait before starting a failed scan again: two seconds after
+ * the first failure, doubling after each further one, up to a minute.
+ */
+fun blePeerScanRetryDelayMs(attempt: Int): Long {
+    val doublings = (attempt - 1).coerceIn(0, 16)
+    return (BLE_SCAN_RETRY_BASE_MS shl doublings).coerceAtMost(BLE_SCAN_RETRY_MAX_MS)
+}
+
+private const val BLE_SCAN_RETRY_BASE_MS = 2_000L
+private const val BLE_SCAN_RETRY_MAX_MS = 60_000L
+
+/** The one-line Bluetooth peering status shown for a running node. */
+fun blePeerStatusText(peerCount: Int, bluetoothOff: Boolean): String =
+    if (bluetoothOff) "Bluetooth is off; Bluetooth peers will connect when it is turned on"
+    else "$peerCount Bluetooth ${if (peerCount == 1) "peer" else "peers"} connected"
+
 const val BLE_DEFAULT_ATT_MTU = 23
 const val BLE_REQUESTED_ATT_MTU = 517
 private const val BLE_ATT_HEADER_SIZE = 3

@@ -229,6 +229,7 @@ class AndroidReticulumNodeController(
                     blePeeringEnabled = blePeers.optBoolean("enabled", false),
                     blePeeringOnline = blePeers.optBoolean("online", false),
                     blePeerCount = blePeers.optInt("peer_count", 0),
+                    blePeeringBluetoothOff = !blePeers.optBoolean("bluetooth_on", true),
                 )
             }
             ReticulumNodeService.STATE_FAILED -> ReticulumNodeState.Failed(
