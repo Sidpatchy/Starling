@@ -76,6 +76,7 @@ object ChatStateCodec {
                 appendRecord(
                     "I", radio.port, radio.frequencyHz.toString(), radio.bandwidthHz.toString(), radio.txPowerDbm.toString(),
                     radio.spreadingFactor.toString(), radio.codingRate.toString(),
+                    radio.bleName.orEmpty(), radio.pairedByStarling.bit(),
                 )
             }
         }
@@ -172,6 +173,8 @@ object ChatStateCodec {
                         txPowerDbm = decoded[3].toIntOrNull() ?: 0,
                         spreadingFactor = decoded[4].toIntOrNull() ?: 0,
                         codingRate = decoded[5].toIntOrNull() ?: 0,
+                        bleName = decoded.getOrNull(6)?.ifBlank { null },
+                        pairedByStarling = decoded.getOrNull(7) == "1",
                     )
                 }
                 "N" -> if (decoded.size >= 3 && decoded[0].isNotBlank() && decoded[2].isNotBlank()) {

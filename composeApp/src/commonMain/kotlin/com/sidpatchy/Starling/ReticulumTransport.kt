@@ -37,12 +37,19 @@ data class ReticulumRNodeInterface(
     val txPowerDbm: Int,
     val spreadingFactor: Int,
     val codingRate: Int,
+    /** The advertised name of a chosen Bluetooth RNode, kept for display. */
+    val bleName: String? = null,
+    /** True when Starling created this phone's pairing with the Bluetooth RNode. */
+    val pairedByStarling: Boolean = false,
 ) {
     val id: String get() = port.trim().lowercase()
 
-    fun validationError(): String? = when {
-        port.isBlank() -> "Enter a serial port, tcp://host, or ble://device name."
+    /** [supportsBleRNodes] is true on phones, where a blank connection is an unchosen Bluetooth RNode. */
+    fun validationError(supportsBleRNodes: Boolean = false): String? = when {
+        port.isBlank() -> if (supportsBleRNodes) RNodeBleText.CHOOSE_BEFORE_START else "Enter the RNode's serial port."
         port.any { it.code < 32 || it.code == 127 } -> "The RNode connection cannot contain control characters."
+        rnodeConnectionType(port) == RNodeConnectionType.WIFI && rnodeWifiHost(port).isBlank() ->
+            "Enter the RNode's host name or IP address."
         frequencyHz !in 137_000_000L..3_000_000_000L -> "RNode frequency must be between 137 MHz and 3 GHz."
         bandwidthHz !in 7_800..1_625_000 -> "RNode bandwidth must be between 7.8 kHz and 1.625 MHz."
         txPowerDbm !in 0..37 -> "RNode transmit power must be between 0 and 37 dBm."
@@ -58,7 +65,7 @@ data class ReticulumNodeConfig(
     val rnodeInterfaces: List<ReticulumRNodeInterface> = emptyList(),
     val existingInstanceRpcKeyHex: String? = null,
 ) {
-    fun validationError(): String? {
+    fun validationError(supportsBleRNodes: Boolean = false): String? {
         if (mode == ReticulumRuntimeMode.EXISTING_SHARED_INSTANCE && !isValidReticulumRpcKey(existingInstanceRpcKeyHex.orEmpty())) {
             return "Enter the existing local RNS instance's RPC key as at least 32 hexadecimal characters."
         }
@@ -86,8 +93,8 @@ data class ReticulumNodeConfig(
                 return "For each peer, enter both IFAC values or leave both blank."
             }
         }
-        val invalidRNode = rnodeInterfaces.firstOrNull { it.validationError() != null }
-        if (invalidRNode != null) return invalidRNode.validationError()
+        val invalidRNode = rnodeInterfaces.firstOrNull { it.validationError(supportsBleRNodes) != null }
+        if (invalidRNode != null) return invalidRNode.validationError(supportsBleRNodes)
         if (rnodeInterfaces.map { it.id }.distinct().size != rnodeInterfaces.size) {
             return "Each RNode interface must use a unique connection."
         }
@@ -128,10 +135,19 @@ interface ReticulumNodeController {
     val supportsReticulumProtocol: Boolean get() = true
     /** Whether this platform exposes RNode connection settings. */
     val supportsRNodeInterfaces: Boolean get() = false
+    /** Whether this platform reaches RNodes over Bluetooth LE rather than a serial port. */
+    val supportsBleRNodes: Boolean get() = false
+    /** Finds and pairs Bluetooth RNodes for Settings; null where [supportsBleRNodes] is false. */
+    val rnodeBlePicker: RNodeBlePicker? get() = null
+    /** The Bluetooth RNode the running node connected to, once known. */
+    val resolvedBleRNode: StateFlow<ResolvedBleRNode?> get() = NO_RESOLVED_BLE_RNODE
     suspend fun start(config: ReticulumNodeConfig)
     suspend fun disconnect()
     suspend fun refreshState() = Unit
 }
+
+private val NO_RESOLVED_BLE_RNODE: StateFlow<ResolvedBleRNode?> =
+    kotlinx.coroutines.flow.MutableStateFlow(null)
 
 class UnsupportedReticulumNodeController(reason: String) : ReticulumNodeController {
     private val _state = kotlinx.coroutines.flow.MutableStateFlow<ReticulumNodeState>(ReticulumNodeState.Unavailable(reason))
