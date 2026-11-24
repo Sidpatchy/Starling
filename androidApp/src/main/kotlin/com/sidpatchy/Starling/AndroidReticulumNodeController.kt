@@ -1,11 +1,14 @@
 package com.sidpatchy.Starling
 
 import android.content.BroadcastReceiver
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.content.ServiceConnection
 import android.os.Build
+import android.os.IBinder
 import org.json.JSONArray
 import org.json.JSONObject
 import androidx.core.content.ContextCompat
@@ -29,6 +32,7 @@ class AndroidReticulumNodeController(
     override val supportsBlePeering: Boolean =
         appContext.packageManager.hasSystemFeature(PackageManager.FEATURE_BLUETOOTH_LE)
     private var pendingStateQuery: CompletableDeferred<ReticulumNodeState>? = null
+    private var watchingServiceProcess = false
 
     private val receiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -36,6 +40,36 @@ class AndroidReticulumNodeController(
             val state = stateFromIntent(intent)
             _state.value = state
             pendingStateQuery?.complete(state)
+            if (state is ReticulumNodeState.Starting || state is ReticulumNodeState.Running) {
+                watchServiceProcess()
+            } else {
+                unwatchServiceProcess()
+            }
+        }
+    }
+
+    /**
+     * State only arrives as broadcasts from the service process, so a process
+     * that dies without publishing a final state would leave the last one
+     * showing forever. The binding exists only to observe that death.
+     */
+    private val serviceProcessWatcher = object : ServiceConnection {
+        override fun onServiceConnected(name: ComponentName?, service: IBinder?) = Unit
+
+        override fun onServiceDisconnected(name: ComponentName?) {
+            if (!watchingServiceProcess) return
+            unwatchServiceProcess()
+            val lastState = _state.value
+            if (lastState !is ReticulumNodeState.Starting && lastState !is ReticulumNodeState.Running) return
+            // Ask for the real state instead of guessing: a fresh service
+            // instance reports stopped, and a restarted node reports itself.
+            try {
+                appContext.startService(Intent(appContext, ReticulumNodeService::class.java).apply {
+                    action = ReticulumNodeService.ACTION_NODE_STATUS
+                })
+            } catch (_: Exception) {
+                _state.value = ReticulumNodeState.Stopped
+            }
         }
     }
 
@@ -178,6 +212,24 @@ class AndroidReticulumNodeController(
         } catch (_: IllegalArgumentException) {
             // Already unregistered.
         }
+        unwatchServiceProcess()
+    }
+
+    private fun watchServiceProcess() {
+        if (watchingServiceProcess) return
+        watchingServiceProcess = true
+        // No BIND_AUTO_CREATE: the binding must neither start the service nor
+        // keep it alive after it stops itself.
+        val bound = runCatching {
+            appContext.bindService(Intent(appContext, ReticulumNodeService::class.java), serviceProcessWatcher, 0)
+        }.getOrDefault(false)
+        if (!bound) unwatchServiceProcess()
+    }
+
+    private fun unwatchServiceProcess() {
+        if (!watchingServiceProcess) return
+        watchingServiceProcess = false
+        runCatching { appContext.unbindService(serviceProcessWatcher) }
     }
 
     private fun stateFromIntent(intent: Intent): ReticulumNodeState {
