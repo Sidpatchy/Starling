@@ -571,6 +571,18 @@ def load_interface_class():
     return _interface_class
 
 
+def peer_interfaces():
+    """The per-peer Reticulum interfaces of the BLE peer interface that are online."""
+    import RNS
+
+    result = []
+    for interface in list(RNS.Transport.interfaces):
+        if _interface_class is not None and isinstance(interface, _interface_class):
+            peers = getattr(interface, "spawned_interfaces", None) or {}
+            result.extend(peer for peer in list(peers.values()) if getattr(peer, "online", False))
+    return result
+
+
 def interface_status():
     """Summarise the configured BLE peer interface for the node status report."""
     try:

@@ -143,7 +143,7 @@ def announce():
 
 
 def announce_for_new_ble_peer():
-    """Announce shortly after a new Bluetooth peer links, unless one was sent recently."""
+    """Announce over Bluetooth shortly after a new peer links, unless one was sent recently."""
     global _last_ble_announce
     now = time.monotonic()
     with _lock:
@@ -152,19 +152,31 @@ def announce_for_new_ble_peer():
         if _last_ble_announce is not None and now - _last_ble_announce < BLE_ANNOUNCE_INTERVAL_SECONDS:
             return False
         _last_ble_announce = now
-    timer = threading.Timer(BLE_ANNOUNCE_DELAY_SECONDS, _announce_quietly)
+    timer = threading.Timer(BLE_ANNOUNCE_DELAY_SECONDS, _announce_to_ble_peers)
     timer.name = "starling-lxmf-ble-announce"
     timer.daemon = True
     timer.start()
     return True
 
 
-def _announce_quietly():
+def _announce_to_ble_peers():
+    """Announce on the Bluetooth peer interfaces only, never on other interfaces."""
+    with _lock:
+        router = _router
+        destination = _delivery_destination
+    ble = sys.modules.get("starling_ble_android")
+    if router is None or destination is None or ble is None:
+        return
     try:
-        announce()
+        interfaces = ble.peer_interfaces()
     except Exception:
-        # The node stopped before the delayed announce; there is no one to tell.
-        pass
+        return
+    for interface in interfaces:
+        try:
+            router.announce(destination.hash, attached_interface=interface)
+        except Exception:
+            # One peer dropping out must not stop the announce to the others.
+            pass
 
 
 def _set_ble_peer_listener(listener):

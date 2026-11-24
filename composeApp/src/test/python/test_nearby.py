@@ -143,8 +143,8 @@ class _FakeRouter:
     def register_delivery_callback(self, callback):
         pass
 
-    def announce(self, destination_hash):
-        self.announcements.append(destination_hash)
+    def announce(self, destination_hash, attached_interface=None):
+        self.announcements.append((destination_hash, attached_interface))
 
     def exit_handler(self):
         pass
@@ -340,18 +340,44 @@ class NearbyAnnounceTest(unittest.TestCase):
     def test_manual_announce_announces_the_delivery_destination(self):
         lxmf.announce()
         lxmf.announce()
-        self.assertEqual(self.router.announcements, [bytes.fromhex(LOCAL_ADDRESS)] * 2)
+        self.assertEqual(self.router.announcements, [(bytes.fromhex(LOCAL_ADDRESS), None)] * 2)
 
     def test_manual_announce_command_reaches_the_adapter(self):
         protocol.dispatch_lxmf("LXMF_ANNOUNCE", lxmf)
-        self.assertEqual(self.router.announcements, [bytes.fromhex(LOCAL_ADDRESS)])
+        self.assertEqual(self.router.announcements, [(bytes.fromhex(LOCAL_ADDRESS), None)])
 
     def test_manual_announce_before_start_raises(self):
         lxmf.stop()
         with self.assertRaises(RuntimeError):
             lxmf.announce()
 
+    def _load_ble_driver(self, peer_interfaces):
+        ble_module = types.ModuleType("starling_ble_android")
+        ble_module._interface_class = None
+        ble_module.set_peer_listener = lambda listener: True
+        ble_module.peer_interfaces = lambda: list(peer_interfaces)
+        self._replaced.append(("starling_ble_android", sys.modules.get("starling_ble_android")))
+        sys.modules["starling_ble_android"] = ble_module
+
+    def test_new_bluetooth_peer_announces_only_on_the_bluetooth_peer_interfaces(self):
+        first, second = object(), object()
+        self._load_ble_driver([first, second])
+
+        self.assertTrue(lxmf.announce_for_new_ble_peer())
+        self.assertEqual(self._wait_for_announcements(2), 2)
+
+        local = bytes.fromhex(LOCAL_ADDRESS)
+        self.assertEqual(self.router.announcements, [(local, first), (local, second)])
+
+    def test_new_bluetooth_peer_announce_sends_nothing_without_a_bluetooth_peer(self):
+        self._load_ble_driver([])
+        self.assertTrue(lxmf.announce_for_new_ble_peer())
+        time.sleep(0.1)
+        self.assertEqual(self.router.announcements, [])
+
     def test_new_bluetooth_peer_announces_at_most_once_per_five_minutes(self):
+        peer = object()
+        self._load_ble_driver([peer])
         self.assertEqual(lxmf.BLE_ANNOUNCE_INTERVAL_SECONDS, 300)
         self.assertTrue(lxmf.announce_for_new_ble_peer())
         self.assertEqual(self._wait_for_announcements(1), 1)
@@ -366,6 +392,7 @@ class NearbyAnnounceTest(unittest.TestCase):
         self.assertEqual(self._wait_for_announcements(2), 2)
 
     def test_bluetooth_announce_limit_resets_with_each_node_run(self):
+        self._load_ble_driver([object()])
         self.assertTrue(lxmf.announce_for_new_ble_peer())
         self._wait_for_announcements(1)
         lxmf.stop()
@@ -376,17 +403,20 @@ class NearbyAnnounceTest(unittest.TestCase):
         self.assertTrue(lxmf.announce_for_new_ble_peer())
         self.assertEqual(self._wait_for_announcements(1), 1)
 
-    def test_manual_announce_is_not_rate_limited_by_the_bluetooth_announce(self):
+    def test_manual_announce_is_not_rate_limited_and_uses_every_interface(self):
+        self._load_ble_driver([object()])
         self.assertTrue(lxmf.announce_for_new_ble_peer())
         self._wait_for_announcements(1)
         lxmf.announce()
         self.assertEqual(len(self.router.announcements), 2)
+        self.assertEqual(self.router.announcements[1], (bytes.fromhex(LOCAL_ADDRESS), None))
 
     def test_start_registers_the_bluetooth_peer_listener_when_the_driver_is_loaded(self):
         listeners = []
         ble_module = types.ModuleType("starling_ble_android")
         ble_module._interface_class = None
         ble_module.set_peer_listener = listeners.append
+        ble_module.peer_interfaces = lambda: []
         self._replaced.append(("starling_ble_android", sys.modules.get("starling_ble_android")))
         sys.modules["starling_ble_android"] = ble_module
 
@@ -412,6 +442,9 @@ class ReferenceAnnounceContractTest(unittest.TestCase):
             ["destination_hash", "announced_identity", "app_data"],
         )
         self.assertEqual(handler.aspect_filter, LXMF.APP_NAME + ".delivery")
+        # The Bluetooth-only announce relies on the router accepting a target interface.
+        self.assertIn("attached_interface", inspect.signature(LXMF.LXMRouter.announce).parameters)
+        self.assertIn("attached_interface", inspect.signature(RNS.Destination.announce).parameters)
         RNS.Transport.register_announce_handler(handler)
         try:
             self.assertIn(handler, RNS.Transport.announce_handlers)

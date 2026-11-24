@@ -777,6 +777,19 @@ class StarlingBleInterfaceTest(unittest.TestCase):
         self.bridge.listener.bridge_connected(PEER, "central", list(PEER_IDENTITY), 512)
         self.assertIn(PEER_IDENTITY.hex()[:16], self.interface.spawned_interfaces)
 
+    def test_peer_interfaces_lists_only_online_bluetooth_peers(self):
+        import RNS
+
+        RNS.Transport.interfaces.append(self.interface)
+        self.assertEqual(ble.peer_interfaces(), [])
+
+        self.bridge.listener.bridge_connected(PEER, "central", list(PEER_IDENTITY), 512)
+        peer_interface = self.interface.spawned_interfaces[PEER_IDENTITY.hex()[:16]]
+        self.assertEqual(ble.peer_interfaces(), [peer_interface])
+
+        peer_interface.online = False
+        self.assertEqual(ble.peer_interfaces(), [])
+
     def test_detach_stops_the_bridge(self):
         self.bridge.listener.bridge_connected(PEER, "central", list(PEER_IDENTITY), 512)
         self.interface.detach()
