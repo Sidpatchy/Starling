@@ -150,7 +150,7 @@ final class StarlingRNodeBluetoothBridge: NSObject, CBCentralManagerDelegate, CB
         } else if let targetName, !targetName.isEmpty {
             matchesTarget = name.caseInsensitiveCompare(targetName) == .orderedSame
         } else {
-            matchesTarget = name.hasPrefix("RNode")
+            matchesTarget = name.hasPrefix("RNode ")
         }
         guard matchesTarget else { return }
 
