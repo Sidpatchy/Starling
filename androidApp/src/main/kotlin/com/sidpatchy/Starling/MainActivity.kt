@@ -1,6 +1,9 @@
 package com.sidpatchy.Starling
 
 import android.Manifest
+import android.bluetooth.BluetoothAdapter
+import android.content.Intent
+import androidx.core.app.ActivityCompat
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.setContent
@@ -20,7 +23,15 @@ class MainActivity : ComponentActivity() {
     private var nodeController: AndroidReticulumNodeController? = null
     private var transport: AndroidReticulumTransport? = null
     private var chatRepository: ReticulumChatRepository? = null
+    private var rnodeBlePicker: AndroidRNodeBlePicker? = null
     private var pendingBluetoothPermission: CompletableDeferred<Unit>? = null
+    private var pendingBluetoothEnable: CompletableDeferred<Unit>? = null
+    private val bluetoothEnableLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) {
+        pendingBluetoothEnable?.complete(Unit)
+        pendingBluetoothEnable = null
+    }
     private val bluetoothPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
     ) {
@@ -32,9 +43,18 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         WindowCompat.setDecorFitsSystemWindows(window, false)
         requestHighRefreshRate()
-        val controller = AndroidReticulumNodeController(applicationContext) {
-            requestRNodeBluetoothPermissions()
-        }
+        val picker = AndroidRNodeBlePicker(
+            applicationContext,
+            requestPermissions = { permissions -> requestBluetoothPermissionResult(permissions) },
+            requestEnableBluetooth = { requestEnableBluetooth() },
+            startActivity = { intent -> startActivity(intent) },
+        )
+        rnodeBlePicker = picker
+        val controller = AndroidReticulumNodeController(
+            applicationContext,
+            requestBluetoothPermissions = { requestBluetoothPermissions(rnodeBluetoothPermissions()) },
+            rnodeBlePicker = picker,
+        )
         val reticulumTransport = AndroidReticulumTransport(applicationContext)
         val chat = ReticulumChatRepository(
             LocalPreviewChatRepository(),
@@ -67,6 +87,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         nodeController?.dispose()
+        rnodeBlePicker?.dispose()
+        rnodeBlePicker = null
         transport?.dispose()
         chatRepository?.close()
         nodeController = null
@@ -90,16 +112,28 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private suspend fun requestRNodeBluetoothPermissions(): Boolean = withContext(Dispatchers.Main.immediate) {
-        val requiredPermissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+    private fun rnodeBluetoothPermissions(): Array<String> =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)
         } else {
             arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
         }
+
+    private suspend fun requestBluetoothPermissions(requiredPermissions: Array<String>): Boolean =
+        requestBluetoothPermissionResult(requiredPermissions) == BluetoothPermissionResult.GRANTED
+
+    /**
+     * Asks for the permissions that are missing and reports how the request ended.
+     * Android does not say when a permission is permanently denied; a refusal
+     * after which it would show no rationale is the documented way to tell.
+     */
+    private suspend fun requestBluetoothPermissionResult(
+        requiredPermissions: Array<String>,
+    ): BluetoothPermissionResult = withContext(Dispatchers.Main.immediate) {
         val missingPermissions = requiredPermissions.filter {
             ContextCompat.checkSelfPermission(this@MainActivity, it) != PackageManager.PERMISSION_GRANTED
         }
-        if (missingPermissions.isEmpty()) return@withContext true
+        if (missingPermissions.isEmpty()) return@withContext BluetoothPermissionResult.GRANTED
 
         val response = pendingBluetoothPermission ?: CompletableDeferred<Unit>().also { pending ->
             pendingBluetoothPermission = pending
@@ -107,9 +141,26 @@ class MainActivity : ComponentActivity() {
         }
         val completed = withTimeoutOrNull(BLUETOOTH_PERMISSION_TIMEOUT_MS) { response.await() } != null
         if (pendingBluetoothPermission === response) pendingBluetoothPermission = null
-        completed && requiredPermissions.all {
-            ContextCompat.checkSelfPermission(this@MainActivity, it) == PackageManager.PERMISSION_GRANTED
+        val stillMissing = requiredPermissions.filter {
+            ContextCompat.checkSelfPermission(this@MainActivity, it) != PackageManager.PERMISSION_GRANTED
         }
+        when {
+            stillMissing.isEmpty() -> BluetoothPermissionResult.GRANTED
+            completed && stillMissing.any {
+                !ActivityCompat.shouldShowRequestPermissionRationale(this@MainActivity, it)
+            } -> BluetoothPermissionResult.PERMANENTLY_DENIED
+            else -> BluetoothPermissionResult.DENIED
+        }
+    }
+
+    /** Shows the system request to turn Bluetooth on and waits for the answer. */
+    private suspend fun requestEnableBluetooth() = withContext(Dispatchers.Main.immediate) {
+        val response = pendingBluetoothEnable ?: CompletableDeferred<Unit>().also { pending ->
+            pendingBluetoothEnable = pending
+            bluetoothEnableLauncher.launch(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE))
+        }
+        withTimeoutOrNull(BLUETOOTH_PERMISSION_TIMEOUT_MS) { response.await() }
+        if (pendingBluetoothEnable === response) pendingBluetoothEnable = null
     }
 
     private companion object {
