@@ -202,6 +202,29 @@ class RNodeConnectionTest {
     }
 
     @Test
+    fun anEmptyTypedBleTargetOnlyTakesAnRNode() {
+        val address = "AA:BB:CC:DD:77:10"
+
+        assertTrue(matchesTypedRNodeBleTarget(null, "RNode 5719", address))
+        assertTrue(matchesTypedRNodeBleTarget("", "RNode 5719", address))
+        assertFalse(matchesTypedRNodeBleTarget(null, "MeshCore-A1B2", address))
+        assertFalse(matchesTypedRNodeBleTarget(null, "RNodeX 5719", address))
+        assertFalse(matchesTypedRNodeBleTarget(null, "rnode 5719", address))
+        assertFalse(matchesTypedRNodeBleTarget(null, "", address))
+    }
+
+    @Test
+    fun aTypedBleNameIsHonouredExactly() {
+        val address = "AA:BB:CC:DD:77:10"
+
+        assertTrue(matchesTypedRNodeBleTarget("RNode 5719", "rnode 5719", address))
+        assertTrue(matchesTypedRNodeBleTarget("MeshCore-A1B2", "MeshCore-A1B2", address))
+        assertTrue(matchesTypedRNodeBleTarget("aa:bb:cc:dd:77:10", "", address))
+        assertFalse(matchesTypedRNodeBleTarget("RNode 5719", "RNode 5720", address))
+        assertFalse(matchesTypedRNodeBleTarget("RNode", "RNode 5719", address))
+    }
+
+    @Test
     fun onlyDevicesNamedLikeAnRNodeAreListed() {
         assertTrue(isRNodeBleName("RNode 5719"))
         assertTrue(isRNodeBleName("RNode A1B2"))
@@ -322,7 +345,7 @@ class RNodeConnectionTest {
             RNodeBleText.scanStatusMessage(RNodeBleScanStatus.BluetoothOff, ios, false),
         )
         assertEquals(
-            "Bluetooth search failed (code 2). Try again.",
+            "Bluetooth search failed. Turn Bluetooth off and on, then try again.",
             RNodeBleText.scanStatusMessage(RNodeBleScanStatus.Failed(2), android, false),
         )
         assertEquals("Turn on Bluetooth", RNodeBleText.scanBlockerAction(RNodeBleScanStatus.BluetoothOff, android))

@@ -83,14 +83,7 @@ internal class AndroidRNodeBluetoothBridge(context: Context) {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
             val deviceName = result.scanRecord?.deviceName
                 ?: runCatching { result.device.name }.getOrNull().orEmpty()
-            val selectedName = targetName
-            val matches = if (selectedName.isNullOrBlank()) {
-                deviceName.startsWith("RNode", ignoreCase = true)
-            } else {
-                deviceName.equals(selectedName, ignoreCase = true) ||
-                    result.device.address.equals(selectedName, ignoreCase = true)
-            }
-            if (!running || !matches) return
+            if (!running || !matchesTypedRNodeBleTarget(targetName, deviceName, result.device.address)) return
 
             scannedName = deviceName.takeIf(String::isNotBlank)
             stopScan()

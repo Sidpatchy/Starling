@@ -184,6 +184,18 @@ const val RNODE_BLE_NAME_PREFIX = "RNode "
  */
 fun isRNodeBleName(name: String): Boolean = name.startsWith(RNODE_BLE_NAME_PREFIX)
 
+/**
+ * Whether a scanned device is the one a typed ble:// port asks for. A port
+ * with a name or address takes exactly that device; an empty one takes the
+ * first RNode.
+ */
+fun matchesTypedRNodeBleTarget(target: String?, deviceName: String, deviceAddress: String): Boolean =
+    if (target.isNullOrBlank()) {
+        isRNodeBleName(deviceName)
+    } else {
+        deviceName.equals(target, ignoreCase = true) || deviceAddress.equals(target, ignoreCase = true)
+    }
+
 /** One advertisement seen while searching for RNodes. */
 data class RNodeBleSighting(val id: String, val name: String, val rssi: Int)
 
@@ -384,7 +396,7 @@ object RNodeBleText {
             "Bluetooth permission is turned off for Starling. Turn it on in system settings."
         RNodeBleScanStatus.LocationOff ->
             "Android needs Location turned on to search for Bluetooth devices. Starling does not use your location."
-        is RNodeBleScanStatus.Failed -> "Bluetooth search failed (code ${status.code}). Try again."
+        is RNodeBleScanStatus.Failed -> "Bluetooth search failed. Turn Bluetooth off and on, then try again."
         RNodeBleScanStatus.Unsupported -> "This device doesn't support Bluetooth LE."
     }
 

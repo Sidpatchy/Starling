@@ -123,6 +123,7 @@ internal class AndroidRNodeBlePicker(
         }
 
         override fun onScanFailed(errorCode: Int) {
+            Log.d(TAG, "Bluetooth search failed (code $errorCode)")
             scope.launch {
                 scanJob?.cancel()
                 activeScanner = null
