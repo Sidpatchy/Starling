@@ -151,6 +151,9 @@ fun buildNetworkDiagnostics(
             if (rnodeTotal > 0) {
                 parts.add("$rnodeOnline of $rnodeTotal RNode radios online")
             }
+            if (state.blePeeringEnabled) {
+                parts.add("${state.blePeerCount} Bluetooth ${if (state.blePeerCount == 1) "peer" else "peers"} connected")
+            }
             if (state.sharedInstanceConnected) {
                 parts.add("Shared RNS instance connected")
             }

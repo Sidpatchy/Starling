@@ -373,8 +373,8 @@ private fun reticulumNodeSummary(state: ReticulumNodeState): String = when (stat
     is ReticulumNodeState.Running -> when {
         state.sharedInstanceConnected -> "Attached to the existing local RNS shared instance."
         else -> {
-            val online = state.onlineTcpPeerIds.size + state.onlineRNodePorts.size
-            val total = state.tcpPeers.size + state.rnodeInterfaces.size
+            val online = state.onlineInterfaceCount
+            val total = state.configuredInterfaceCount
             if (total == 0) "Running without a configured interface."
             else "$online of $total configured interfaces online."
         }

@@ -630,6 +630,7 @@ fun StarlingApp(
                                 },
                                 supportsReticulumProtocol = nodeController.supportsReticulumProtocol,
                                 supportsRNodeInterfaces = nodeController.supportsRNodeInterfaces,
+                                supportsBlePeering = nodeController.supportsBlePeering,
                                 rrcState = visibleConnectionState,
                                 rrcError = visibleRrcError,
                                 localDeliveryAddress = visibleDeliveryAddress,
@@ -899,6 +900,7 @@ fun StarlingApp(
                                 },
                                 supportsReticulumProtocol = nodeController.supportsReticulumProtocol,
                                 supportsRNodeInterfaces = nodeController.supportsRNodeInterfaces,
+                                supportsBlePeering = nodeController.supportsBlePeering,
                                 rrcState = visibleConnectionState,
                                 rrcError = visibleRrcError,
                                 localDeliveryAddress = visibleDeliveryAddress,
@@ -1986,8 +1988,8 @@ private fun RoomSidebar(
         rrcState is ReticulumConnectionState.Connecting || rrcState == ReticulumConnectionState.Starting ->
             "Connecting to hub" to Color(0xFFE1A448)
         nodeState is ReticulumNodeState.Running -> {
-            val totalInterfaces = nodeState.tcpPeers.size + nodeState.rnodeInterfaces.size
-            val onlineInterfaces = nodeState.onlineTcpPeerIds.size + nodeState.onlineRNodePorts.size
+            val totalInterfaces = nodeState.configuredInterfaceCount
+            val onlineInterfaces = nodeState.onlineInterfaceCount
             when {
                 nodeState.sharedInstanceConnected -> "Shared RNS instance connected" to Color(0xFF48A868)
                 totalInterfaces == 0 -> "Reticulum running without interfaces" to Muted
@@ -2239,8 +2241,8 @@ private fun NetworkStatusDialog(
         is ReticulumNodeState.Running -> when {
             state.sharedInstanceConnected -> "Attached to an existing shared instance."
             else -> {
-                val online = state.onlineTcpPeerIds.size + state.onlineRNodePorts.size
-                val total = state.tcpPeers.size + state.rnodeInterfaces.size
+                val online = state.onlineInterfaceCount
+                val total = state.configuredInterfaceCount
                 if (total == 0) "Reticulum is running without configured interfaces."
                 else "$online of $total configured interfaces online."
             }
