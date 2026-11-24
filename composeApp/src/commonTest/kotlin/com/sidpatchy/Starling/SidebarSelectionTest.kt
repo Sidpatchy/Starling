@@ -15,6 +15,16 @@ class SidebarSelectionTest {
     }
 
     @Test
+    fun nearbyPeopleHidesBothChatHighlightsAndRestoresThemAfterwards() {
+        for (directMessageId in listOf(null, "moss")) {
+            assertEquals(SidebarSelection(), sidebarSelectionForVisiblePage("general", directMessageId, showNearby = true))
+        }
+        assertEquals(SidebarSelection(roomId = "general"), sidebarSelectionForVisiblePage("general", null, showNearby = false))
+        assertEquals(SidebarSelection(directMessageId = "moss"), sidebarSelectionForVisiblePage("general", "moss"))
+        assertEquals(SidebarSelection(), sidebarSelectionForVisiblePage(null, null, showNearby = true))
+    }
+
+    @Test
     fun settingsIdentityAndRequestsHideBothChatHighlights() {
         for (directMessageId in listOf(null, "moss")) {
             assertEquals(SidebarSelection(), sidebarSelectionForVisiblePage("general", directMessageId, showSettings = true))
