@@ -83,6 +83,7 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         requestHighRefreshRate()
+        rnodeBlePicker?.onResume()
     }
 
     override fun onDestroy() {

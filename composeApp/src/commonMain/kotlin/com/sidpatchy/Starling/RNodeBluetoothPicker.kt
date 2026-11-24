@@ -134,6 +134,9 @@ private fun RNodeBluetoothDevice(
     val kind = rnodeBleTargetKind(target)
     val android = picker.platform == RNodeBlePlatform.ANDROID
     val find = { onDismissKeyboard(); request = RNodePickerRequest() }
+    LaunchedEffect(picker) {
+        picker.pairingChanges.collect { pairingChecks++ }
+    }
 
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         when {
@@ -288,6 +291,8 @@ private fun RNodeScanDialog(
     }
     LaunchedEffect(picker) {
         picker.sightings.collect { sighting ->
+            // Other devices offer the same UART service; only RNodes are listed.
+            if (!list.accepts(sighting)) return@collect
             val key = sighting.id.uppercase()
             val paired = android && pairedIds.getOrPut(key) { picker.isPaired(sighting.id) == true }
             val pinned = paired || (savedId != null && savedId.equals(sighting.id, ignoreCase = true))

@@ -202,6 +202,30 @@ class RNodeConnectionTest {
     }
 
     @Test
+    fun onlyDevicesNamedLikeAnRNodeAreListed() {
+        assertTrue(isRNodeBleName("RNode 5719"))
+        assertTrue(isRNodeBleName("RNode A1B2"))
+        assertFalse(isRNodeBleName("MeshCore-A1B2"))
+        assertFalse(isRNodeBleName("RNode"))
+        assertFalse(isRNodeBleName("RNodeX 5719"))
+        assertFalse(isRNodeBleName("rnode 5719"))
+        assertFalse(isRNodeBleName("My RNode 5719"))
+        assertFalse(isRNodeBleName(""))
+
+        val list = RNodeScanList()
+        list.beginSearch(0)
+        val rnode = RNodeBleSighting("AA:BB:CC:DD:57:19", "RNode 5719", -60)
+        val meshCore = RNodeBleSighting("AA:BB:CC:DD:00:99", "MeshCore-A1B2", -50)
+        assertTrue(list.accepts(rnode))
+        assertFalse(list.accepts(meshCore))
+        // A nameless advertisement is only taken from a device already listed as an RNode.
+        assertFalse(list.accepts(rnode.copy(name = "")))
+        list.observe(rnode, pinned = false, nowMillis = 10)
+        assertTrue(list.accepts(RNodeBleSighting("aa:bb:cc:dd:57:19", "", -62)))
+        assertFalse(list.accepts(meshCore.copy(name = "")))
+    }
+
+    @Test
     fun orderFreezesAfterThreeSecondsAndSignalUpdatesInPlace() {
         val list = RNodeScanList()
         list.beginSearch(0)
@@ -318,7 +342,11 @@ class RNodeConnectionTest {
         assertTrue(RNodeBleText.pairingFailureMessage(failed(RNodeBlePairingFailure.WRONG_PIN, 1), android).startsWith("The PIN didn't match."))
         assertTrue(RNodeBleText.pairingFailureMessage(failed(RNodeBlePairingFailure.TIMEOUT), android).startsWith("Pairing timed out."))
         assertEquals(
-            "Pairing didn't complete (reason 9). Try again.",
+            "Pairing didn't finish. Make sure the RNode is on and in pairing mode, then try again.",
+            RNodeBleText.pairingFailureMessage(failed(RNodeBlePairingFailure.OTHER, 9), android),
+        )
+        assertEquals(
+            RNodeBleText.pairingFailureMessage(failed(RNodeBlePairingFailure.OTHER), android),
             RNodeBleText.pairingFailureMessage(failed(RNodeBlePairingFailure.OTHER, 9), android),
         )
         assertTrue(

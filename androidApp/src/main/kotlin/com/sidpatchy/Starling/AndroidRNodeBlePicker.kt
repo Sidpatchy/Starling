@@ -25,6 +25,7 @@ import android.os.Build
 import android.os.ParcelUuid
 import android.os.SystemClock
 import android.provider.Settings
+import android.util.Log
 import androidx.core.content.ContextCompat
 import androidx.core.location.LocationManagerCompat
 import kotlinx.coroutines.CoroutineScope
@@ -33,6 +34,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -40,6 +42,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.launch
 import java.util.UUID
 
@@ -72,6 +76,33 @@ internal class AndroidRNodeBlePicker(
     override val sightings: Flow<RNodeBleSighting> = _sightings.asSharedFlow()
     private val _pairing = MutableStateFlow<RNodeBlePairingState>(RNodeBlePairingState.Idle)
     override val pairing: StateFlow<RNodeBlePairingState> = _pairing.asStateFlow()
+
+    private val resumes = MutableSharedFlow<Unit>(
+        extraBufferCapacity = 1,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
+
+    /**
+     * A pairing can be removed in Android's Bluetooth settings. Android reports
+     * that while the app is listening; coming back to the app covers the rest.
+     */
+    override val pairingChanges: Flow<Unit> = merge(
+        resumes,
+        callbackFlow {
+            val receiver = object : BroadcastReceiver() {
+                override fun onReceive(context: Context?, intent: Intent?) {
+                    if (intent?.action == BluetoothDevice.ACTION_BOND_STATE_CHANGED) trySend(Unit)
+                }
+            }
+            ContextCompat.registerReceiver(
+                appContext,
+                receiver,
+                IntentFilter(BluetoothDevice.ACTION_BOND_STATE_CHANGED),
+                ContextCompat.RECEIVER_EXPORTED,
+            )
+            awaitClose { runCatching { appContext.unregisterReceiver(receiver) } }
+        },
+    )
 
     private var scanJob: Job? = null
     private var activeScanner: BluetoothLeScanner? = null
@@ -192,6 +223,11 @@ internal class AndroidRNodeBlePicker(
 
     private fun open(intent: Intent) {
         runCatching { startActivity(intent) }
+    }
+
+    /** The app is in front again; a pairing may have changed while it was not. */
+    fun onResume() {
+        resumes.tryEmit(Unit)
     }
 
     override fun isPaired(deviceId: String): Boolean? {
@@ -376,6 +412,7 @@ internal class AndroidRNodeBlePicker(
     private fun failPairing(reason: RNodeBlePairingFailure, code: Int) {
         if (pairingDevice == null) return
         val name = pairingName
+        Log.d(TAG, "Pairing failed: $reason (code $code)")
         endPairing()
         _pairing.value = RNodeBlePairingState.Failed(name, reason, code)
     }
@@ -420,6 +457,7 @@ internal class AndroidRNodeBlePicker(
     }
 
     private companion object {
+        const val TAG = "AndroidRNodeBlePicker"
         const val SCAN_DURATION_MS = 20_000L
         const val SCAN_START_HISTORY_MS = 60_000L
         const val PAIRING_TIMEOUT_MS = 60_000L

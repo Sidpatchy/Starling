@@ -2,6 +2,7 @@ package com.sidpatchy.Starling
 
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.emptyFlow
 
 const val RNODE_BLE_PREFIX = "ble://"
 const val RNODE_TCP_PREFIX = "tcp://"
@@ -174,6 +175,15 @@ fun rnodeSignalLevel(rssi: Int): RNodeSignalLevel = when {
     else -> RNodeSignalLevel.WEAK
 }
 
+/** RNode firmware advertises itself as "RNode" followed by four characters of its address. */
+const val RNODE_BLE_NAME_PREFIX = "RNode "
+
+/**
+ * Whether a Bluetooth name belongs to an RNode. Other radios offer the same
+ * UART service, so the service alone does not identify one.
+ */
+fun isRNodeBleName(name: String): Boolean = name.startsWith(RNODE_BLE_NAME_PREFIX)
+
 /** One advertisement seen while searching for RNodes. */
 data class RNodeBleSighting(val id: String, val name: String, val rssi: Int)
 
@@ -213,6 +223,14 @@ class RNodeScanList(
         if (firstSearchAt == null) firstSearchAt = nowMillis
         searchAt = nowMillis
     }
+
+    /**
+     * Whether a sighting belongs in the list: it carries an RNode name, or it
+     * is a nameless advertisement from a device that is already listed.
+     */
+    fun accepts(sighting: RNodeBleSighting): Boolean =
+        isRNodeBleName(sighting.name) ||
+            (sighting.name.isBlank() && sighting.id.trim().uppercase() in entries)
 
     fun observe(sighting: RNodeBleSighting, pinned: Boolean, nowMillis: Long) {
         val key = sighting.id.trim().uppercase()
@@ -338,6 +356,9 @@ interface RNodeBlePicker {
     /** Whether the system has a pairing for this device, or null when that cannot be known. */
     fun isPaired(deviceId: String): Boolean?
 
+    /** Emits when a pairing may have changed outside the picker, so [isPaired] is worth asking again. */
+    val pairingChanges: Flow<Unit> get() = emptyFlow()
+
     /** The system's name for a device it already knows. */
     fun knownName(deviceId: String): String? = null
     fun openBluetoothSettings() = Unit
@@ -385,7 +406,7 @@ object RNodeBleText {
         failure.reason == RNodeBlePairingFailure.WRONG_PIN ->
             "The PIN didn't match. Try again and enter the PIN currently shown on the RNode."
         failure.reason == RNodeBlePairingFailure.TIMEOUT -> "Pairing timed out. Wake the RNode's screen, then try again."
-        else -> "Pairing didn't complete (reason ${failure.code}). Try again."
+        else -> "Pairing didn't finish. Make sure the RNode is on and in pairing mode, then try again."
     }
 
     fun notFound(name: String) = "Couldn't reach $name. Check that it's powered on and in range, then try again."
