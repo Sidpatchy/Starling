@@ -29,6 +29,8 @@ class AndroidReticulumNodeController(
     override val isSupported: Boolean = true
     override val supportsRNodeInterfaces: Boolean = true
     override val supportsBleRNodes: Boolean = true
+    private val _resolvedBleRNode = MutableStateFlow<ResolvedBleRNode?>(null)
+    override val resolvedBleRNode: StateFlow<ResolvedBleRNode?> = _resolvedBleRNode.asStateFlow()
     private var pendingStateQuery: CompletableDeferred<ReticulumNodeState>? = null
     private var watchingServiceProcess = false
 
@@ -36,6 +38,13 @@ class AndroidReticulumNodeController(
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action != ReticulumNodeService.ACTION_STATE) return
             val state = stateFromIntent(intent)
+            _resolvedBleRNode.value = if (state is ReticulumNodeState.Running) {
+                val id = intent.getStringExtra(ReticulumNodeService.EXTRA_RNODE_BLE_ID).orEmpty()
+                val name = intent.getStringExtra(ReticulumNodeService.EXTRA_RNODE_BLE_NAME).orEmpty()
+                if (id.isBlank()) null else ResolvedBleRNode(id, name)
+            } else {
+                null
+            }
             _state.value = state
             pendingStateQuery?.complete(state)
             if (state is ReticulumNodeState.Starting || state is ReticulumNodeState.Running) {
@@ -166,7 +175,9 @@ class AndroidReticulumNodeController(
                     .put("bandwidth_hz", radio.bandwidthHz)
                     .put("tx_power_dbm", radio.txPowerDbm)
                     .put("spreading_factor", radio.spreadingFactor)
-                    .put("coding_rate", radio.codingRate),
+                    .put("coding_rate", radio.codingRate)
+                    .put(ReticulumNodeService.RNODE_BLE_NAME_KEY, radio.bleName.orEmpty())
+                    .put(ReticulumNodeService.RNODE_PAIRED_BY_STARLING_KEY, radio.pairedByStarling),
             )
         }
         val intent = Intent(appContext, ReticulumNodeService::class.java).apply {

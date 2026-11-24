@@ -48,6 +48,16 @@ internal class AndroidRNodeBluetoothBridge(context: Context) {
     private var startupError: String? = null
     private var startupLatch: CountDownLatch? = null
     @Volatile private var targetName: String? = null
+    /** Set when the saved RNode is a device address: connect to it without scanning. */
+    @Volatile private var targetAddress: String? = null
+    /** How messages refer to the RNode. */
+    @Volatile private var label: String = RNodeBleText.FALLBACK_NAME
+    @Volatile private var adapter: BluetoothAdapter? = null
+    @Volatile private var scannedName: String? = null
+
+    /** The address and name of the RNode this bridge connected to; null until startup succeeds. */
+    @Volatile var resolvedDevice: ResolvedBleRNode? = null
+        private set
     @Volatile private var scanner: BluetoothLeScanner? = null
     private var serverSocket: ServerSocket? = null
     private var clientSocket: Socket? = null
@@ -58,7 +68,7 @@ internal class AndroidRNodeBluetoothBridge(context: Context) {
     private var writeInProgress = false
     private var writeChunkSize = DEFAULT_WRITE_CHUNK
     private var adapterStateReceiverRegistered = false
-    private val retryScan = Runnable { startScan() }
+    private val retryConnect = Runnable { if (targetAddress != null) connectToAddress() else startScan() }
 
     private val adapterStateReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -82,6 +92,7 @@ internal class AndroidRNodeBluetoothBridge(context: Context) {
             }
             if (!running || !matches) return
 
+            scannedName = deviceName.takeIf(String::isNotBlank)
             stopScan()
             runCatching {
                 val connection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -106,7 +117,7 @@ internal class AndroidRNodeBluetoothBridge(context: Context) {
                 failStartup("Android Bluetooth scanning failed (code $errorCode).")
             } else if (running) {
                 closeTcpClient()
-                scheduleScanRetry()
+                scheduleReconnect()
             }
         }
     }
@@ -114,7 +125,16 @@ internal class AndroidRNodeBluetoothBridge(context: Context) {
     private val gattCallback = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
             if (status != BluetoothGatt.GATT_SUCCESS) {
-                handleGattDisconnect(gatt, "BLE connection failed (status $status).")
+                handleGattDisconnect(
+                    gatt,
+                    when {
+                        isAuthenticationFailure(status) -> RNodeBleText.notPairedAndroid(label)
+                        // The RNode ended the connection itself, as it does while another device holds it.
+                        targetAddress != null && status == GATT_CONN_TERMINATE_PEER_USER -> RNodeBleText.heldElsewhere(label)
+                        targetAddress != null -> RNodeBleText.notFound(label)
+                        else -> "BLE connection failed (status $status)."
+                    },
+                )
                 return
             }
             when (newState) {
@@ -140,7 +160,11 @@ internal class AndroidRNodeBluetoothBridge(context: Context) {
 
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
             if (status != BluetoothGatt.GATT_SUCCESS) {
-                handleGattDisconnect(gatt, "Could not inspect the BLE RNode services (status $status).")
+                handleGattDisconnect(
+                    gatt,
+                    if (isAuthenticationFailure(status)) RNodeBleText.notPairedAndroid(label)
+                    else "Could not inspect the BLE RNode services (status $status).",
+                )
                 return
             }
             val service = gatt.getService(SERVICE_UUID)
@@ -195,12 +219,20 @@ internal class AndroidRNodeBluetoothBridge(context: Context) {
         override fun onDescriptorWrite(gatt: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) {
             if (descriptor.uuid != CCCD_UUID) return
             if (status != BluetoothGatt.GATT_SUCCESS) {
-                handleGattDisconnect(gatt, "The BLE RNode rejected UART notifications (status $status).")
+                handleGattDisconnect(
+                    gatt,
+                    if (isAuthenticationFailure(status)) RNodeBleText.notPairedAndroid(label)
+                    else "The BLE RNode rejected UART notifications (status $status).",
+                )
                 return
             }
             if (!openTcpServer(gatt)) {
                 handleGattDisconnect(gatt, "Could not open the local port for the BLE RNode bridge.")
                 return
+            }
+            if (resolvedDevice == null) {
+                val name = scannedName ?: runCatching { gatt.device.name }.getOrNull().orEmpty()
+                resolvedDevice = ResolvedBleRNode(gatt.device.address, name)
             }
             synchronized(lock) {
                 startupResolved = true
@@ -239,8 +271,18 @@ internal class AndroidRNodeBluetoothBridge(context: Context) {
         }
     }
 
-    /** Returns null after BLE notifications and the loopback listener are ready. */
-    fun start(targetName: String): String? {
+    /**
+     * Returns null after BLE notifications and the loopback listener are ready.
+     *
+     * A [target] that is a device address is connected to directly. A device
+     * name, or an empty target for the first RNode found, is located by
+     * scanning. [pairedByStarling] makes a missing system pairing an error
+     * before any connection is attempted.
+     */
+    fun start(target: String, displayName: String? = null, pairedByStarling: Boolean = false): String? {
+        val trimmedTarget = target.trim()
+        val address = trimmedTarget.uppercase().takeIf { BluetoothAdapter.checkBluetoothAddress(it) }
+        val targetName = if (address == null) trimmedTarget else ""
         val latch = CountDownLatch(1)
         synchronized(lock) {
             if (running) return "An Android BLE RNode connection is already active."
@@ -248,7 +290,11 @@ internal class AndroidRNodeBluetoothBridge(context: Context) {
             startupResolved = false
             startupError = null
             startupLatch = latch
-            this.targetName = targetName.trim().takeIf(String::isNotEmpty)
+            this.targetName = targetName.takeIf(String::isNotEmpty)
+            targetAddress = address
+            label = rnodeBleLabel(RNODE_BLE_PREFIX + trimmedTarget, displayName)
+            scannedName = null
+            resolvedDevice = null
         }
 
         try {
@@ -259,20 +305,42 @@ internal class AndroidRNodeBluetoothBridge(context: Context) {
             val adapter: BluetoothAdapter = manager.adapter
                 ?: return stopWithError("Bluetooth is not available on this device.")
             if (!adapter.isEnabled) return stopWithError("Turn on Bluetooth to connect to a BLE RNode.")
-            scanner = adapter.bluetoothLeScanner
-                ?: return stopWithError("Android could not start Bluetooth LE scanning.")
-            val filter = ScanFilter.Builder().setServiceUuid(ParcelUuid(SERVICE_UUID)).build()
-            val settings = ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build()
-            scanner?.startScan(listOf(filter), settings, scanCallback)
+            this.adapter = adapter
+            if (address != null) {
+                val device = adapter.getRemoteDevice(address)
+                if (displayName.isNullOrBlank()) {
+                    runCatching { device.name }.getOrNull()?.takeIf(String::isNotBlank)?.let { label = it }
+                }
+                if (pairedByStarling && device.bondState != BluetoothDevice.BOND_BONDED) {
+                    return stopWithError(RNodeBleText.pairingLost(label))
+                }
+                val connection = device.connectGatt(appContext, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
+                    ?: return stopWithError(RNodeBleText.notFound(label))
+                synchronized(lock) { gatt = connection }
+            } else {
+                scanner = adapter.bluetoothLeScanner
+                    ?: return stopWithError("Android could not start Bluetooth LE scanning.")
+                val filter = ScanFilter.Builder().setServiceUuid(ParcelUuid(SERVICE_UUID)).build()
+                val settings = ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build()
+                scanner?.startScan(listOf(filter), settings, scanCallback)
+            }
         } catch (error: SecurityException) {
-            return stopWithError("Allow Starling Bluetooth access to connect to the RNode.")
+            return stopWithError(
+                if (address != null) RNodeBleText.permission(label)
+                else "Allow Starling Bluetooth access to connect to the RNode.",
+            )
         } catch (error: Exception) {
             return stopWithError("Could not start the BLE RNode bridge: ${error.message.orEmpty()}")
         }
 
         val ready = runCatching { latch.await(STARTUP_TIMEOUT_SECONDS, TimeUnit.SECONDS) }
             .getOrDefault(false)
-        if (!ready) return stopWithError("Timed out finding the BLE RNode. Keep Starling open and check that the radio is nearby.")
+        if (!ready) {
+            return stopWithError(
+                if (address != null) RNodeBleText.notFound(label)
+                else "Timed out finding the BLE RNode. Keep Starling open and check that the radio is nearby.",
+            )
+        }
         val error = synchronized(lock) { startupError }
         if (error != null) stop()
         return error
@@ -291,13 +359,14 @@ internal class AndroidRNodeBluetoothBridge(context: Context) {
                 startupLatch = null
             }
             running = false
-            mainHandler.removeCallbacks(retryScan)
+            mainHandler.removeCallbacks(retryConnect)
             if (adapterStateReceiverRegistered) {
                 adapterStateReceiverRegistered = false
                 runCatching { appContext.unregisterReceiver(adapterStateReceiver) }
             }
             runCatching { scanner?.stopScan(scanCallback) }
             scanner = null
+            adapter = null
             runCatching { gatt?.disconnect() }
             runCatching { gatt?.close() }
             gatt = null
@@ -338,13 +407,39 @@ internal class AndroidRNodeBluetoothBridge(context: Context) {
             failStartup(message)
         } else if (running) {
             closeTcpClient()
-            scheduleScanRetry()
+            scheduleReconnect()
         }
     }
 
-    private fun scheduleScanRetry() {
-        mainHandler.removeCallbacks(retryScan)
-        mainHandler.postDelayed(retryScan, RECONNECT_SCAN_DELAY_MS)
+    /** Opens a new connection to the saved address, at startup or after the link drops. */
+    private fun connectToAddress() {
+        if (!running) return
+        val address = targetAddress ?: return
+        try {
+            val device = adapter?.getRemoteDevice(address) ?: throw IOException("Bluetooth is unavailable.")
+            val connection = device.connectGatt(appContext, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
+                ?: throw IOException("Android did not create a BLE connection.")
+            synchronized(lock) { gatt = connection }
+        } catch (error: SecurityException) {
+            handleReconnectFailure(RNodeBleText.permission(label))
+        } catch (error: Exception) {
+            handleReconnectFailure(RNodeBleText.notFound(label))
+        }
+    }
+
+    private fun handleReconnectFailure(message: String) {
+        val isStarting = synchronized(lock) { !startupResolved }
+        if (isStarting) {
+            failStartup(message)
+        } else if (running) {
+            closeTcpClient()
+            scheduleReconnect()
+        }
+    }
+
+    private fun scheduleReconnect() {
+        mainHandler.removeCallbacks(retryConnect)
+        mainHandler.postDelayed(retryConnect, RECONNECT_SCAN_DELAY_MS)
     }
 
     private fun stopScan() {
@@ -368,8 +463,8 @@ internal class AndroidRNodeBluetoothBridge(context: Context) {
 
     /**
      * Android does not reliably report a GATT disconnect when Bluetooth is
-     * switched off. Drop the link the same way as a lost RNode; the scan retry
-     * then keeps failing until the adapter is back on and the RNode is found.
+     * switched off. Drop the link the same way as a lost RNode; the reconnect
+     * retry then keeps failing until the adapter is back on and the RNode is found.
      */
     private fun handleAdapterOff() {
         if (!running) return
@@ -379,7 +474,7 @@ internal class AndroidRNodeBluetoothBridge(context: Context) {
             handleGattDisconnect(activeGatt, message)
         } else {
             stopScan()
-            handleScanRestartFailure(message)
+            handleReconnectFailure(message)
         }
     }
 
@@ -400,7 +495,8 @@ internal class AndroidRNodeBluetoothBridge(context: Context) {
      */
     private fun handleGattDisconnect(disconnectedGatt: BluetoothGatt, message: String) {
         val wasCurrentGatt = synchronized(lock) {
-            if (gatt !== disconnectedGatt) {
+            // A direct connection can fail before start() has stored it.
+            if (gatt != null && gatt !== disconnectedGatt) {
                 false
             } else {
                 gatt = null
@@ -417,8 +513,18 @@ internal class AndroidRNodeBluetoothBridge(context: Context) {
         closeTcpClient()
         if (!running) return
         val isStillStarting = synchronized(lock) { !startupResolved }
-        if (isStillStarting) failStartup(message) else startScan()
+        when {
+            isStillStarting -> failStartup(message)
+            targetAddress != null -> scheduleReconnect()
+            else -> startScan()
+        }
     }
+
+    /** Insufficient authentication or encryption, or a failed authentication: the link needs a pairing. */
+    private fun isAuthenticationFailure(status: Int): Boolean =
+        status == BluetoothGatt.GATT_INSUFFICIENT_AUTHENTICATION ||
+            status == BluetoothGatt.GATT_INSUFFICIENT_ENCRYPTION ||
+            status == GATT_AUTH_FAIL
 
     private fun onRNodeData(bytes: ByteArray?) {
         if (bytes == null || bytes.isEmpty()) return
@@ -621,6 +727,8 @@ internal class AndroidRNodeBluetoothBridge(context: Context) {
         private const val TCP_READ_BUFFER_BYTES = 4096
         private const val WRITE_RETRY_DELAY_MS = 30L
         private const val RECONNECT_SCAN_DELAY_MS = 2_000L
+        private const val GATT_CONN_TERMINATE_PEER_USER = 0x13
+        private const val GATT_AUTH_FAIL = 0x89
         private val SERVICE_UUID = UUID.fromString("6E400001-B5A3-F393-E0A9-E50E24DCCA9E")
         private val RX_UUID = UUID.fromString("6E400002-B5A3-F393-E0A9-E50E24DCCA9E")
         private val TX_UUID = UUID.fromString("6E400003-B5A3-F393-E0A9-E50E24DCCA9E")

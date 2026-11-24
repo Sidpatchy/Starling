@@ -44,6 +44,8 @@ class ReticulumNodeService : Service() {
     private var lastNodeShared = false
     private var lastNodeTcpStatusJson = "[]"
     private var lastNodeRNodeStatusJson = "[]"
+    /** The Bluetooth RNode this run connected to, reported so a saved name can become a device id. */
+    @Volatile private var resolvedBleRNode: ResolvedBleRNode? = null
     @Volatile private var stopping = false
     @Volatile private var lifecycleGeneration = 0L
 
@@ -101,6 +103,7 @@ class ReticulumNodeService : Service() {
 
         val generation = lifecycleGeneration + 1
         lifecycleGeneration = generation
+        resolvedBleRNode = null
         stopping = false
         startForegroundCompat()
         publish(STATE_STARTING)
@@ -157,6 +160,7 @@ class ReticulumNodeService : Service() {
 
     private fun stopNode(startId: Int) {
         lifecycleGeneration += 1
+        resolvedBleRNode = null
         stopping = true
         handler.removeCallbacks(pollStatus)
         handler.removeCallbacks(pollRrcEvents)
@@ -361,6 +365,8 @@ class ReticulumNodeService : Service() {
             .putExtra(EXTRA_RNODE_STATUS, rnodeStatusJson)
             .putExtra(EXTRA_SHARED, shared)
             .putExtra(EXTRA_MESSAGE, message)
+            .putExtra(EXTRA_RNODE_BLE_ID, resolvedBleRNode?.id.orEmpty())
+            .putExtra(EXTRA_RNODE_BLE_NAME, resolvedBleRNode?.name.orEmpty())
         sendBroadcast(intent)
     }
 
@@ -425,16 +431,21 @@ class ReticulumNodeService : Service() {
 
     private fun startBleRNodeBridgeIfNeeded() {
         val radios = JSONArray(rnodeInterfacesJson)
-        var selectedName: String? = null
+        var selected: JSONObject? = null
         for (index in 0 until radios.length()) {
-            val port = radios.optJSONObject(index)?.optString("port").orEmpty()
-            if (!port.startsWith("ble://", ignoreCase = true)) continue
-            if (selectedName != null) throw IllegalArgumentException("Only one BLE RNode can be connected on Android at a time.")
-            selectedName = port.drop("ble://".length).trim()
+            val radio = radios.optJSONObject(index) ?: continue
+            if (!radio.optString("port").startsWith(RNODE_BLE_PREFIX, ignoreCase = true)) continue
+            if (selected != null) throw IllegalArgumentException("Only one BLE RNode can be connected on Android at a time.")
+            selected = radio
         }
-        if (selectedName != null) {
-            val error = rnodeBluetoothBridge.start(selectedName)
+        if (selected != null) {
+            val error = rnodeBluetoothBridge.start(
+                target = rnodeBleTarget(selected.optString("port")),
+                displayName = selected.optString(RNODE_BLE_NAME_KEY).takeIf(String::isNotBlank),
+                pairedByStarling = selected.optBoolean(RNODE_PAIRED_BY_STARLING_KEY, false),
+            )
             if (error != null) throw IllegalStateException(error)
+            resolvedBleRNode = rnodeBluetoothBridge.resolvedDevice
         }
     }
 
@@ -461,6 +472,11 @@ class ReticulumNodeService : Service() {
         const val EXTRA_SHARED = "shared"
         const val EXTRA_RPC_KEY = "rpc_key"
         const val EXTRA_MESSAGE = "message"
+        const val EXTRA_RNODE_BLE_ID = "rnode_ble_id"
+        const val EXTRA_RNODE_BLE_NAME = "rnode_ble_name"
+        /** Keys Starling adds to an RNode entry for the BLE bridge; the Python runtime ignores them. */
+        const val RNODE_BLE_NAME_KEY = "ble_name"
+        const val RNODE_PAIRED_BY_STARLING_KEY = "paired_by_starling"
         const val EXTRA_HUB_DESTINATION = "hub_destination"
         const val EXTRA_LXMF_ADDRESS = "lxmf_address"
         const val EXTRA_DISPLAY_NAME = "display_name"
