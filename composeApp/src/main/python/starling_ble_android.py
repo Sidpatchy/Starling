@@ -112,6 +112,9 @@ class AndroidBLEDriver(BLEDriverInterface):
         self._running = False
         self._scanning = False
         self._advertising = False
+        # False while the phone's Bluetooth is turned off. The bridge keeps the
+        # scan and advertising requests and resumes them when it is back on.
+        self._adapter_on = True
         self._local_identity = None
         self._peers = {}
         self._peers_lock = threading.RLock()
@@ -131,6 +134,7 @@ class AndroidBLEDriver(BLEDriverInterface):
         self.tx_char_uuid = str(tx_char_uuid).lower()
         self.identity_char_uuid = str(identity_char_uuid).lower()
         self._running = True
+        self._adapter_on = True
         error = self._bridge.start(
             self.service_uuid, self.rx_char_uuid, self.tx_char_uuid, self.identity_char_uuid,
             self.connection_timeout, self.max_peers, self,
@@ -178,7 +182,9 @@ class AndroidBLEDriver(BLEDriverInterface):
             return list(self._peers)
 
     def _refresh_state(self):
-        if self._scanning:
+        if not self._adapter_on:
+            self._state = DriverState.IDLE
+        elif self._scanning:
             self._state = DriverState.SCANNING
         elif self._advertising:
             self._state = DriverState.ADVERTISING
@@ -422,6 +428,35 @@ class AndroidBLEDriver(BLEDriverInterface):
     def bridge_error(self, severity, message):
         if self._running:
             self._emit(self.on_error, str(severity), str(message), None)
+
+    def bridge_adapter_state(self, enabled):
+        """The phone's Bluetooth was turned off, or is usable again.
+
+        Turning Bluetooth off closes every link without a disconnect event,
+        so they are all reported here, and attempts in flight are forgotten
+        without counting as failures. Once Bluetooth is back the bridge has
+        already restarted scanning and advertising; peers are then found and
+        connected through the usual discovery events.
+        """
+        if not self._running:
+            return
+        enabled = bool(enabled)
+        if enabled == self._adapter_on:
+            return
+        self._adapter_on = enabled
+        self._refresh_state()
+        if enabled:
+            self._emit(self.on_error, "info", "Bluetooth is back on; looking for peers again", None)
+            return
+        with self._peers_lock:
+            addresses = list(self._peers)
+            self._peers.clear()
+            self._notify_callbacks.clear()
+        with self._connecting_lock:
+            self._connecting_peers.clear()
+        self._emit(self.on_error, "warning", "Bluetooth was turned off; peers will reconnect when it is back on", None)
+        for address in addresses:
+            self._emit(self.on_device_disconnected, address)
 
     # --- Liveness of central links ---
 

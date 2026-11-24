@@ -15,6 +15,7 @@ REFERENCE_AVAILABLE = DRIVER_AVAILABLE and importlib.util.find_spec("RNS") is no
 
 if DRIVER_AVAILABLE:
     import starling_ble_android as ble
+    from ble_reticulum.bluetooth_driver import DriverState
 
 SERVICE_UUID = "37145b00-442d-4a94-917f-8f42c5da28e3"
 RX_UUID = "37145b00-442d-4a94-917f-8f42c5da28e5"
@@ -368,6 +369,56 @@ class AndroidBleDriverTest(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             self.driver.send(PEER, b"late")
 
+    def test_turning_bluetooth_off_drops_every_link_and_pending_attempt(self):
+        self.driver.start_scanning()
+        self.driver.start_advertising("ignored", LOCAL_IDENTITY)
+        self.bridge.listener.bridge_connected(PEER, "central", list(PEER_IDENTITY), 512)
+        self.driver.connect(OTHER_PEER)
+        self.assertEqual(self.driver._connecting_peers, {OTHER_PEER})
+
+        self.bridge.listener.bridge_adapter_state(False)
+        self.bridge.listener.bridge_adapter_state(False)
+
+        self.assertEqual(self.events.named("disconnected"), [("disconnected", PEER)])
+        self.assertEqual(self.driver.connected_peers, [])
+        self.assertEqual(self.driver._connecting_peers, set())
+        self.assertIs(self.driver.state, DriverState.IDLE)
+        # The links are already gone, so the bridge is not asked to close them,
+        # and nothing is reported in the wording the interface backs off on.
+        self.assertEqual(self.bridge.named("disconnect"), [])
+        self.assertFalse([item for item in self.events.named("error") if "Connection" in item[2]])
+        with self.assertRaises(RuntimeError):
+            self.driver.send(PEER, b"late")
+
+    def test_bluetooth_coming_back_resumes_scanning_state_and_new_connections(self):
+        self.driver.start_scanning()
+        self.driver.start_advertising("ignored", LOCAL_IDENTITY)
+        self.bridge.listener.bridge_connected(PEER, "central", list(PEER_IDENTITY), 512)
+        self.bridge.listener.bridge_adapter_state(False)
+
+        self.bridge.listener.bridge_adapter_state(True)
+
+        # The bridge restarts the scan and advertising itself; the driver does not repeat them.
+        self.assertEqual(len(self.bridge.named("startScanning")), 1)
+        self.assertEqual(len(self.bridge.named("startAdvertising")), 1)
+        self.assertIs(self.driver.state, DriverState.SCANNING)
+        self.bridge.listener.bridge_discovered(PEER, None, -50)
+        self.assertEqual(len(self.events.named("discovered")), 1)
+        self.driver.connect(PEER)
+        self.assertEqual(self.bridge.named("connect"), [("connect", PEER)])
+        self.bridge.listener.bridge_connected(PEER, "central", list(PEER_IDENTITY), 512)
+        self.assertEqual(self.driver.connected_peers, [PEER])
+
+    def test_adapter_changes_are_ignored_once_the_driver_is_stopped(self):
+        self.bridge.listener.bridge_connected(PEER, "central", list(PEER_IDENTITY), 512)
+        self.driver.stop()
+        self.events.items.clear()
+
+        self.bridge.listener.bridge_adapter_state(False)
+        self.bridge.listener.bridge_adapter_state(True)
+
+        self.assertEqual(self.events.items, [])
+
     def test_duplicate_identity_abandons_the_connection_without_a_failure_report(self):
         self.driver.on_duplicate_identity_detected = lambda address, identity: identity == PEER_IDENTITY
         self.driver.connect(PEER)
@@ -621,6 +672,36 @@ class StarlingBleInterfaceTest(unittest.TestCase):
         self.assertEqual(self.bridge.named("disconnect"), [("disconnect", PEER)])
         self.assertEqual(self.interface.driver.connected_peers, [])
         self.assertNotIn(PEER, self.interface.peers)
+
+    def test_peer_is_reconnected_after_bluetooth_is_turned_off_and_on(self):
+        import RNS
+
+        device = lambda: self.bridge.listener.bridge_discovered(PEER, None, -50)
+        self.interface.driver.set_identity(LOCAL_IDENTITY)
+        device()
+        self.assertEqual(self.bridge.named("connect"), [("connect", PEER)])
+        self.bridge.listener.bridge_connected(PEER, "central", list(PEER_IDENTITY), 512)
+        first = self.interface.spawned_interfaces[PEER_IDENTITY.hex()[:16]]
+
+        self.bridge.listener.bridge_adapter_state(False)
+        self.assertEqual(self.interface.driver.connected_peers, [])
+        self.assertNotIn(PEER, self.interface.address_to_identity)
+        self.assertEqual(self.interface.connection_blacklist, {})
+
+        self.bridge.listener.bridge_adapter_state(True)
+        # The reference waits five seconds between attempts to one address.
+        self.interface.discovered_peers[PEER].last_connection_attempt -= 6
+        device()
+        self.assertEqual(self.bridge.named("connect"), [("connect", PEER)] * 2)
+        self.bridge.listener.bridge_connected(PEER, "central", list(PEER_IDENTITY), 512)
+
+        self.assertEqual(self.interface.driver.connected_peers, [PEER])
+        peer_interface = self.interface.spawned_interfaces[PEER_IDENTITY.hex()[:16]]
+        self.assertIs(peer_interface, first)
+        self.assertTrue(peer_interface.online)
+        self.assertIn(peer_interface, RNS.Transport.interfaces)
+        peer_interface.process_outgoing(b"after the restart")
+        self.assertEqual(self.bridge.named("writeRx")[-1][2][5:], b"after the restart")
 
     def test_detach_stops_the_bridge(self):
         self.bridge.listener.bridge_connected(PEER, "central", list(PEER_IDENTITY), 512)

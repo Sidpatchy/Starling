@@ -23,7 +23,10 @@ import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Handler
@@ -51,6 +54,9 @@ internal interface BlePeerListener {
     fun mtuChanged(address: String, payloadSize: Int)
     fun data(address: String, value: ByteArray)
     fun error(severity: String, message: String)
+
+    /** Bluetooth was turned off (every link is gone) or is usable again. */
+    fun adapterStateChanged(enabled: Boolean)
 }
 
 /** Forwards bridge events to the Python driver in starling_ble_android. */
@@ -85,6 +91,10 @@ private class PythonBlePeerListener(private val driver: PyObject) : BlePeerListe
     override fun error(severity: String, message: String) {
         driver.callAttr("bridge_error", severity, message)
     }
+
+    override fun adapterStateChanged(enabled: Boolean) {
+        driver.callAttr("bridge_adapter_state", enabled)
+    }
 }
 
 /**
@@ -96,6 +106,11 @@ private class PythonBlePeerListener(private val driver: PyObject) : BlePeerListe
  * that connect to this phone, and a GATT client per peer this phone connects
  * to. It shares the adapter with [AndroidRNodeBluetoothBridge]; each uses its
  * own scan callback and GATT handles, so neither stops the other's work.
+ *
+ * Turning Bluetooth off invalidates the GATT server, the advertiser, the scan,
+ * and every connection without telling their callbacks. The bridge listens for
+ * adapter state changes: it drops all of them when the adapter goes off and
+ * recreates the server, advertising, and scanning when it comes back on.
  */
 @SuppressLint("MissingPermission")
 internal class AndroidBlePeerBridge(context: Context) {
@@ -123,6 +138,11 @@ internal class AndroidBlePeerBridge(context: Context) {
     private var advertisingRequested = false
     private var advertising = false
     private var scanning = false
+
+    /** False from the moment Bluetooth is turned off until it is on again. */
+    private var adapterOn = false
+    private var adapterReceiverRegistered = false
+    private var restartAttempts = 0
     private var scanMode = ScanSettings.SCAN_MODE_BALANCED
     private var connectionTimeoutMs = DEFAULT_CONNECTION_TIMEOUT_MS
     private var maxPeers = DEFAULT_MAX_PEERS
@@ -206,14 +226,41 @@ internal class AndroidBlePeerBridge(context: Context) {
             return "The Bluetooth peer service identifiers are not valid."
         }
 
-        val service = BluetoothGattService(this.serviceUuid, BluetoothGattService.SERVICE_TYPE_PRIMARY)
+        synchronized(lock) {
+            this.listener = listener
+            this.connectionTimeoutMs = (connectionTimeoutSeconds * 1000).toLong().coerceIn(5_000L, 120_000L)
+            this.maxPeers = maxPeers.coerceAtLeast(1)
+            adapter = bluetoothAdapter
+            events = Executors.newSingleThreadExecutor { runnable ->
+                Thread(runnable, "starling-ble-peer-events").apply { isDaemon = true }
+            }
+            advertisingRequested = false
+            adapterOn = true
+            restartAttempts = 0
+            running = true
+        }
+        openServer(manager)?.let { message ->
+            stop()
+            return message
+        }
+        registerAdapterReceiver()
+        return null
+    }
+
+    /**
+     * Opens the GATT server and publishes the peer service on it. Advertising
+     * begins from [serverCallback] once Android confirms the service. Returns
+     * a message for the user on failure, or null.
+     */
+    private fun openServer(manager: BluetoothManager): String? {
+        val service = BluetoothGattService(serviceUuid, BluetoothGattService.SERVICE_TYPE_PRIMARY)
         val rx = BluetoothGattCharacteristic(
-            this.rxUuid,
+            rxUuid,
             BluetoothGattCharacteristic.PROPERTY_WRITE or BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE,
             BluetoothGattCharacteristic.PERMISSION_WRITE,
         )
         val tx = BluetoothGattCharacteristic(
-            this.txUuid,
+            txUuid,
             BluetoothGattCharacteristic.PROPERTY_READ or BluetoothGattCharacteristic.PROPERTY_NOTIFY,
             BluetoothGattCharacteristic.PERMISSION_READ,
         )
@@ -224,7 +271,7 @@ internal class AndroidBlePeerBridge(context: Context) {
             ),
         )
         val identity = BluetoothGattCharacteristic(
-            this.identityUuid,
+            identityUuid,
             BluetoothGattCharacteristic.PROPERTY_READ,
             BluetoothGattCharacteristic.PERMISSION_READ,
         )
@@ -233,26 +280,16 @@ internal class AndroidBlePeerBridge(context: Context) {
         service.addCharacteristic(identity)
 
         synchronized(lock) {
-            this.listener = listener
-            this.connectionTimeoutMs = (connectionTimeoutSeconds * 1000).toLong().coerceIn(5_000L, 120_000L)
-            this.maxPeers = maxPeers.coerceAtLeast(1)
-            adapter = bluetoothAdapter
-            events = Executors.newSingleThreadExecutor { runnable ->
-                Thread(runnable, "starling-ble-peer-events").apply { isDaemon = true }
-            }
             serverTx = tx
             serviceAdded = false
-            advertisingRequested = false
-            running = true
+            advertising = false
         }
         val server = runCatching { manager.openGattServer(appContext, serverCallback) }.getOrNull()
-        if (server == null) {
-            stop()
-            return "Android could not open the Bluetooth peer service."
-        }
+            ?: return "Android could not open the Bluetooth peer service."
         synchronized(lock) { gattServer = server }
         if (!runCatching { server.addService(service) }.getOrDefault(false)) {
-            stop()
+            synchronized(lock) { if (gattServer === server) gattServer = null }
+            runCatching { server.close() }
             return "Android could not publish the Bluetooth peer service."
         }
         return null
@@ -285,7 +322,9 @@ internal class AndroidBlePeerBridge(context: Context) {
             serviceAdded = false
             executor = events
             events = null
+            adapterOn = false
         }
+        unregisterAdapterReceiver()
         mainHandler.removeCallbacksAndMessages(timerToken)
         stopScanning()
         stopAdvertising()
@@ -305,6 +344,174 @@ internal class AndroidBlePeerBridge(context: Context) {
             scanner = null
             advertiser = null
         }
+    }
+
+    // ---------------------------------------------------------------------
+    // Bluetooth being turned off and on
+    // ---------------------------------------------------------------------
+
+    private val adapterStateReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action != BluetoothAdapter.ACTION_STATE_CHANGED) return
+            val state = intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR)
+            Log.i(TAG, "Bluetooth adapter state changed to ${adapterStateName(state)}")
+            when (state) {
+                BluetoothAdapter.STATE_TURNING_OFF, BluetoothAdapter.STATE_OFF -> adapterTurnedOff()
+                BluetoothAdapter.STATE_ON -> adapterTurnedOn()
+            }
+        }
+    }
+
+    private fun registerAdapterReceiver() {
+        synchronized(lock) {
+            if (!running || adapterReceiverRegistered) return
+            // The adapter state is a protected system broadcast, but it is not
+            // always sent by the system UID, so the receiver must be exported.
+            ContextCompat.registerReceiver(
+                appContext,
+                adapterStateReceiver,
+                IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED),
+                ContextCompat.RECEIVER_EXPORTED,
+            )
+            adapterReceiverRegistered = true
+        }
+    }
+
+    private fun unregisterAdapterReceiver() {
+        synchronized(lock) {
+            if (!adapterReceiverRegistered) return
+            adapterReceiverRegistered = false
+        }
+        runCatching { appContext.unregisterReceiver(adapterStateReceiver) }
+    }
+
+    /**
+     * Releases everything the adapter restart invalidates. What the driver
+     * asked for (scanning, advertising) is remembered for [adapterTurnedOn].
+     */
+    private fun adapterTurnedOff() {
+        val links: List<CentralLink>
+        val peerCount: Int
+        val dropped: List<GattOperation>
+        val server: BluetoothGattServer?
+        val leScanner: BluetoothLeScanner?
+        val leAdvertiser: BluetoothLeAdvertiser?
+        synchronized(lock) {
+            if (!running || !adapterOn) return
+            adapterOn = false
+            links = centralLinks.values.toList()
+            peerCount = serverPeers.size
+            centralLinks.clear()
+            serverPeers.clear()
+            serverMtus.clear()
+            subscribedCentrals.clear()
+            lastDiscovery.clear()
+            dropped = operations.clear()
+            dropped.forEach { it.done = true }
+            links.forEach {
+                it.state = LinkState.CLOSED
+                it.timeout = null
+            }
+            server = gattServer
+            gattServer = null
+            serverTx = null
+            serviceAdded = false
+            advertising = false
+            leScanner = scanner
+            leAdvertiser = advertiser
+            scanner = null
+            advertiser = null
+        }
+        // Connection timeouts, operation watchdogs, the scan refresh, and any restart retry.
+        mainHandler.removeCallbacksAndMessages(timerToken)
+        Log.i(
+            TAG,
+            "Bluetooth is off: closed ${links.size} central link(s), $peerCount peripheral link(s), " +
+                "the GATT server, advertising, and scanning",
+        )
+        dropped.forEach { operation -> runCatching { operation.onDone(false) } }
+        runCatching { leScanner?.stopScan(scanCallback) }
+        runCatching { leAdvertiser?.stopAdvertising(advertiseCallback) }
+        links.forEach { link -> runCatching { link.gatt?.close() } }
+        runCatching { server?.close() }
+        emit { it.adapterStateChanged(false) }
+    }
+
+    private fun adapterTurnedOn() {
+        synchronized(lock) {
+            if (!running || adapterOn) return
+            adapterOn = true
+            restartAttempts = 0
+        }
+        restartAfterAdapterOn()
+    }
+
+    private val restartRetry = Runnable { restartAfterAdapterOn() }
+
+    private fun restartAfterAdapterOn() {
+        val message = recreateAdapterState()
+        if (message == null) return
+        val attempt = synchronized(lock) {
+            if (!running || !adapterOn) return
+            ++restartAttempts
+        }
+        if (attempt < MAX_RESTART_ATTEMPTS) {
+            Log.i(TAG, "Bluetooth peer restart attempt $attempt failed ($message); trying again")
+            schedule(RESTART_RETRY_MS, restartRetry)
+        } else {
+            Log.w(TAG, "Bluetooth peer restart gave up after $attempt attempts: $message")
+            emit { it.error("error", "Bluetooth peers could not restart after Bluetooth came back on: $message") }
+        }
+    }
+
+    /**
+     * Recreates the GATT server, advertising, and scanning on the restarted
+     * adapter. Returns what could not be restarted, or null when all of it was.
+     */
+    private fun recreateAdapterState(): String? {
+        val wantScan: Boolean
+        val wantAdvertising: Boolean
+        val needServer: Boolean
+        synchronized(lock) {
+            if (!running || !adapterOn) return null
+            wantScan = scanning
+            wantAdvertising = advertisingRequested
+            needServer = gattServer == null
+        }
+        val manager = appContext.getSystemService(BluetoothManager::class.java)
+            ?: return "Bluetooth is not available"
+        val bluetoothAdapter = manager.adapter ?: return "Bluetooth is not available"
+        if (!bluetoothAdapter.isEnabled) return "Bluetooth is not on yet"
+        val leScanner = bluetoothAdapter.bluetoothLeScanner
+        val leAdvertiser = bluetoothAdapter.bluetoothLeAdvertiser
+        if (wantScan && leScanner == null) return "Bluetooth scanning is not available yet"
+        if (wantAdvertising && leAdvertiser == null) return "Bluetooth advertising is not available yet"
+        synchronized(lock) {
+            adapter = bluetoothAdapter
+            scanner = leScanner
+            advertiser = leAdvertiser
+        }
+        if (needServer) {
+            openServer(manager)?.let { return it }
+            Log.i(TAG, "Bluetooth is on: GATT server reopened")
+        }
+        // On a first attempt advertising begins once Android confirms the service.
+        if (synchronized(lock) { serviceAdded }) beginAdvertising()?.let { return it }
+        if (wantScan) {
+            beginScan()?.let { return it }
+            Log.i(TAG, "Bluetooth is on: scanning restarted")
+        }
+        Log.i(TAG, "Bluetooth is on: peer service restarted (scanning $wantScan, advertising $wantAdvertising)")
+        emit { it.adapterStateChanged(true) }
+        return null
+    }
+
+    private fun adapterStateName(state: Int): String = when (state) {
+        BluetoothAdapter.STATE_OFF -> "off"
+        BluetoothAdapter.STATE_TURNING_ON -> "turning on"
+        BluetoothAdapter.STATE_ON -> "on"
+        BluetoothAdapter.STATE_TURNING_OFF -> "turning off"
+        else -> "unknown ($state)"
     }
 
     fun setIdentity(identity: ByteArray) {
@@ -339,14 +546,22 @@ internal class AndroidBlePeerBridge(context: Context) {
     // ---------------------------------------------------------------------
 
     fun startScanning(powerMode: String): String? {
-        val bluetoothAdapter = synchronized(lock) { if (running) adapter else null }
-            ?: return "Bluetooth peers are not running."
-        val leScanner = bluetoothAdapter.bluetoothLeScanner ?: return "Bluetooth scanning is not available."
         val mode = when (powerMode) {
             "aggressive" -> ScanSettings.SCAN_MODE_LOW_LATENCY
             "saver" -> ScanSettings.SCAN_MODE_LOW_POWER
             else -> ScanSettings.SCAN_MODE_BALANCED
         }
+        val bluetoothAdapter = synchronized(lock) {
+            if (!running) return "Bluetooth peers are not running."
+            if (!adapterOn) {
+                // Bluetooth is off; the scan starts when it comes back on.
+                scanMode = mode
+                scanning = true
+                return null
+            }
+            adapter
+        } ?: return "Bluetooth peers are not running."
+        val leScanner = bluetoothAdapter.bluetoothLeScanner ?: return "Bluetooth scanning is not available."
         synchronized(lock) {
             scanner = leScanner
             scanMode = mode
@@ -368,6 +583,7 @@ internal class AndroidBlePeerBridge(context: Context) {
         return try {
             leScanner.startScan(listOf(filter), settings, scanCallback)
             synchronized(lock) { scanning = true }
+            mainHandler.removeCallbacks(scanRefresh)
             // Android quietly downgrades scans that run for too long, so renew this one.
             schedule(SCAN_REFRESH_MS, scanRefresh)
             null
@@ -416,8 +632,15 @@ internal class AndroidBlePeerBridge(context: Context) {
 
     /** Advertises the service UUID once the GATT service is published. */
     fun startAdvertising(): String? {
-        val bluetoothAdapter = synchronized(lock) { if (running) adapter else null }
-            ?: return "Bluetooth peers are not running."
+        val bluetoothAdapter = synchronized(lock) {
+            if (!running) return "Bluetooth peers are not running."
+            if (!adapterOn) {
+                // Bluetooth is off; advertising starts when it comes back on.
+                advertisingRequested = true
+                return null
+            }
+            adapter
+        } ?: return "Bluetooth peers are not running."
         val leAdvertiser = bluetoothAdapter.bluetoothLeAdvertiser
             ?: return "This device cannot advertise over Bluetooth."
         val ready = synchronized(lock) {
@@ -448,6 +671,7 @@ internal class AndroidBlePeerBridge(context: Context) {
         return try {
             leAdvertiser.startAdvertising(settings, data, advertiseCallback)
             synchronized(lock) { advertising = true }
+            Log.i(TAG, "Advertising the Bluetooth peer service")
             null
         } catch (error: RuntimeException) {
             "Android could not start Bluetooth advertising: ${error.message.orEmpty()}"
@@ -480,8 +704,10 @@ internal class AndroidBlePeerBridge(context: Context) {
      * the attempt is under way; its outcome then arrives through the listener.
      */
     fun connect(address: String): String? {
-        val bluetoothAdapter = synchronized(lock) { if (running) adapter else null }
-            ?: return "Bluetooth peers are not running."
+        val bluetoothAdapter = synchronized(lock) {
+            if (running && !adapterOn) return "Bluetooth is off."
+            if (running) adapter else null
+        } ?: return "Bluetooth peers are not running."
         val device = try {
             bluetoothAdapter.getRemoteDevice(address)
         } catch (_: IllegalArgumentException) {
@@ -534,7 +760,10 @@ internal class AndroidBlePeerBridge(context: Context) {
         if (peer != null) {
             Log.i(TAG, "Disconnected from $address (peripheral): closed by the driver")
             releaseOperations(address)
-            runCatching { server?.cancelConnection(peer.device) }
+            // The server of an adapter that is off or restarting only throws.
+            if (synchronized(lock) { adapterOn && gattServer === server }) {
+                runCatching { server?.cancelConnection(peer.device) }
+            }
         }
     }
 
@@ -1018,7 +1247,7 @@ internal class AndroidBlePeerBridge(context: Context) {
 
     private fun submit(operation: GattOperation) {
         val next = synchronized(lock) {
-            if (!running) {
+            if (!running || !adapterOn) {
                 operation.done = true
                 null
             } else {
@@ -1152,5 +1381,7 @@ internal class AndroidBlePeerBridge(context: Context) {
         private const val SCAN_REFRESH_MS = 20 * 60 * 1000L
         private const val DISCOVERY_REPORT_INTERVAL_MS = 1_000L
         private const val MAX_TRACKED_DISCOVERIES = 256
+        private const val RESTART_RETRY_MS = 2_000L
+        private const val MAX_RESTART_ATTEMPTS = 10
     }
 }
