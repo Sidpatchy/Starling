@@ -43,6 +43,7 @@ MAX_TRACKED_REPLY_TIMEOUTS = 64
 
 _bridge = None
 _interface_class = None
+_peer_listener = None
 
 
 def set_bridge(bridge):
@@ -60,6 +61,24 @@ def clear_bridge():
 
 def has_bridge():
     return _bridge is not None
+
+
+def set_peer_listener(listener):
+    """Register a callable run each time a new peer completes its identity handshake."""
+    global _peer_listener
+    _peer_listener = listener
+    return True
+
+
+def _notify_peer_linked():
+    listener = _peer_listener
+    if listener is None:
+        return
+    try:
+        listener()
+    except Exception:
+        # A listener failure must not break the peer link that was just made.
+        pass
 
 
 def _as_bytes(value):
@@ -538,6 +557,15 @@ def load_interface_class():
                 # server is unusable. The Android bridge has its own server.
                 config = Interface.get_config_obj(configuration)
                 self.enable_peripheral = _config_bool(config.get("enable_peripheral"), True)
+
+            def _spawn_peer_interface(self, address, name, peer_identity, *args, **kwargs):
+                # The reference spawns a peer once its identity is known and
+                # reuses that interface when the same identity reconnects.
+                is_new = self._compute_identity_hash(peer_identity) not in self.spawned_interfaces
+                peer_interface = super()._spawn_peer_interface(address, name, peer_identity, *args, **kwargs)
+                if is_new and peer_interface is not None:
+                    _notify_peer_linked()
+                return peer_interface
 
         _interface_class = StarlingBLEInterface
     return _interface_class
