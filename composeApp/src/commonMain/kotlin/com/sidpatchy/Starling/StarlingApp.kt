@@ -218,6 +218,17 @@ fun StarlingApp(
     val persistedNodeConfig by remember(liveChatRepository) {
         liveChatRepository?.nodeConfig ?: flowOf<ReticulumNodeConfig?>(null)
     }.collectAsState(initial = liveChatRepository?.nodeConfig?.value)
+    val resolvedBleRNode by nodeController.resolvedBleRNode.collectAsState()
+    var rnodeUpgradeNote by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(resolvedBleRNode, liveChatRepository) {
+        // A Bluetooth RNode saved by name is kept by device id once the node has connected to it.
+        val resolved = resolvedBleRNode ?: return@LaunchedEffect
+        val chat = liveChatRepository ?: return@LaunchedEffect
+        val config = chat.nodeConfig.value ?: return@LaunchedEffect
+        val (radios, note) = upgradeRNodeBleInterfaces(config.rnodeInterfaces, resolved) ?: return@LaunchedEffect
+        chat.saveNodeConfig(config.copy(rnodeInterfaces = radios))
+        if (note != null) rnodeUpgradeNote = note
+    }
     val preferredHubNetworkId by remember(liveChatRepository) {
         liveChatRepository?.preferredHubNetworkId ?: flowOf(null)
     }.collectAsState(initial = liveChatRepository?.preferredHubNetworkId?.value)
@@ -472,7 +483,11 @@ fun StarlingApp(
         if (identityManager != null && identityManager.state.value !is ReticulumIdentityState.Available) return@LaunchedEffect
         nodeController.refreshState()
         val savedConfig = liveChatRepository?.nodeConfig?.value ?: return@LaunchedEffect
-        if (savedConfig.mode != ReticulumRuntimeMode.EMBEDDED || savedConfig.validationError() != null) return@LaunchedEffect
+        if (savedConfig.mode != ReticulumRuntimeMode.EMBEDDED ||
+            savedConfig.validationError(nodeController.supportsBleRNodes) != null
+        ) {
+            return@LaunchedEffect
+        }
 
         when (nodeController.state.value) {
             ReticulumNodeState.Stopped -> nodeController.start(savedConfig)
@@ -535,7 +550,7 @@ fun StarlingApp(
             if (repository.previewMode.value) return@collect
 
             nodeController.refreshState()
-            val savedConfig = chat.nodeConfig.value?.takeIf { it.validationError() == null }
+            val savedConfig = chat.nodeConfig.value?.takeIf { it.validationError(nodeController.supportsBleRNodes) == null }
             val canStartNode = identityManager == null || identityManager.state.value is ReticulumIdentityState.Available
             when (val state = nodeController.state.value) {
                 is ReticulumNodeState.Running -> {
@@ -712,6 +727,10 @@ fun StarlingApp(
                                 },
                                 supportsReticulumProtocol = nodeController.supportsReticulumProtocol,
                                 supportsRNodeInterfaces = nodeController.supportsRNodeInterfaces,
+                                supportsBleRNodes = nodeController.supportsBleRNodes,
+                                rnodeBlePicker = nodeController.rnodeBlePicker,
+                                resolvedBleRNode = resolvedBleRNode,
+                                rnodeUpgradeNote = rnodeUpgradeNote,
                                 supportsBlePeering = nodeController.supportsBlePeering,
                                 rrcState = visibleConnectionState,
                                 rrcError = visibleRrcError,
@@ -996,6 +1015,10 @@ fun StarlingApp(
                                 },
                                 supportsReticulumProtocol = nodeController.supportsReticulumProtocol,
                                 supportsRNodeInterfaces = nodeController.supportsRNodeInterfaces,
+                                supportsBleRNodes = nodeController.supportsBleRNodes,
+                                rnodeBlePicker = nodeController.rnodeBlePicker,
+                                resolvedBleRNode = resolvedBleRNode,
+                                rnodeUpgradeNote = rnodeUpgradeNote,
                                 supportsBlePeering = nodeController.supportsBlePeering,
                                 rrcState = visibleConnectionState,
                                 rrcError = visibleRrcError,

@@ -175,6 +175,10 @@ internal fun SettingsPage(
     onManageIdentity: () -> Unit,
     supportsReticulumProtocol: Boolean,
     supportsRNodeInterfaces: Boolean,
+    supportsBleRNodes: Boolean = false,
+    rnodeBlePicker: RNodeBlePicker? = null,
+    resolvedBleRNode: ResolvedBleRNode? = null,
+    rnodeUpgradeNote: String? = null,
     supportsBlePeering: Boolean = false,
     rrcState: ReticulumConnectionState,
     rrcError: String?,
@@ -222,18 +226,22 @@ internal fun SettingsPage(
                         radio.txPowerDbm.toString(),
                         radio.spreadingFactor.toString(),
                         radio.codingRate.toString(),
+                        radio.bleName.orEmpty(),
+                        if (radio.pairedByStarling) "1" else "0",
                     )
                 }
             },
             restore = { saved: List<String> ->
-                saved.chunked(6).mapNotNull { fields ->
-                    if (fields.size != 6) null else ReticulumRNodeInterface(
+                saved.chunked(8).mapNotNull { fields ->
+                    if (fields.size != 8) null else ReticulumRNodeInterface(
                         port = fields[0],
                         frequencyHz = fields[1].toLongOrNull() ?: 0L,
                         bandwidthHz = fields[2].toIntOrNull() ?: 0,
                         txPowerDbm = fields[3].toIntOrNull() ?: -1,
                         spreadingFactor = fields[4].toIntOrNull() ?: 0,
                         codingRate = fields[5].toIntOrNull() ?: 0,
+                        bleName = fields[6].ifBlank { null },
+                        pairedByStarling = fields[7] == "1",
                     )
                 }
             },
@@ -274,7 +282,7 @@ internal fun SettingsPage(
             existingInstanceRpcKeyHex = existingRpcKey,
         )
     }
-    val nodeConfigValidationError = nodeConfigDraft.validationError()
+    val nodeConfigValidationError = nodeConfigDraft.validationError(supportsBleRNodes)
     val nodeActionEnabled = nodeSupported && !isStarting && !identityBusy &&
         (isRunning || (identityAvailable && nodeConfigValidationError == null))
     val nodeActionBlockedReason = when {
@@ -301,6 +309,11 @@ internal fun SettingsPage(
             is ReticulumNodeState.PreparingRuntime -> Unit
             else -> Unit
         }
+    }
+    LaunchedEffect(resolvedBleRNode) {
+        // The node connected to a Bluetooth RNode saved by name: keep its id from now on.
+        val resolved = resolvedBleRNode ?: return@LaunchedEffect
+        upgradeRNodeBleInterfaces(rnodeInterfaces, resolved)?.let { (upgraded, _) -> rnodeInterfaces = upgraded }
     }
     LaunchedEffect(runtimeModeName, tcpPeers, rnodeInterfaces, blePeeringEnabled) {
         onNodeConfigChange(
@@ -559,7 +572,11 @@ internal fun SettingsPage(
                                 if (!supportsReticulumProtocol) {
                                     "This opens a plain TCP socket only; it does not exchange Reticulum traffic."
                                 } else if (supportsRNodeInterfaces) {
-                                    "Configure TCP peers and/or an RNode radio. Use a serial port on desktop, tcp://host for a Wi-Fi RNode on port 7633, or ble://device name for BLE on iOS and Android. Bare ble:// selects the first nearby RNode. Android and iOS support one BLE RNode at a time. Starling stays a client; Reticulum transport routing remains disabled."
+                                    if (supportsBleRNodes) {
+                                        "Add TCP peers and/or an RNode. Choose Bluetooth or Wi-Fi for each RNode. Starling supports one Bluetooth RNode at a time and stays a client; Reticulum transport routing remains disabled."
+                                    } else {
+                                        "Add TCP peers and/or an RNode. Choose a serial port or Wi-Fi for each RNode. Starling stays a client; Reticulum transport routing remains disabled."
+                                    }
                                 } else {
                                     "Manage outbound TCP client interfaces. Starling stays a client; Reticulum transport routing remains disabled."
                                 },
@@ -660,18 +677,19 @@ internal fun SettingsPage(
                                                 }
                                             }
                                         }
-                                        OutlinedTextField(
-                                            value = radio.port,
-                                            onValueChange = { value ->
+                                        RNodeConnectionEditor(
+                                            radio = radio,
+                                            onRadioChange = { changed ->
                                                 rnodeInterfaces = rnodeInterfaces.mapIndexed { radioIndex, old ->
-                                                    if (radioIndex == index) old.copy(port = value) else old
+                                                    if (radioIndex == index) changed else old
                                                 }
                                                 connectionInputError = null
                                             },
-                                            modifier = Modifier.fillMaxWidth(),
-                                            label = { Text("Serial port, tcp://host, or ble://device name") },
-                                            singleLine = true,
-                                            enabled = !isRunning && !isStarting,
+                                            locked = isRunning || isStarting,
+                                            supportsBleRNodes = supportsBleRNodes,
+                                            picker = rnodeBlePicker,
+                                            upgradeNote = rnodeUpgradeNote,
+                                            onDismissKeyboard = onDismissKeyboard,
                                         )
                                         OutlinedTextField(
                                             value = radio.frequencyHz.takeIf { it > 0 }?.toString().orEmpty(),
@@ -752,7 +770,12 @@ internal fun SettingsPage(
                                                 enabled = !isRunning && !isStarting,
                                             )
                                         }
-                                        radio.validationError()?.let { validationError ->
+                                        // An RNode that is not chosen yet is not an error until a start is tried.
+                                        radio.validationError(supportsBleRNodes)?.takeIf { validationError ->
+                                            validationError != RNodeBleText.CHOOSE_BEFORE_START ||
+                                                validationError == connectionInputError ||
+                                                validationError == (nodeState as? ReticulumNodeState.Failed)?.message
+                                        }?.let { validationError ->
                                             Text(validationError, color = ErrorText, fontSize = 10.sp)
                                         }
                                     }
@@ -837,7 +860,9 @@ internal fun SettingsPage(
                                     "${state.onlineTcpPeerIds.size} of ${state.tcpPeers.size} TCP connections online; " +
                                         "${state.onlineRNodePorts.size} of ${state.rnodeInterfaces.size} RNode radios online."
                                 state.rnodeInterfaces.isNotEmpty() -> "${state.onlineRNodePorts.size} of ${state.rnodeInterfaces.size} RNode radios online. " +
-                                    state.rnodeInterfaces.joinToString { radio -> "${radio.port} ${if (radio.id in state.onlineRNodePorts) "(online)" else "(retrying)"}" }
+                                    state.rnodeInterfaces.joinToString { radio ->
+                                        val saved = rnodeInterfaces.firstOrNull { it.id == radio.id } ?: radio
+                                        "${rnodeDisplayName(saved)} ${if (radio.id in state.onlineRNodePorts) "(online)" else "(retrying)"}" }
                                 state.tcpPeers.isNotEmpty() -> "${state.onlineTcpPeerIds.size} of ${state.tcpPeers.size} TCP connections online. " +
                                     (if (supportsReticulumProtocol) "" else "Socket check only; RNS traffic is not implemented on iOS. ") +
                                     state.tcpPeers.joinToString {

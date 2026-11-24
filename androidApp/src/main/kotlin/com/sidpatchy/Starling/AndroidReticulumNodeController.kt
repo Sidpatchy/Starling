@@ -23,12 +23,16 @@ class AndroidReticulumNodeController(
     context: Context,
     private val requestBluetoothPermissions: suspend () -> Boolean = { false },
     private val requestBlePeeringPermissions: suspend () -> Boolean = { false },
+    override val rnodeBlePicker: RNodeBlePicker? = null,
 ) : ReticulumNodeController {
     private val appContext = context.applicationContext
     private val _state = MutableStateFlow<ReticulumNodeState>(ReticulumNodeState.Stopped)
     override val state: StateFlow<ReticulumNodeState> = _state.asStateFlow()
     override val isSupported: Boolean = true
     override val supportsRNodeInterfaces: Boolean = true
+    override val supportsBleRNodes: Boolean = true
+    private val _resolvedBleRNode = MutableStateFlow<ResolvedBleRNode?>(null)
+    override val resolvedBleRNode: StateFlow<ResolvedBleRNode?> = _resolvedBleRNode.asStateFlow()
     override val supportsBlePeering: Boolean =
         appContext.packageManager.hasSystemFeature(PackageManager.FEATURE_BLUETOOTH_LE)
     private var pendingStateQuery: CompletableDeferred<ReticulumNodeState>? = null
@@ -38,6 +42,13 @@ class AndroidReticulumNodeController(
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action != ReticulumNodeService.ACTION_STATE) return
             val state = stateFromIntent(intent)
+            _resolvedBleRNode.value = if (state is ReticulumNodeState.Running) {
+                val id = intent.getStringExtra(ReticulumNodeService.EXTRA_RNODE_BLE_ID).orEmpty()
+                val name = intent.getStringExtra(ReticulumNodeService.EXTRA_RNODE_BLE_NAME).orEmpty()
+                if (id.isBlank()) null else ResolvedBleRNode(id, name)
+            } else {
+                null
+            }
             _state.value = state
             pendingStateQuery?.complete(state)
             if (state is ReticulumNodeState.Starting || state is ReticulumNodeState.Running) {
@@ -94,6 +105,10 @@ class AndroidReticulumNodeController(
     }
 
     override suspend fun start(config: ReticulumNodeConfig) {
+        if (config.rnodeInterfaces.any { it.port.isBlank() }) {
+            _state.value = ReticulumNodeState.Failed(RNodeBleText.CHOOSE_BEFORE_START)
+            return
+        }
         val bleInterfaces = config.rnodeInterfaces.filter { it.port.startsWith(BLE_PREFIX, ignoreCase = true) }
         if (bleInterfaces.size > 1) {
             _state.value = ReticulumNodeState.Failed(
@@ -128,7 +143,7 @@ class AndroidReticulumNodeController(
             return
         }
 
-        config.validationError()?.let {
+        config.validationError(supportsBleRNodes)?.let {
             _state.value = ReticulumNodeState.Failed(it)
             return
         }
@@ -139,9 +154,8 @@ class AndroidReticulumNodeController(
         }
 
         if (bleInterfaces.isNotEmpty() && !requestBluetoothPermissions()) {
-            _state.value = ReticulumNodeState.Failed(
-                "Bluetooth permission is required to connect to a BLE RNode. Grant it and try again.",
-            )
+            val radio = bleInterfaces.first()
+            _state.value = ReticulumNodeState.Failed(RNodeBleText.permission(rnodeBleLabel(radio.port, radio.bleName)))
             return
         }
 
@@ -176,7 +190,9 @@ class AndroidReticulumNodeController(
                     .put("bandwidth_hz", radio.bandwidthHz)
                     .put("tx_power_dbm", radio.txPowerDbm)
                     .put("spreading_factor", radio.spreadingFactor)
-                    .put("coding_rate", radio.codingRate),
+                    .put("coding_rate", radio.codingRate)
+                    .put(ReticulumNodeService.RNODE_BLE_NAME_KEY, radio.bleName.orEmpty())
+                    .put(ReticulumNodeService.RNODE_PAIRED_BY_STARLING_KEY, radio.pairedByStarling),
             )
         }
         val intent = Intent(appContext, ReticulumNodeService::class.java).apply {
