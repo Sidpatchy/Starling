@@ -156,6 +156,9 @@ internal class AndroidBlePeerBridge(context: Context) {
         var tx: BluetoothGattCharacteristic? = null
         var identityCharacteristic: BluetoothGattCharacteristic? = null
         var timeout: Runnable? = null
+
+        /** Set while the handshake is held back because the local identity is not known yet. */
+        var awaitingLocalIdentity = false
         val callback = CentralCallback(this)
     }
 
@@ -305,7 +308,14 @@ internal class AndroidBlePeerBridge(context: Context) {
     }
 
     fun setIdentity(identity: ByteArray) {
-        localIdentity = identity.copyOf()
+        val waiting = synchronized(lock) {
+            localIdentity = identity.copyOf()
+            centralLinks.values
+                .filter { it.awaitingLocalIdentity && it.state == LinkState.SETUP }
+                .onEach { it.awaitingLocalIdentity = false }
+        }
+        Log.i(TAG, "Local identity set; ${waiting.size} link(s) were waiting for it")
+        waiting.forEach(::sendHandshake)
     }
 
     /** The adapter address when Android discloses it, which it normally does not. */
@@ -493,8 +503,10 @@ internal class AndroidBlePeerBridge(context: Context) {
                 link.state = LinkState.CLOSED
                 centralLinks.remove(address)
             }
+            Log.i(TAG, "Connect to $address failed: Android did not create a BLE connection")
             return "Android did not create a BLE connection."
         }
+        Log.i(TAG, "Connecting to $address as central")
         val timeout = Runnable {
             if (synchronized(lock) { link.state != LinkState.READY }) {
                 abandon(link, "connection timed out", timedOut = true)
@@ -518,8 +530,9 @@ internal class AndroidBlePeerBridge(context: Context) {
             peer = serverPeers.remove(address)
             server = gattServer
         }
-        if (link != null) closeLink(link)
+        if (link != null && closeLink(link)) Log.i(TAG, "Disconnected from $address (central): closed by the driver")
         if (peer != null) {
+            Log.i(TAG, "Disconnected from $address (peripheral): closed by the driver")
             releaseOperations(address)
             runCatching { server?.cancelConnection(peer.device) }
         }
@@ -535,9 +548,12 @@ internal class AndroidBlePeerBridge(context: Context) {
                         true
                     }
                 }
-                if (proceed) discoverServices(link)
+                if (proceed) {
+                    Log.i(TAG, "Connected to ${link.address}; discovering services")
+                    discoverServices(link)
+                }
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED || status != BluetoothGatt.GATT_SUCCESS) {
-                linkLost(link, "BLE connection closed (status $status)")
+                linkLost(link, "BLE connection closed (status $status, state $newState)")
             }
         }
 
@@ -656,7 +672,7 @@ internal class AndroidBlePeerBridge(context: Context) {
             val accepted = runCatching { listener.identityRead(link.address, identity) }.getOrDefault(true)
             if (!accepted) {
                 // The driver has already recorded why; this is not a failure.
-                closeLink(link)
+                if (closeLink(link)) Log.i(TAG, "Disconnected from ${link.address}: the driver declined its identity")
             } else {
                 requestMtu(link)
             }
@@ -694,18 +710,32 @@ internal class AndroidBlePeerBridge(context: Context) {
         )
     }
 
+    /**
+     * Writes the local identity to RX. The peer drops everything from a
+     * central it cannot identify, so a link only becomes ready once this
+     * write is confirmed. Until the driver supplies the identity the link
+     * stays in setup; [setIdentity] resumes it, or the connection timeout
+     * abandons it and the driver connects again later.
+     */
     private fun sendHandshake(link: CentralLink) {
-        val identity = localIdentity
+        val identity = synchronized(lock) {
+            if (link.state != LinkState.SETUP) return
+            localIdentity.also { link.awaitingLocalIdentity = it == null }
+        }
         if (identity == null) {
-            // Without a local identity there is nothing to announce yet.
-            linkReady(link)
+            Log.i(TAG, "Holding the identity handshake to ${link.address}: the local identity is not set yet")
             return
         }
         submit(
             GattOperation(link.address, KIND_WRITE, {
                 writeRx(link, identity, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
             }) { succeeded ->
-                if (succeeded) linkReady(link) else abandon(link, "identity handshake was not accepted")
+                if (succeeded) {
+                    Log.i(TAG, "Identity handshake written to ${link.address}")
+                    linkReady(link)
+                } else {
+                    abandon(link, "identity handshake was not accepted")
+                }
             },
         )
     }
@@ -723,6 +753,7 @@ internal class AndroidBlePeerBridge(context: Context) {
             // Queued under the lock so no notification can be reported ahead of it.
             emit { it.connected(link.address, ROLE_CENTRAL, identity, payload) }
         }
+        Log.i(TAG, "Link to ${link.address} ready as central (payload $payload bytes)")
     }
 
     private fun writeRx(link: CentralLink, value: ByteArray, writeType: Int): Boolean {
@@ -743,6 +774,7 @@ internal class AndroidBlePeerBridge(context: Context) {
     /** Ends a connection attempt that could not be completed and reports why. */
     private fun abandon(link: CentralLink, message: String, timedOut: Boolean = false) {
         if (!closeLink(link)) return
+        Log.i(TAG, "Abandoned the connection to ${link.address}: $message")
         emit { it.connectFailed(link.address, message, timedOut) }
     }
 
@@ -751,6 +783,7 @@ internal class AndroidBlePeerBridge(context: Context) {
         val wasReady = synchronized(lock) { link.state == LinkState.READY }
         runCatching { link.gatt?.close() }
         if (!closeLink(link, disconnect = false)) return
+        Log.i(TAG, "Disconnected from ${link.address} (central, ${if (wasReady) "was ready" else "during setup"}): $message")
         if (wasReady) emit { it.disconnected(link.address) }
         else emit { it.connectFailed(link.address, message, false) }
     }
@@ -852,6 +885,7 @@ internal class AndroidBlePeerBridge(context: Context) {
                 serverPeers.remove(address)
             } ?: return
             releaseOperations(peer.address)
+            Log.i(TAG, "Disconnected from ${peer.address} (peripheral): link closed (status $status)")
             emit { it.disconnected(peer.address) }
         }
 
@@ -967,6 +1001,7 @@ internal class AndroidBlePeerBridge(context: Context) {
             payload = blePeerPayloadSize(attMtu)
             emit { it.connected(address, ROLE_PERIPHERAL, null, payload) }
         }
+        Log.i(TAG, "Peer $address connected to this phone (peripheral, payload $payload bytes)")
         return true
     }
 

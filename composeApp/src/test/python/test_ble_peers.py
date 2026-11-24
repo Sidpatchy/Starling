@@ -249,6 +249,8 @@ class AndroidBleDriverTest(unittest.TestCase):
         self.driver = ble.AndroidBLEDriver(bridge=self.bridge, max_peers=2, min_rssi=-80, connection_timeout=12)
         self.events = _Events(self.driver)
         self.driver.start(SERVICE_UUID, RX_UUID, TX_UUID, IDENTITY_UUID)
+        self.driver.set_identity(LOCAL_IDENTITY)
+        self.bridge.calls = [call for call in self.bridge.calls if call[0] != "setIdentity"]
 
     def test_start_hands_the_protocol_uuids_and_listener_to_the_bridge(self):
         self.assertEqual(
@@ -290,8 +292,10 @@ class AndroidBleDriverTest(unittest.TestCase):
         self.driver.start_scanning()
         self.assertEqual(self.bridge.named("startScanning"), [("startScanning", "saver")])
         self.assertEqual(self.driver.state, DriverState.SCANNING)
-        self.driver.start_advertising(None, LOCAL_IDENTITY)
-        self.assertEqual(self.bridge.named("setIdentity"), [("setIdentity", LOCAL_IDENTITY)])
+        self.driver.start_advertising(None, PEER_IDENTITY)
+        self.assertEqual(self.bridge.named("setIdentity"), [("setIdentity", PEER_IDENTITY)])
+        self.driver.start_advertising(None, PEER_IDENTITY)
+        self.assertEqual(len(self.bridge.named("setIdentity")), 1)
         self.driver.stop_scanning()
         self.assertEqual(self.driver.state, DriverState.ADVERTISING)
         self.driver.stop_advertising()
@@ -371,6 +375,26 @@ class AndroidBleDriverTest(unittest.TestCase):
         self.assertNotIn(PEER, self.driver._connecting_peers)
         self.assertEqual(self.events.named("error"), [("error", "info", "Duplicate identity rejected for " + PEER + " (MAC rotation)")])
         self.assertTrue(self.bridge.listener.bridge_identity_read(OTHER_PEER, list(LOCAL_IDENTITY)))
+
+    def test_no_connection_is_opened_before_the_local_identity_is_known(self):
+        # After a restart the driver and bridge are new, and peers can be
+        # discovered before Reticulum has supplied the identity.
+        bridge = _FakeBridge()
+        driver = ble.AndroidBLEDriver(bridge=bridge)
+        events = _Events(driver)
+        driver.start(SERVICE_UUID, RX_UUID, TX_UUID, IDENTITY_UUID)
+        driver.start_scanning()
+
+        driver.connect(PEER)
+        self.assertEqual(bridge.named("connect"), [])
+        self.assertEqual(driver._connecting_peers, set())
+        self.assertEqual(events.items, [])
+
+        driver.set_identity(LOCAL_IDENTITY)
+        driver.connect(PEER)
+        names = [call[0] for call in bridge.calls]
+        self.assertEqual(bridge.named("connect"), [("connect", PEER)])
+        self.assertLess(names.index("setIdentity"), names.index("connect"))
 
     def test_connection_failures_use_the_wording_the_interface_backs_off_on(self):
         self.driver.connect(PEER)

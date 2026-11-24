@@ -203,6 +203,10 @@ class AndroidBLEDriver(BLEDriverInterface):
     def connect(self, address):
         if not self._running:
             return
+        # A central announces itself by writing its identity first. Until the
+        # identity is known, leave the peer for a later discovery pass.
+        if self._local_identity is None:
+            return
         with self._peers_lock:
             if address in self._peers:
                 return
