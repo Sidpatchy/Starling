@@ -12,11 +12,15 @@ import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.ParcelUuid
+import androidx.core.content.ContextCompat
 import java.io.IOException
 import java.net.InetAddress
 import java.net.InetSocketAddress
@@ -53,6 +57,17 @@ internal class AndroidRNodeBluetoothBridge(context: Context) {
     @Volatile private var writeType = BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
     private var writeInProgress = false
     private var writeChunkSize = DEFAULT_WRITE_CHUNK
+    private var adapterStateReceiverRegistered = false
+    private val retryScan = Runnable { startScan() }
+
+    private val adapterStateReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action != BluetoothAdapter.ACTION_STATE_CHANGED) return
+            when (intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR)) {
+                BluetoothAdapter.STATE_TURNING_OFF, BluetoothAdapter.STATE_OFF -> handleAdapterOff()
+            }
+        }
+    }
 
     private val scanCallback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
@@ -82,7 +97,7 @@ internal class AndroidRNodeBluetoothBridge(context: Context) {
                 }
                 if (connection == null) throw IOException("Android did not create a BLE connection.")
                 synchronized(lock) { gatt = connection }
-            }.onFailure { failStartup("Could not connect to the BLE RNode: ${it.message.orEmpty()}") }
+            }.onFailure { handleScanRestartFailure("Could not connect to the BLE RNode: ${it.message.orEmpty()}") }
         }
 
         override fun onScanFailed(errorCode: Int) {
@@ -91,7 +106,7 @@ internal class AndroidRNodeBluetoothBridge(context: Context) {
                 failStartup("Android Bluetooth scanning failed (code $errorCode).")
             } else if (running) {
                 closeTcpClient()
-                mainHandler.postDelayed({ startScan() }, RECONNECT_SCAN_DELAY_MS)
+                scheduleScanRetry()
             }
         }
     }
@@ -109,7 +124,7 @@ internal class AndroidRNodeBluetoothBridge(context: Context) {
                         runCatching { gatt.requestMtu(185) }
                     }
                     if (!runCatching { gatt.discoverServices() }.getOrDefault(false)) {
-                        failStartup("Could not discover the BLE RNode services.")
+                        handleGattDisconnect(gatt, "Could not discover the BLE RNode services.")
                     }
                 }
                 BluetoothProfile.STATE_DISCONNECTED ->
@@ -125,14 +140,14 @@ internal class AndroidRNodeBluetoothBridge(context: Context) {
 
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
             if (status != BluetoothGatt.GATT_SUCCESS) {
-                failStartup("Could not inspect the BLE RNode services (status $status).")
+                handleGattDisconnect(gatt, "Could not inspect the BLE RNode services (status $status).")
                 return
             }
             val service = gatt.getService(SERVICE_UUID)
             val rx = service?.getCharacteristic(RX_UUID)
             val tx = service?.getCharacteristic(TX_UUID)
             if (rx == null || tx == null) {
-                failStartup("The BLE device does not provide the RNode Nordic UART service.")
+                handleGattDisconnect(gatt, "The BLE device does not provide the RNode Nordic UART service.")
                 return
             }
             val canWrite = rx.properties and BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE != 0 ||
@@ -140,12 +155,12 @@ internal class AndroidRNodeBluetoothBridge(context: Context) {
             val canNotify = tx.properties and BluetoothGattCharacteristic.PROPERTY_NOTIFY != 0 ||
                 tx.properties and BluetoothGattCharacteristic.PROPERTY_INDICATE != 0
             if (!canWrite || !canNotify) {
-                failStartup("The BLE device's UART characteristics are not compatible with an RNode.")
+                handleGattDisconnect(gatt, "The BLE device's UART characteristics are not compatible with an RNode.")
                 return
             }
             val cccd = tx.getDescriptor(CCCD_UUID)
             if (cccd == null || !runCatching { gatt.setCharacteristicNotification(tx, true) }.getOrDefault(false)) {
-                failStartup("Could not enable BLE RNode notifications.")
+                handleGattDisconnect(gatt, "Could not enable BLE RNode notifications.")
                 return
             }
             synchronized(lock) {
@@ -173,14 +188,18 @@ internal class AndroidRNodeBluetoothBridge(context: Context) {
                 }
             }.getOrDefault(BluetoothGatt.GATT_FAILURE)
             if (result != BluetoothGatt.GATT_SUCCESS) {
-                failStartup("Could not subscribe to BLE RNode notifications.")
+                handleGattDisconnect(gatt, "Could not subscribe to BLE RNode notifications.")
             }
         }
 
         override fun onDescriptorWrite(gatt: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) {
             if (descriptor.uuid != CCCD_UUID) return
             if (status != BluetoothGatt.GATT_SUCCESS) {
-                failStartup("The BLE RNode rejected UART notifications (status $status).")
+                handleGattDisconnect(gatt, "The BLE RNode rejected UART notifications (status $status).")
+                return
+            }
+            if (!openTcpServer(gatt)) {
+                handleGattDisconnect(gatt, "Could not open the local port for the BLE RNode bridge.")
                 return
             }
             synchronized(lock) {
@@ -233,15 +252,7 @@ internal class AndroidRNodeBluetoothBridge(context: Context) {
         }
 
         try {
-            val server = ServerSocket().apply {
-                reuseAddress = true
-                bind(InetSocketAddress(InetAddress.getByName(LOOPBACK_HOST), TCP_PORT), 1)
-            }
-            synchronized(lock) { serverSocket = server }
-            Thread({ acceptTcpConnections() }, "starling-rnode-ble-accept").apply {
-                isDaemon = true
-                start()
-            }
+            registerAdapterStateReceiver()
 
             val manager = appContext.getSystemService(Context.BLUETOOTH_SERVICE) as? android.bluetooth.BluetoothManager
                 ?: return stopWithError("Bluetooth is not available on this device.")
@@ -280,6 +291,11 @@ internal class AndroidRNodeBluetoothBridge(context: Context) {
                 startupLatch = null
             }
             running = false
+            mainHandler.removeCallbacks(retryScan)
+            if (adapterStateReceiverRegistered) {
+                adapterStateReceiverRegistered = false
+                runCatching { appContext.unregisterReceiver(adapterStateReceiver) }
+            }
             runCatching { scanner?.stopScan(scanCallback) }
             scanner = null
             runCatching { gatt?.disconnect() }
@@ -322,12 +338,49 @@ internal class AndroidRNodeBluetoothBridge(context: Context) {
             failStartup(message)
         } else if (running) {
             closeTcpClient()
-            mainHandler.postDelayed({ startScan() }, RECONNECT_SCAN_DELAY_MS)
+            scheduleScanRetry()
         }
+    }
+
+    private fun scheduleScanRetry() {
+        mainHandler.removeCallbacks(retryScan)
+        mainHandler.postDelayed(retryScan, RECONNECT_SCAN_DELAY_MS)
     }
 
     private fun stopScan() {
         runCatching { scanner?.stopScan(scanCallback) }
+    }
+
+    private fun registerAdapterStateReceiver() {
+        synchronized(lock) {
+            if (!running || adapterStateReceiverRegistered) return
+            // The adapter state is a protected system broadcast, but it is not
+            // always sent by the system UID, so the receiver must be exported.
+            ContextCompat.registerReceiver(
+                appContext,
+                adapterStateReceiver,
+                IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED),
+                ContextCompat.RECEIVER_EXPORTED,
+            )
+            adapterStateReceiverRegistered = true
+        }
+    }
+
+    /**
+     * Android does not reliably report a GATT disconnect when Bluetooth is
+     * switched off. Drop the link the same way as a lost RNode; the scan retry
+     * then keeps failing until the adapter is back on and the RNode is found.
+     */
+    private fun handleAdapterOff() {
+        if (!running) return
+        val message = "Bluetooth was turned off."
+        val activeGatt = synchronized(lock) { gatt }
+        if (activeGatt != null) {
+            handleGattDisconnect(activeGatt, message)
+        } else {
+            stopScan()
+            handleScanRestartFailure(message)
+        }
     }
 
     private fun failStartup(message: String) {
@@ -340,6 +393,11 @@ internal class AndroidRNodeBluetoothBridge(context: Context) {
         }
     }
 
+    /**
+     * Drops a link that was lost or could not be set up. During startup that
+     * fails start() with [message]; afterwards the bridge goes back to
+     * retrying, so a failed reconnect cannot leave it idle.
+     */
     private fun handleGattDisconnect(disconnectedGatt: BluetoothGatt, message: String) {
         val wasCurrentGatt = synchronized(lock) {
             if (gatt !== disconnectedGatt) {
@@ -349,11 +407,13 @@ internal class AndroidRNodeBluetoothBridge(context: Context) {
                 rxCharacteristic = null
                 txCharacteristic = null
                 writeInProgress = false
+                pendingBleWrites.clear()
                 true
             }
         }
         runCatching { disconnectedGatt.close() }
         if (!wasCurrentGatt) return
+        closeTcpServer()
         closeTcpClient()
         if (!running) return
         val isStillStarting = synchronized(lock) { !startupResolved }
@@ -376,16 +436,48 @@ internal class AndroidRNodeBluetoothBridge(context: Context) {
         if (destination != null) sendToTcp(destination, bytes.copyOf())
     }
 
-    private fun acceptTcpConnections() {
+    /**
+     * Listens for RNS only while the RNode can answer. RNS reconnects its
+     * RNode interface without detecting the device again, and stops retrying
+     * for good once the radio does not confirm its configuration. A session
+     * with no RNode behind it would end that way, while a refused connection
+     * is simply retried.
+     */
+    private fun openTcpServer(readyGatt: BluetoothGatt): Boolean {
+        synchronized(lock) {
+            if (!running || gatt !== readyGatt) return false
+            if (serverSocket != null) return true
+            val server = try {
+                ServerSocket().apply {
+                    reuseAddress = true
+                    bind(InetSocketAddress(InetAddress.getByName(LOOPBACK_HOST), TCP_PORT), 1)
+                }
+            } catch (_: IOException) {
+                return false
+            }
+            serverSocket = server
+            Thread({ acceptTcpConnections(server) }, "starling-rnode-ble-accept").apply {
+                isDaemon = true
+                start()
+            }
+            return true
+        }
+    }
+
+    private fun closeTcpServer() {
+        val closing = synchronized(lock) { serverSocket.also { serverSocket = null } }
+        runCatching { closing?.close() }
+    }
+
+    private fun acceptTcpConnections(server: ServerSocket) {
         while (running) {
-            val server = synchronized(lock) { serverSocket } ?: return
             val accepted = try {
                 server.accept()
             } catch (_: IOException) {
                 return
             }
             val acceptedForUse = synchronized(lock) {
-                if (!running || clientSocket != null) false else {
+                if (!running || serverSocket !== server || clientSocket != null) false else {
                     clientSocket = accepted
                     true
                 }
@@ -464,6 +556,13 @@ internal class AndroidRNodeBluetoothBridge(context: Context) {
             }
         } catch (_: SecurityException) {
             BluetoothGatt.GATT_FAILURE
+        } catch (_: Exception) {
+            // The Bluetooth stack can die under an active connection, for
+            // example when the adapter is switched off, and the write then
+            // throws instead of reporting a status. That is a lost link, not
+            // a reason to take down the RNS process.
+            handleGattDisconnect(work.first, "The BLE RNode connection was lost.")
+            return
         }
         if (status != BluetoothGatt.GATT_SUCCESS) {
             synchronized(lock) {

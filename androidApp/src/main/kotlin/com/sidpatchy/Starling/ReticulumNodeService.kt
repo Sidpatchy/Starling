@@ -7,6 +7,7 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.os.Binder
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -32,7 +33,8 @@ class ReticulumNodeService : Service() {
     private var tcpPeersJson = "[]"
     private var rnodeInterfacesJson = "[]"
     private var rpcKeyHex = ""
-    private val rnodeBluetoothBridge = AndroidRNodeBluetoothBridge(this)
+    private val rnodeBluetoothBridge by lazy { AndroidRNodeBluetoothBridge(this) }
+    private val processWatchBinder = Binder()
     private var pythonModule: com.chaquo.python.PyObject? = null
     private var rrcModule: com.chaquo.python.PyObject? = null
     private var lxmfModule: com.chaquo.python.PyObject? = null
@@ -60,7 +62,11 @@ class ReticulumNodeService : Service() {
         }
     }
 
-    override fun onBind(intent: Intent?): IBinder? = null
+    /**
+     * Commands and state use intents and broadcasts. The binder carries no
+     * calls; it only lets the UI process notice when this process dies.
+     */
+    override fun onBind(intent: Intent?): IBinder = processWatchBinder
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
