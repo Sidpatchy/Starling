@@ -1117,13 +1117,8 @@ fun StarlingApp(
                                 ?: ChatMember("lxmf-$normalizedAddress", cleanName, address = normalizedAddress)
                             repository.addContact(contact)
                         }
-                        if (added != null) {
-                            selectedDirectMessageId = added.id
-                            showContactRequests = false
-                            showSettings = false
-                            showIdentityPage = false
-                            showAddContact = false
-                        }
+                        // Adding a contact never opens or creates a conversation.
+                        if (added != null) showAddContact = false
                     },
                     onDismiss = { showAddContact = false },
                 )
@@ -1462,7 +1457,7 @@ private fun AddContactDialog(
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
                     if (previewMode) "Add a demo-only contact. No LXMF address is needed and nothing is sent."
-                    else "Add someone by their LXMF delivery address. Starling will open the conversation when they’re added.",
+                    else "Add someone by their LXMF delivery address. They’ll appear under Direct Messages.",
                     color = Muted,
                     fontSize = 12.sp,
                 )
