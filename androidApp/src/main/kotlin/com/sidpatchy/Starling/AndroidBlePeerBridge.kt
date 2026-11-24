@@ -540,17 +540,23 @@ internal class AndroidBlePeerBridge(context: Context) {
 
     private inner class CentralCallback(private val link: CentralLink) : BluetoothGattCallback() {
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
-            if (status == BluetoothGatt.GATT_SUCCESS && newState == BluetoothProfile.STATE_CONNECTED) {
-                val proceed = synchronized(lock) {
-                    if (link.state != LinkState.CONNECTING) false
-                    else {
-                        link.state = LinkState.SETUP
-                        true
-                    }
+            val previous = synchronized(lock) {
+                link.state.also {
+                    val connected = status == BluetoothGatt.GATT_SUCCESS && newState == BluetoothProfile.STATE_CONNECTED
+                    if (connected && it == LinkState.CONNECTING) link.state = LinkState.SETUP
                 }
-                if (proceed) {
-                    Log.i(TAG, "Connected to ${link.address}; discovering services")
-                    discoverServices(link)
+            }
+            Log.i(TAG, "Client connection state for ${link.address}: status $status, newState $newState, link was $previous")
+            if (status == BluetoothGatt.GATT_SUCCESS && newState == BluetoothProfile.STATE_CONNECTED) {
+                when (previous) {
+                    LinkState.CONNECTING -> discoverServices(link)
+                    LinkState.SETUP, LinkState.READY -> {
+                        // A new connection has none of this link's setup: the peer has not
+                        // been sent the handshake on it. Drop it so the driver starts over.
+                        runCatching { gatt.disconnect() }
+                        linkLost(link, "BLE connection was re-established without a disconnect")
+                    }
+                    LinkState.CLOSED -> Unit
                 }
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED || status != BluetoothGatt.GATT_SUCCESS) {
                 linkLost(link, "BLE connection closed (status $status, state $newState)")
@@ -877,15 +883,16 @@ internal class AndroidBlePeerBridge(context: Context) {
             // Android reports every LE link here, including ones this app opened
             // as a central and the RNode radio. A device only becomes a peer once
             // it writes to RX, so unrelated links are never tracked or closed.
-            if (newState != BluetoothProfile.STATE_DISCONNECTED) return
             val address = device.address
+            Log.i(TAG, "Server connection state for $address: status $status, newState $newState")
+            if (newState != BluetoothProfile.STATE_DISCONNECTED) return
             val peer = synchronized(lock) {
                 serverMtus.remove(address)
                 subscribedCentrals.remove(address)
                 serverPeers.remove(address)
             } ?: return
             releaseOperations(peer.address)
-            Log.i(TAG, "Disconnected from ${peer.address} (peripheral): link closed (status $status)")
+            Log.i(TAG, "Disconnected from ${peer.address} (peripheral): link closed")
             emit { it.disconnected(peer.address) }
         }
 
