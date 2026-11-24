@@ -198,6 +198,10 @@ internal class AndroidRNodeBluetoothBridge(context: Context) {
                 failStartup("The BLE RNode rejected UART notifications (status $status).")
                 return
             }
+            if (!openTcpServer(gatt)) {
+                handleGattDisconnect(gatt, "Could not open the local port for the BLE RNode bridge.")
+                return
+            }
             synchronized(lock) {
                 startupResolved = true
                 startupError = null
@@ -248,15 +252,6 @@ internal class AndroidRNodeBluetoothBridge(context: Context) {
         }
 
         try {
-            val server = ServerSocket().apply {
-                reuseAddress = true
-                bind(InetSocketAddress(InetAddress.getByName(LOOPBACK_HOST), TCP_PORT), 1)
-            }
-            synchronized(lock) { serverSocket = server }
-            Thread({ acceptTcpConnections() }, "starling-rnode-ble-accept").apply {
-                isDaemon = true
-                start()
-            }
             registerAdapterStateReceiver()
 
             val manager = appContext.getSystemService(Context.BLUETOOTH_SERVICE) as? android.bluetooth.BluetoothManager
@@ -407,11 +402,13 @@ internal class AndroidRNodeBluetoothBridge(context: Context) {
                 rxCharacteristic = null
                 txCharacteristic = null
                 writeInProgress = false
+                pendingBleWrites.clear()
                 true
             }
         }
         runCatching { disconnectedGatt.close() }
         if (!wasCurrentGatt) return
+        closeTcpServer()
         closeTcpClient()
         if (!running) return
         val isStillStarting = synchronized(lock) { !startupResolved }
@@ -434,16 +431,48 @@ internal class AndroidRNodeBluetoothBridge(context: Context) {
         if (destination != null) sendToTcp(destination, bytes.copyOf())
     }
 
-    private fun acceptTcpConnections() {
+    /**
+     * Listens for RNS only while the RNode can answer. RNS reconnects its
+     * RNode interface without detecting the device again, and stops retrying
+     * for good once the radio does not confirm its configuration. A session
+     * with no RNode behind it would end that way, while a refused connection
+     * is simply retried.
+     */
+    private fun openTcpServer(readyGatt: BluetoothGatt): Boolean {
+        synchronized(lock) {
+            if (!running || gatt !== readyGatt) return false
+            if (serverSocket != null) return true
+            val server = try {
+                ServerSocket().apply {
+                    reuseAddress = true
+                    bind(InetSocketAddress(InetAddress.getByName(LOOPBACK_HOST), TCP_PORT), 1)
+                }
+            } catch (_: IOException) {
+                return false
+            }
+            serverSocket = server
+            Thread({ acceptTcpConnections(server) }, "starling-rnode-ble-accept").apply {
+                isDaemon = true
+                start()
+            }
+            return true
+        }
+    }
+
+    private fun closeTcpServer() {
+        val closing = synchronized(lock) { serverSocket.also { serverSocket = null } }
+        runCatching { closing?.close() }
+    }
+
+    private fun acceptTcpConnections(server: ServerSocket) {
         while (running) {
-            val server = synchronized(lock) { serverSocket } ?: return
             val accepted = try {
                 server.accept()
             } catch (_: IOException) {
                 return
             }
             val acceptedForUse = synchronized(lock) {
-                if (!running || clientSocket != null) false else {
+                if (!running || serverSocket !== server || clientSocket != null) false else {
                     clientSocket = accepted
                     true
                 }
