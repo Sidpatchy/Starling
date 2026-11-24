@@ -183,7 +183,7 @@ data class RNodeScanRow(
     val rssi: Int,
     /** The saved device, or one already paired with this phone. */
     val pinned: Boolean,
-    /** The last four characters of the id, set when another row has the same name. */
+    /** The last two bytes of the id, like 77:10, set when another row has the same name. */
     val idSuffix: String?,
 )
 
@@ -252,7 +252,7 @@ class RNodeScanList(
                 name = entry.name,
                 rssi = entry.rssi,
                 pinned = entry.pinned,
-                idSuffix = if (entry.name.lowercase() in sharedNames) id.takeLast(4) else null,
+                idSuffix = if (entry.name.lowercase() in sharedNames) rnodeIdSuffix(id) else null,
             )
         }
     }
@@ -264,6 +264,10 @@ class RNodeScanList(
             .thenBy { it },
     )
 }
+
+/** The last two bytes of a device id, written like the end of a Bluetooth address. */
+internal fun rnodeIdSuffix(id: String): String =
+    id.filter(Char::isLetterOrDigit).takeLast(4).chunked(2).joinToString(":")
 
 /**
  * How long to wait before starting another search. Android silently returns

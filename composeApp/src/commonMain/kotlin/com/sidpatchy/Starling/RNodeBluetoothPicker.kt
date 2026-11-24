@@ -98,7 +98,12 @@ internal fun RNodeConnectionEditor(
             modifier = Modifier.fillMaxWidth(),
             label = { Text("Serial port") },
             supportingText = {
-                Text("For example /dev/ttyUSB0, COM3 or /dev/cu.usbserial-0001", color = Muted, fontSize = 10.sp)
+                // Word joiners keep each example path on one line.
+                Text(
+                    "For example /\u2060dev/\u2060ttyUSB0, COM3 or /\u2060dev/\u2060cu.usbserial-0001",
+                    color = Muted,
+                    fontSize = 10.sp,
+                )
             },
             singleLine = true,
             enabled = !locked,
@@ -161,7 +166,8 @@ private fun RNodeBluetoothDevice(
                     Text(name, modifier = Modifier.weight(1f), color = Ink, fontSize = 13.sp, fontWeight = FontWeight.Medium)
                     when {
                         paired == true -> Text("Paired", color = Accent, fontSize = 11.sp, fontWeight = FontWeight.Medium)
-                        paired == false -> Text("Not paired", color = ErrorText, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                        // Pairing is optional, so a missing pairing is not shown as an error.
+                        paired == false -> Text("Not paired", color = Muted, fontSize = 11.sp, fontWeight = FontWeight.Medium)
                         !android && savedId != null ->
                             Text("Saved", color = Accent, fontSize = 11.sp, fontWeight = FontWeight.Medium)
                     }
@@ -190,7 +196,7 @@ private fun RNodeBluetoothDevice(
                                     pairedByStarling = false,
                                 ),
                             )
-                        }) { Text("Forget", color = ErrorText) }
+                        }) { Text("Forget", color = Muted) }
                     }
                 }
             }
@@ -315,7 +321,9 @@ private fun RNodeScanDialog(
     val device = selected
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Choose your RNode", color = Ink) },
+        title = {
+            Text(if (device == null) "Choose your RNode" else "Pair with ${device.second.ifBlank { "RNode" }}", color = Ink)
+        },
         text = {
             Column(
                 modifier = Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState()),
@@ -367,24 +375,30 @@ private fun RNodeScanDialog(
             }
         },
         confirmButton = {
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                if (device == null) {
-                    if (scanStatus == RNodeBleScanStatus.Scanning) {
-                        TextButton(onClick = { picker.stopScan() }) { Text("Stop", color = Accent) }
-                    } else if (scanStatus != RNodeBleScanStatus.Unsupported) {
-                        TextButton(
-                            enabled = now - lastSearchAt >= RESCAN_DEBOUNCE_MILLIS,
-                            onClick = { search() },
-                        ) { Text("Rescan") }
-                    }
-                } else if (pairing is RNodeBlePairingState.Failed) {
+            if (device != null && pairing is RNodeBlePairingState.Failed) {
+                // Stacked, so three buttons fit a narrow screen or a large font.
+                Column(horizontalAlignment = Alignment.End) {
                     TextButton(onClick = { picker.pair(device.first, device.second) }) { Text("Try again", color = Accent) }
                     if (android) {
                         // Pairing is not required to save an RNode; it may accept connections without it.
                         TextButton(onClick = { onChosen(device.first, device.second, false) }) { Text("Skip pairing") }
                     }
+                    TextButton(onClick = onDismiss) { Text("Cancel") }
                 }
-                TextButton(onClick = onDismiss) { Text("Cancel") }
+            } else {
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    if (device == null) {
+                        if (scanStatus == RNodeBleScanStatus.Scanning) {
+                            TextButton(onClick = { picker.stopScan() }) { Text("Stop", color = Accent) }
+                        } else if (scanStatus != RNodeBleScanStatus.Unsupported) {
+                            TextButton(
+                                enabled = now - lastSearchAt >= RESCAN_DEBOUNCE_MILLIS,
+                                onClick = { search() },
+                            ) { Text("Rescan") }
+                        }
+                    }
+                    TextButton(onClick = onDismiss) { Text("Cancel") }
+                }
             }
         },
     )
@@ -399,7 +413,6 @@ private fun RNodePairingStep(name: String, pairing: RNodeBlePairingState, platfo
     ) {
         when (pairing) {
             RNodeBlePairingState.Idle, is RNodeBlePairingState.Waiting -> if (android) {
-                Text("Pair with $name", color = Ink, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
                 Text(
                     "If Android asks, enter the PIN shown on your RNode's screen, then tap Pair.",
                     color = Ink,

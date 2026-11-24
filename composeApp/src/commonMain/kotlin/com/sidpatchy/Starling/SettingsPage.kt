@@ -765,7 +765,12 @@ internal fun SettingsPage(
                                                 enabled = !isRunning && !isStarting,
                                             )
                                         }
-                                        radio.validationError(supportsBleRNodes)?.let { validationError ->
+                                        // An RNode that is not chosen yet is not an error until a start is tried.
+                                        radio.validationError(supportsBleRNodes)?.takeIf { validationError ->
+                                            validationError != RNodeBleText.CHOOSE_BEFORE_START ||
+                                                validationError == connectionInputError ||
+                                                validationError == (nodeState as? ReticulumNodeState.Failed)?.message
+                                        }?.let { validationError ->
                                             Text(validationError, color = ErrorText, fontSize = 10.sp)
                                         }
                                     }

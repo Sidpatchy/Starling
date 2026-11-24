@@ -187,7 +187,8 @@ class RNodeConnectionTest {
         val rows = list.rows(20)
 
         assertEquals(3, rows.size)
-        assertEquals(listOf("1:22", "3:44", null), rows.map { it.idSuffix })
+        assertEquals(listOf("11:22", "33:44", null), rows.map { it.idSuffix })
+        assertEquals("34:56", rnodeIdSuffix("6E400001-B5A3-F393-E0A9-E50E24DC3456"))
     }
 
     @Test
