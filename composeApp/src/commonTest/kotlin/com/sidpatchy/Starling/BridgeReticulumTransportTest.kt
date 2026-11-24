@@ -64,6 +64,18 @@ class BridgeReticulumTransportTest {
     }
 
     @Test
+    fun announceSendsItsCommandOnlyWhileTheNodeIsRunning() = runTest {
+        withBridge { fixture ->
+            fixture.transport.announce()
+            assertEquals(listOf("LXMF_ANNOUNCE"), fixture.commands)
+        }
+        withBridge(ReticulumNodeState.Stopped) { fixture ->
+            assertFailsWith<IllegalStateException> { fixture.transport.announce() }
+            assertTrue(fixture.commands.isEmpty())
+        }
+    }
+
+    @Test
     fun invalidDestinationsAndStoppedNodesNeverSendConnectCommands() = runTest {
         withBridge(ReticulumNodeState.Stopped) { fixture ->
             fixture.transport.connect(ReticulumConnectionConfig("invalid", "Starling", "hub"))

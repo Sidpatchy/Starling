@@ -123,6 +123,13 @@ class AndroidReticulumTransport(context: Context) : ReticulumTransport {
         )
     }
 
+    override suspend fun announce() {
+        if (!_nodeReady.value) {
+            throw IllegalStateException("Start the Reticulum node before announcing.")
+        }
+        sendCommand(ReticulumNodeService.ACTION_LXMF_ANNOUNCE)
+    }
+
     fun dispose() {
         runCatching { appContext.unregisterReceiver(receiver) }
     }

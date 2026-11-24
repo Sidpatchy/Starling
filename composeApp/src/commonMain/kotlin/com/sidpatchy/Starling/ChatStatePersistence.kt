@@ -36,6 +36,8 @@ data class PersistedChatState(
     val globalNickname: String = "Starling",
     val uiSettings: StarlingUiSettings = StarlingUiSettings(),
     val roomMemberIds: Map<String, Set<String>> = emptyMap(),
+    /** People heard over network interfaces; Bluetooth readings are not stored. */
+    val nearbyPeers: List<NearbyPeer> = emptyList(),
 )
 
 /** Small versioned text codec to avoid platform-specific serialization APIs. */
@@ -101,6 +103,12 @@ object ChatStateCodec {
                 request.isPreview.bit(), request.timestampMillis?.toString().orEmpty(),
             )
         }
+        state.nearbyPeers.filter { it.networkHeardMillis > 0 && !it.isPreview }.forEach { peer ->
+            appendRecord(
+                "Y", peer.address, peer.name, peer.networkHeardMillis.toString(),
+                peer.networkHops.toString(), peer.networkKind,
+            )
+        }
         state.roomMessages.forEach { (roomId, messages) ->
             messages.forEach { appendMessage("R", roomId, it) }
         }
@@ -121,6 +129,7 @@ object ChatStateCodec {
         val contacts = linkedSetOf<String>()
         val blocked = linkedSetOf<String>()
         val requests = linkedMapOf<String, ChatContactRequest>()
+        val nearbyPeers = linkedMapOf<String, NearbyPeer>()
         val rooms = linkedMapOf<String, MutableList<ChatMessage>>()
         val direct = linkedMapOf<String, MutableList<ChatMessage>>()
         var nodeMode: ReticulumRuntimeMode? = null
@@ -213,6 +222,19 @@ object ChatStateCodec {
                     )
                     requests[request.id] = request
                 }
+                "Y" -> if (decoded.size >= 5) {
+                    val address = normalizeLxmfAddress(decoded[0])
+                    val heardMillis = decoded[2].toLongOrNull() ?: 0L
+                    if (address != null && heardMillis > 0) {
+                        nearbyPeers[address] = NearbyPeer(
+                            address = address,
+                            name = sanitizeNearbyName(decoded[1]),
+                            networkHeardMillis = heardMillis,
+                            networkHops = decoded[3].toIntOrNull() ?: 0,
+                            networkKind = decoded[4],
+                        )
+                    }
+                }
                 "R", "D" -> if (decoded.size >= 8) {
                     val isSystem = decoded.getOrNull(9) == "1"
                     val hasEventTimestamps = header in EVENT_TIMESTAMP_HEADERS
@@ -294,6 +316,7 @@ object ChatStateCodec {
             globalNickname = globalNickname,
             uiSettings = uiSettings,
             roomMemberIds = roomMemberIds.mapValues { it.value.toSet() },
+            nearbyPeers = nearbyPeers.values.toList(),
         )
     }
 

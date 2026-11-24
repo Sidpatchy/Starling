@@ -374,4 +374,8 @@ private class FakeReticulumTransport : ReticulumTransport {
         sentDirectMessages += address to body
     }
     override suspend fun setLocalDisplayName(displayName: String) = Unit
+    var announces = 0
+    override suspend fun announce() {
+        announces += 1
+    }
 }

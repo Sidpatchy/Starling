@@ -230,6 +230,8 @@ sealed interface ReticulumEvent {
     data class DirectMessage(val message: LxmfDirectMessage) : ReticulumEvent
     data class DeliveryStatus(val messageId: String, val address: String, val state: String) : ReticulumEvent
     data class LxmfError(val message: String, val address: String? = null) : ReticulumEvent
+    /** A verified LXMF delivery announce from someone else, merged with earlier readings. */
+    data class NearbyPeerHeard(val peer: NearbyPeer) : ReticulumEvent
     data class MembersChanged(val roomId: String, val members: List<ChatMember>) : ReticulumEvent
     data class Error(
         val message: String,
@@ -259,6 +261,8 @@ interface ReticulumTransport {
     suspend fun sendRoomMessage(roomId: String, body: String, isAction: Boolean = false)
     suspend fun sendDirectMessage(address: String, body: String)
     suspend fun setLocalDisplayName(displayName: String)
+    /** Announce the local LXMF delivery address on every interface. */
+    suspend fun announce()
 }
 
 /** Factory boundary for platform-specific chat transports. */

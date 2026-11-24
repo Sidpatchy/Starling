@@ -105,5 +105,7 @@ def dispatch_lxmf(command, lxmf):
         lxmf.send_direct(decode(fields[1]), decode(fields[2]))
     elif fields[0] == "LXMF_SET_NAME" and len(fields) == 2:
         lxmf.set_display_name(decode(fields[1]))
+    elif fields[0] == "LXMF_ANNOUNCE" and len(fields) == 1:
+        lxmf.announce()
     else:
         raise ValueError("Invalid LXMF command")

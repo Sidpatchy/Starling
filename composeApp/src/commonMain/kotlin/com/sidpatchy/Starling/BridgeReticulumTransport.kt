@@ -119,6 +119,13 @@ internal class BridgeReticulumTransport(
         sendCommand("LXMF_SET_NAME\t${encodeBridgeBase64(displayName)}")
     }
 
+    override suspend fun announce() {
+        if (nodeState.value !is ReticulumNodeState.Running) {
+            throw IllegalStateException("Start the Reticulum node before announcing.")
+        }
+        sendCommand("LXMF_ANNOUNCE")
+    }
+
     suspend fun close() {
         runCatching { disconnect() }
         scope.cancel()

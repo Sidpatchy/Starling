@@ -3,8 +3,11 @@
 import base64
 import queue
 import re
+import sys
 import threading
 import time
+
+import starling_nearby
 
 _lock = threading.RLock()
 _events = queue.Queue()
@@ -16,6 +19,13 @@ _display_name = "Starling"
 _send_threads = set()
 _verification_threads = set()
 _shutdown = threading.Event()
+_nearby = starling_nearby.NearbyPeers()
+_announce_handler = None
+# A new Bluetooth peer triggers at most one announce per interval.
+BLE_ANNOUNCE_INTERVAL_SECONDS = 5 * 60
+# The peer finishes its own side of the identity handshake shortly after ours.
+BLE_ANNOUNCE_DELAY_SECONDS = 2.0
+_last_ble_announce = None
 
 
 def _emit(kind, **fields):
@@ -41,6 +51,7 @@ def _identity_for_config(config_dir):
 def start(config_dir, display_name="Starling"):
     """Start the local LXMF delivery destination, reusing Starling's RNS identity."""
     global _router, _identity, _delivery_destination, _data_dir, _display_name
+    global _announce_handler, _last_ble_announce
     import LXMF
     import RNS
 
@@ -56,6 +67,7 @@ def start(config_dir, display_name="Starling"):
 
         router = None
         delivery_destination = None
+        announce_handler = None
         try:
             router = starling_rns.construct_without_required_process_signals(lambda: LXMF.LXMRouter(
                 identity=_identity,
@@ -71,8 +83,15 @@ def start(config_dir, display_name="Starling"):
             if delivery_destination is None:
                 raise RuntimeError("LXMF could not register Starling's delivery identity")
             router.register_delivery_callback(_delivery_received)
+            announce_handler = _NearbyAnnounceHandler()
+            RNS.Transport.register_announce_handler(announce_handler)
             router.announce(delivery_destination.hash)
         except Exception:
+            if announce_handler is not None:
+                try:
+                    RNS.Transport.deregister_announce_handler(announce_handler)
+                except Exception:
+                    pass
             # A half-registered router must not silently shadow a later start
             # attempt. Tear it down and let the caller see the original error.
             if router is not None:
@@ -84,6 +103,10 @@ def start(config_dir, display_name="Starling"):
         _router = router
         _delivery_destination = delivery_destination
         address = _delivery_destination.hash.hex()
+        _announce_handler = announce_handler
+        _nearby.clear()
+        _last_ble_announce = None
+        _set_ble_peer_listener(announce_for_new_ble_peer)
     _emit("local_address", address=address)
     return address
 
@@ -107,6 +130,113 @@ def set_display_name(display_name):
     if destination is not None and router is not None:
         router.announce(destination.hash)
     return name
+
+
+def announce():
+    """Announce the local delivery destination on every interface."""
+    with _lock:
+        router = _router
+        destination = _delivery_destination
+    if router is None or destination is None:
+        raise RuntimeError("Start the Reticulum node before announcing.")
+    router.announce(destination.hash)
+
+
+def announce_for_new_ble_peer():
+    """Announce over Bluetooth shortly after a new peer links, unless one was sent recently."""
+    global _last_ble_announce
+    now = time.monotonic()
+    with _lock:
+        if _router is None or _delivery_destination is None:
+            return False
+        if _last_ble_announce is not None and now - _last_ble_announce < BLE_ANNOUNCE_INTERVAL_SECONDS:
+            return False
+        _last_ble_announce = now
+    timer = threading.Timer(BLE_ANNOUNCE_DELAY_SECONDS, _announce_to_ble_peers)
+    timer.name = "starling-lxmf-ble-announce"
+    timer.daemon = True
+    timer.start()
+    return True
+
+
+def _announce_to_ble_peers():
+    """Announce on the Bluetooth peer interfaces only, never on other interfaces."""
+    with _lock:
+        router = _router
+        destination = _delivery_destination
+    ble = sys.modules.get("starling_ble_android")
+    if router is None or destination is None or ble is None:
+        return
+    try:
+        interfaces = ble.peer_interfaces()
+    except Exception:
+        return
+    for interface in interfaces:
+        try:
+            router.announce(destination.hash, attached_interface=interface)
+        except Exception:
+            # One peer dropping out must not stop the announce to the others.
+            pass
+
+
+def _set_ble_peer_listener(listener):
+    # The BLE driver module is only loaded when Bluetooth peers are enabled.
+    ble = sys.modules.get("starling_ble_android")
+    if ble is not None:
+        ble.set_peer_listener(listener)
+
+
+class _NearbyAnnounceHandler:
+    """Receives live LXMF delivery announces that Reticulum has already validated."""
+
+    aspect_filter = "lxmf.delivery"
+
+    def received_announce(self, destination_hash, announced_identity, app_data):
+        try:
+            _announce_received(destination_hash, announced_identity, app_data)
+        except Exception as error:
+            # One unreadable announce is not worth an error in the chat UI.
+            import RNS
+
+            RNS.log("Starling could not read an LXMF announce: " + str(error), RNS.LOG_DEBUG)
+
+
+def _announce_received(destination_hash, announced_identity, app_data):
+    import LXMF
+    import RNS
+
+    with _lock:
+        local = _delivery_destination
+    if local is None or announced_identity is None or destination_hash == local.hash:
+        return
+    if RNS.Destination.hash(announced_identity, "lxmf", "delivery") != destination_hash:
+        return
+    try:
+        name = LXMF.display_name_from_app_data(app_data) or ""
+    except Exception:
+        name = ""
+    interface = RNS.Transport.next_hop_interface(destination_hash)
+    hops = RNS.Transport.hops_to(destination_hash)
+    entry = _nearby.heard(destination_hash.hex(), name, _interface_kind(interface), hops)
+    _emit("nearby_peer", **entry)
+
+
+def _interface_kind(interface):
+    """Classify the interface an announce arrived on by its class, never by its name."""
+    if interface is None:
+        return ""
+    ble = sys.modules.get("starling_ble_android")
+    ble_class = getattr(ble, "_interface_class", None) if ble is not None else None
+    if ble_class is not None:
+        parent = getattr(interface, "parent_interface", None)
+        if isinstance(interface, ble_class) or isinstance(parent, ble_class):
+            return starling_nearby.KIND_BLE
+    class_names = {cls.__name__ for cls in type(interface).__mro__}
+    if "TCPClientInterface" in class_names or "TCPServerInterface" in class_names:
+        return starling_nearby.KIND_TCP
+    if "RNodeInterface" in class_names:
+        return starling_nearby.KIND_RNODE
+    return type(interface).__name__
 
 
 def local_address():
@@ -367,6 +497,16 @@ def poll_event_lines(limit=100):
                 _encode(event.get("address", "")),
                 event.get("state", "queued"),
             ))
+        elif kind == "nearby_peer":
+            lines.append("NEARBY_PEER\t{}\t{}\t{}\t{}\t{}\t{}\t{}".format(
+                _encode(event.get("address", "")),
+                _encode(event.get("name", "")),
+                int(event.get("ble_heard", 0) * 1000),
+                int(event.get("ble_hops", 0)),
+                int(event.get("network_heard", 0) * 1000),
+                int(event.get("network_hops", 0)),
+                _encode(event.get("network_kind", "")),
+            ))
         elif kind == "error":
             lines.append("LXMF_ERROR\t{}\t{}".format(
                 _encode(event.get("message", "")),
@@ -384,15 +524,27 @@ def current_identity_event_line():
 
 
 def stop():
-    global _router, _identity, _delivery_destination
+    global _router, _identity, _delivery_destination, _announce_handler, _last_ble_announce
     with _lock:
         _shutdown.set()
         router = _router
         send_threads = list(_send_threads)
         verification_threads = list(_verification_threads)
+        announce_handler = _announce_handler
         _router = None
         _identity = None
         _delivery_destination = None
+        _announce_handler = None
+        _last_ble_announce = None
+        _nearby.clear()
+    _set_ble_peer_listener(None)
+    if announce_handler is not None:
+        try:
+            import RNS
+
+            RNS.Transport.deregister_announce_handler(announce_handler)
+        except Exception:
+            pass
     for worker in send_threads:
         if worker is not threading.current_thread():
             worker.join(timeout=0.5)

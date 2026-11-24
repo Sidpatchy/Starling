@@ -745,6 +745,51 @@ class StarlingBleInterfaceTest(unittest.TestCase):
         self.assertTrue(ble.interface_status()["online"])
         self.assertTrue(ble.interface_status()["bluetooth_on"])
 
+    def test_new_peer_links_notify_the_listener_once_per_identity(self):
+        linked = []
+        ble.set_peer_listener(lambda: linked.append("linked"))
+        self.addCleanup(ble.set_peer_listener, None)
+
+        self.bridge.listener.bridge_connected(PEER, "central", list(PEER_IDENTITY), 512)
+        self.assertEqual(linked, ["linked"])
+
+        # The same identity at a rotated address reuses its peer interface.
+        self.bridge.listener.bridge_connected(OTHER_PEER, "central", list(PEER_IDENTITY), 512)
+        self.assertEqual(linked, ["linked"])
+
+    def test_peripheral_peer_notifies_only_after_its_identity_handshake(self):
+        linked = []
+        ble.set_peer_listener(lambda: linked.append("linked"))
+        self.addCleanup(ble.set_peer_listener, None)
+
+        self.bridge.listener.bridge_connected(PEER, "peripheral", None, 182)
+        self.assertEqual(linked, [])
+        self.bridge.listener.bridge_data(PEER, list(PEER_IDENTITY))
+        self.assertEqual(linked, ["linked"])
+
+    def test_a_failing_peer_listener_does_not_break_the_link(self):
+        def fail():
+            raise RuntimeError("listener failed")
+
+        ble.set_peer_listener(fail)
+        self.addCleanup(ble.set_peer_listener, None)
+
+        self.bridge.listener.bridge_connected(PEER, "central", list(PEER_IDENTITY), 512)
+        self.assertIn(PEER_IDENTITY.hex()[:16], self.interface.spawned_interfaces)
+
+    def test_peer_interfaces_lists_only_online_bluetooth_peers(self):
+        import RNS
+
+        RNS.Transport.interfaces.append(self.interface)
+        self.assertEqual(ble.peer_interfaces(), [])
+
+        self.bridge.listener.bridge_connected(PEER, "central", list(PEER_IDENTITY), 512)
+        peer_interface = self.interface.spawned_interfaces[PEER_IDENTITY.hex()[:16]]
+        self.assertEqual(ble.peer_interfaces(), [peer_interface])
+
+        peer_interface.online = False
+        self.assertEqual(ble.peer_interfaces(), [])
+
     def test_detach_stops_the_bridge(self):
         self.bridge.listener.bridge_connected(PEER, "central", list(PEER_IDENTITY), 512)
         self.interface.detach()

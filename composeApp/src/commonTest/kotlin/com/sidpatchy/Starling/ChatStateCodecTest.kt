@@ -69,6 +69,47 @@ class ChatStateCodecTest {
     }
 
     @Test
+    fun peopleHeardOnTheNetworkRoundTripWithoutTheirBluetoothReading() {
+        val named = NearbyPeer(
+            address = "abcdef0123456789abcdef0123456789",
+            name = "Mesh 🌍\twith tab",
+            networkHeardMillis = 1_800_000_000_000L,
+            networkHops = 4,
+            networkKind = "rnode",
+        )
+        val nameless = NearbyPeer(
+            address = "0123456789abcdef0123456789abcdef",
+            networkHeardMillis = 1_800_000_060_000L,
+            networkHops = 1,
+            networkKind = "LocalClientInterface",
+        )
+        val state = PersistedChatState(
+            previewMode = false,
+            nearbyPeers = listOf(
+                named.copy(bleHeardMillis = 1_800_000_030_000L, bleHops = 1),
+                nameless,
+                NearbyPeer("11112222333344445555666677778888", "Bluetooth only", bleHeardMillis = 1_800_000_000_000L, bleHops = 1),
+                NearbyPeer("99990000aaaabbbbccccddddeeeeffff", "Sample", networkHeardMillis = 1_800_000_000_000L, isPreview = true),
+            ),
+        )
+
+        val decoded = ChatStateCodec.decode(ChatStateCodec.encode(state))
+
+        assertEquals(listOf(named.copy(name = "Mesh 🌍with tab"), nameless), decoded?.nearbyPeers)
+    }
+
+    @Test
+    fun malformedNearbyRecordsAreSkipped() {
+        fun field(value: String) = Base64TextCodec.encode(value)
+        val encoded = ChatStateCodec.encode(PersistedChatState(previewMode = false)) +
+            "Y\t${field("not-an-address")}\t${field("x")}\t${field("5")}\t${field("1")}\t${field("tcp")}\n" +
+            "Y\t${field("abcdef0123456789abcdef0123456789")}\t${field("x")}\t${field("0")}\t${field("1")}\t${field("tcp")}\n" +
+            "Y\t${field("abcdef0123456789abcdef0123456789")}\n"
+
+        assertEquals(emptyList(), ChatStateCodec.decode(encoded)?.nearbyPeers)
+    }
+
+    @Test
     fun sharedInstanceRpcKeyIsNeverEncoded() {
         val rpcKey = "11223344556677889900aabbccddeeff"
         val config = ReticulumNodeConfig(

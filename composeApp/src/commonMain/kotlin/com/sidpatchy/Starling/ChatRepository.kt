@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
+import kotlin.time.Clock
 
 data class ChatRoom(
     val id: String,
@@ -140,6 +141,8 @@ interface ChatRepository {
     val contactMemberIds: StateFlow<Set<String>>
     val blockedMemberIds: StateFlow<Set<String>>
     val contactRequests: StateFlow<List<ChatContactRequest>>
+    /** People heard through LXMF announces; sample people while Local preview is on. */
+    val nearbyPeers: StateFlow<List<NearbyPeer>>
     fun messages(roomId: String): Flow<List<ChatMessage>>
     fun directMessages(memberId: String): Flow<List<ChatMessage>>
     fun members(roomId: String): Flow<List<ChatMember>>
@@ -154,6 +157,11 @@ interface ChatRepository {
     fun setPreviewMode(enabled: Boolean)
     fun addRoom(networkId: String, name: String, topic: String): ChatRoom
     fun addContact(member: ChatMember): ChatMember?
+    /**
+     * Save someone heard nearby as a contact without opening or creating a conversation.
+     * [name] is the name the user chose when the announce carried none.
+     */
+    fun addContactFromAnnounce(peer: NearbyPeer, name: String? = null): ChatMember?
     fun toggleContact(member: ChatMember)
     fun acceptContactRequest(requestId: String)
     fun ignoreContactRequest(requestId: String)
@@ -220,6 +228,25 @@ class LocalPreviewChatRepository : ChatRepository {
     )
     private val _contactRequests = MutableStateFlow(allContactRequests.value)
     override val contactRequests: StateFlow<List<ChatContactRequest>> = _contactRequests.asStateFlow()
+
+    private val allNearbyPeers = Clock.System.now().toEpochMilliseconds().let { now ->
+        listOf(
+            NearbyPeer(
+                address = "5a1c0e94b7d2436f8e0a9c3b1d7f2e68", name = "wren",
+                bleHeardMillis = now - 60_000L, bleHops = 1, isPreview = true,
+            ),
+            NearbyPeer(
+                address = "7f3a9c21d4e85b06a1c97e3f02b8d5c4",
+                bleHeardMillis = now - 12 * 60_000L, bleHops = 1, isPreview = true,
+            ),
+            NearbyPeer(
+                address = "c28e6f10a9b34d7e85f1063c4a7d9b2e", name = "heron",
+                networkHeardMillis = now - 2 * 60 * 60_000L, networkHops = 3, networkKind = "tcp", isPreview = true,
+            ),
+        )
+    }
+    private val _nearbyPeers = MutableStateFlow(allNearbyPeers)
+    override val nearbyPeers: StateFlow<List<NearbyPeer>> = _nearbyPeers.asStateFlow()
 
     private val allMessagesByRoom = MutableStateFlow(
         mapOf(
@@ -392,6 +419,13 @@ class LocalPreviewChatRepository : ChatRepository {
         return contact
     }
 
+    override fun addContactFromAnnounce(peer: NearbyPeer, name: String?): ChatMember? {
+        if (!_previewMode.value || !peer.isPreview) return null
+        val displayName = sanitizeNearbyName(name ?: peer.name)
+        if (displayName.isBlank()) return null
+        return addContact(ChatMember(nearbyMemberId(peer), displayName))
+    }
+
     override fun toggleContact(member: ChatMember) {
         if (member.isSelf) return
         val address = member.address?.let(::normalizeLxmfAddress)
@@ -498,6 +532,7 @@ class LocalPreviewChatRepository : ChatRepository {
 
     private fun refreshVisibleRequests() {
         _contactRequests.value = allContactRequests.value.filter { it.isPreview == _previewMode.value }
+        _nearbyPeers.value = allNearbyPeers.filter { it.isPreview == _previewMode.value }
     }
 
     internal fun persistedNetworks(): List<ChatNetwork> =
