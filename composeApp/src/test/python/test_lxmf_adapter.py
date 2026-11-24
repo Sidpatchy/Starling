@@ -12,6 +12,7 @@ import starling_lxmf as lxmf
 
 DELIVERY_HASH = "d1" * 16
 IDENTITY_HASH = "b2" * 16
+SENDER_DELIVERY_HASH = "e4" * 16
 
 
 class _FakeIdentity:
@@ -276,9 +277,28 @@ class LxmfAdapterTest(unittest.TestCase):
                  if line.startswith("DIRECT_MESSAGE\t")]
         self.assertEqual(len(lines), 1)
         fields = lines[0].split("\t")
-        self.assertEqual(protocol.decode(fields[2]), DELIVERY_HASH)
+        self.assertEqual(protocol.decode(fields[2]), message.source_hash.hex())
         self.assertEqual(protocol.decode(fields[4]), "Hello 🌍")
         self.assertEqual(fields[6], "0")
+
+    def test_verified_delivery_is_filed_under_sender_delivery_address(self):
+        self._with_fakes()
+        lxmf.start("/private/var/starling", "Starling")
+
+        # source_hash is already the sender's lxmf.delivery destination hash.
+        # Deriving a destination hash from it again yields an address that
+        # belongs to nobody, so the message would miss its conversation.
+        message = _FakeLXMessage(
+            signature_validated=True,
+            source_hash=SENDER_DELIVERY_HASH,
+        )
+        lxmf._delivery_received(message)
+
+        line = self._event_line_with("DIRECT_MESSAGE\t")
+        self.assertIsNotNone(line, "expected the verified message to be delivered")
+        address = protocol.decode(line.split("\t")[2])
+        self.assertEqual(address, SENDER_DELIVERY_HASH)
+        self.assertNotEqual(address, DELIVERY_HASH)
 
     def test_invalid_signature_is_reported_and_not_delivered(self):
         self._with_fakes()
