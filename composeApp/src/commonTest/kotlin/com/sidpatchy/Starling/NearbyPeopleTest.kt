@@ -65,7 +65,11 @@ class NearbyPeopleTest {
         assertEquals("TCP", nearbyInterfaceLabel("tcp"))
         assertEquals("RNode", nearbyInterfaceLabel("rnode"))
         assertEquals("Shared instance", nearbyInterfaceLabel("LocalClientInterface"))
-        assertEquals("AutoInterface", nearbyInterfaceLabel("AutoInterface"))
+        assertEquals("Local network", nearbyInterfaceLabel("AutoInterface"))
+        assertEquals("Local network", nearbyInterfaceLabel("AutoInterfacePeer"))
+        assertEquals("Local network · Direct", nearbyHeardOverLabel("AutoInterfacePeer", 1))
+        // A type with no friendly name keeps its RNS class name.
+        assertEquals("I2PInterface", nearbyInterfaceLabel("I2PInterface"))
         assertEquals("Bluetooth · Direct", nearbyHeardOverLabel("ble", 1))
         assertEquals("TCP · 3 hops · 12 min ago", nearbyReadingLabel("tcp", 3, now - 12 * minute, now))
         // An unknown interface is left out rather than given a made-up name.

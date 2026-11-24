@@ -80,6 +80,8 @@ internal fun nearbyInterfaceLabel(kind: String): String = when (kind) {
     "tcp" -> "TCP"
     "rnode" -> "RNode"
     "LocalClientInterface" -> "Shared instance"
+    // RNS reports a peer found on the local network through a per-peer child interface.
+    "AutoInterface", "AutoInterfacePeer" -> "Local network"
     else -> kind
 }
 

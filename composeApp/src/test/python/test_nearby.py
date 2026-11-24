@@ -162,6 +162,10 @@ class AutoInterface:
     pass
 
 
+class AutoInterfacePeer:
+    pass
+
+
 class _FakeTransport:
     def __init__(self):
         self.handlers = []
@@ -295,6 +299,8 @@ class NearbyAnnounceTest(unittest.TestCase):
         self.assertEqual(lxmf._interface_kind(SpawnedTcpClient()), nearby.KIND_TCP)
         self.assertEqual(lxmf._interface_kind(RNodeInterface()), nearby.KIND_RNODE)
         self.assertEqual(lxmf._interface_kind(AutoInterface()), "AutoInterface")
+        # RNS hands over a local network peer as a child interface with its own class.
+        self.assertEqual(lxmf._interface_kind(AutoInterfacePeer()), "AutoInterfacePeer")
         self.assertEqual(lxmf._interface_kind(None), "")
 
     def test_bluetooth_peer_interfaces_are_recognised_by_their_parent_class(self):
