@@ -60,6 +60,8 @@ data class RNodeRadioDiagnostics(
     val spreadingFactor: Int,
     val codingRate: Int,
     val online: Boolean,
+    /** What the diagnostics screen calls this radio. */
+    val label: String = port,
 )
 
 /**
@@ -166,6 +168,12 @@ fun buildNetworkDiagnostics(
                 rnodeRadios = state.rnodeInterfaces.map { radio ->
                     RNodeRadioDiagnostics(
                         port = radio.port,
+                        // A Bluetooth RNode is shown by name, not by its device id.
+                        label = if (rnodeConnectionType(radio.port) == RNodeConnectionType.BLUETOOTH) {
+                            rnodeDisplayName(radio)
+                        } else {
+                            radio.port
+                        },
                         frequencyHz = radio.frequencyHz,
                         bandwidthHz = radio.bandwidthHz,
                         txPowerDbm = radio.txPowerDbm,
@@ -301,7 +309,7 @@ internal fun NetworkDiagnosticsDialog(
                     SectionTitle("RNode radios")
                     diagnostics.rnodeRadios.forEach { radio ->
                         RadioRow(
-                            label = radio.port,
+                            label = radio.label,
                             detail = "${radio.frequencyHz / 1_000_000} MHz · ${radio.bandwidthHz / 1000} kHz BW · SF${radio.spreadingFactor} · CR${radio.codingRate} · ${radio.txPowerDbm} dBm",
                             online = radio.online,
                             color = palette,
