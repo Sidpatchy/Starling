@@ -21,6 +21,12 @@ final class StarlingRNodeBluetoothBridge: NSObject, CBCentralManagerDelegate, CB
     private var listener: NWListener?
     private var tcpConnection: NWConnection?
     private var targetName: String?
+    /// Set when the saved RNode is a peripheral identifier: connect to that peripheral only.
+    private var targetIdentifier: UUID?
+    /// False when iOS had no record of the saved identifier and a scan has to find it again.
+    private var identifierKnown = false
+    private var discoveredName: String?
+    private var resolvedDevice: String?
     private var startWaiter: DispatchSemaphore?
     private var startupError: String?
     private var startupResolved = false
@@ -29,8 +35,24 @@ final class StarlingRNodeBluetoothBridge: NSObject, CBCentralManagerDelegate, CB
     private var pendingWrite = Data()
     private var pendingRead = Data()
 
-    /// Returns nil when the BLE link and loopback listener are ready, or a user-facing error.
-    func start(targetName: String?) -> String? {
+    /// Failure codes that shared code turns into messages naming the RNode.
+    private static let errorPrefix = "RNODE_BLE:"
+    private static let notFound = errorPrefix + "not_found"
+    private static let notPaired = errorPrefix + "not_paired"
+    private static let pairingLost = errorPrefix + "pairing_lost"
+    private static let permission = errorPrefix + "permission"
+    private static let heldElsewhere = errorPrefix + "held_elsewhere"
+    private static let unknownIdentifier = errorPrefix + "unknown_id"
+
+    /// The connected peripheral as "identifier<TAB>name", or nil before a successful start.
+    var connectedDevice: String? { queue.sync { resolvedDevice } }
+
+    /// Returns nil when the BLE link and loopback listener are ready, or a user-facing error
+    /// or failure code. A target that is a peripheral identifier is connected to directly;
+    /// a device name, or no target for the first RNode found, is located by scanning.
+    func start(target: String?) -> String? {
+        let trimmedTarget = target?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let identifier = UUID(uuidString: trimmedTarget)
         let waiter = DispatchSemaphore(value: 0)
         queue.async {
             guard self.central == nil, self.listener == nil else {
@@ -38,7 +60,11 @@ final class StarlingRNodeBluetoothBridge: NSObject, CBCentralManagerDelegate, CB
                 waiter.signal()
                 return
             }
-            self.targetName = targetName?.trimmingCharacters(in: .whitespacesAndNewlines)
+            self.targetName = identifier == nil ? trimmedTarget : nil
+            self.targetIdentifier = identifier
+            self.identifierKnown = false
+            self.discoveredName = nil
+            self.resolvedDevice = nil
             self.startWaiter = waiter
             self.startupError = nil
             self.startupResolved = false
@@ -47,8 +73,12 @@ final class StarlingRNodeBluetoothBridge: NSObject, CBCentralManagerDelegate, CB
         }
 
         guard waiter.wait(timeout: .now() + 40) == .success else {
+            let known = queue.sync { identifierKnown }
             stop()
-            return "Timed out connecting to the BLE RNode. Check that it is powered on and nearby."
+            if identifier == nil {
+                return "Timed out connecting to the BLE RNode. Check that it is powered on and nearby."
+            }
+            return known ? Self.notFound : Self.unknownIdentifier
         }
         return queue.sync { startupError }
     }
@@ -65,6 +95,7 @@ final class StarlingRNodeBluetoothBridge: NSObject, CBCentralManagerDelegate, CB
             self.tcpConnection?.cancel()
             self.listener?.cancel()
             self.central = nil
+            self.resolvedDevice = nil
             self.peripheral = nil
             self.rxCharacteristic = nil
             self.txCharacteristic = nil
@@ -82,12 +113,21 @@ final class StarlingRNodeBluetoothBridge: NSObject, CBCentralManagerDelegate, CB
         switch central.state {
         case .poweredOn:
             guard !scanning, running else { return }
+            if let targetIdentifier,
+               let known = central.retrievePeripherals(withIdentifiers: [targetIdentifier]).first {
+                identifierKnown = true
+                peripheral = known
+                central.connect(known, options: nil)
+                return
+            }
+            // No saved identifier, or iOS no longer has it: scan, and for a saved
+            // identifier accept only that same peripheral.
             scanning = true
             central.scanForPeripherals(withServices: [Self.serviceUUID], options: nil)
         case .poweredOff:
             resolveStart(error: "Turn on Bluetooth to connect to a BLE RNode.")
         case .unauthorized:
-            resolveStart(error: "Allow Starling to use Bluetooth in iOS Settings.")
+            resolveStart(error: targetIdentifier == nil ? "Allow Starling to use Bluetooth in iOS Settings." : Self.permission)
         case .unsupported:
             resolveStart(error: "Bluetooth LE is not available on this device.")
         case .resetting, .unknown:
@@ -105,13 +145,17 @@ final class StarlingRNodeBluetoothBridge: NSObject, CBCentralManagerDelegate, CB
     ) {
         let name = (advertisementData[CBAdvertisementDataLocalNameKey] as? String) ?? peripheral.name ?? ""
         let matchesTarget: Bool
-        if let targetName, !targetName.isEmpty {
+        if let targetIdentifier {
+            matchesTarget = peripheral.identifier == targetIdentifier
+        } else if let targetName, !targetName.isEmpty {
             matchesTarget = name.caseInsensitiveCompare(targetName) == .orderedSame
         } else {
             matchesTarget = name.hasPrefix("RNode")
         }
         guard matchesTarget else { return }
 
+        if targetIdentifier != nil { identifierKnown = true }
+        if !name.isEmpty { discoveredName = name }
         scanning = false
         central.stopScan()
         self.peripheral = peripheral
@@ -124,7 +168,15 @@ final class StarlingRNodeBluetoothBridge: NSObject, CBCentralManagerDelegate, CB
     }
 
     func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
-        if running {
+        if running, targetIdentifier != nil {
+            if Self.isPairingRemoved(error) {
+                resolveStart(error: Self.pairingLost)
+            } else if !startupResolved {
+                resolveStart(error: Self.notFound)
+            } else {
+                central.connect(peripheral, options: nil)
+            }
+        } else if running {
             scanning = false
             central.scanForPeripherals(withServices: [Self.serviceUUID], options: nil)
             scanning = true
@@ -138,6 +190,20 @@ final class StarlingRNodeBluetoothBridge: NSObject, CBCentralManagerDelegate, CB
         guard running else { return }
         rxCharacteristic = nil
         txCharacteristic = nil
+        if !startupResolved, targetIdentifier != nil, let error {
+            // The link dropped before the UART service was usable.
+            if Self.isPairingRemoved(error) {
+                resolveStart(error: Self.pairingLost)
+            } else if Self.isAuthenticationFailure(error) {
+                resolveStart(error: Self.notPaired)
+            } else if Self.isCoreBluetoothError(error, code: CBError.Code.peripheralDisconnected.rawValue) {
+                // The RNode ended the connection itself, as it does while another device holds it.
+                resolveStart(error: Self.heldElsewhere)
+            } else {
+                resolveStart(error: Self.notFound)
+            }
+            return
+        }
         central.connect(peripheral, options: nil)
     }
 
@@ -185,13 +251,21 @@ final class StarlingRNodeBluetoothBridge: NSObject, CBCentralManagerDelegate, CB
     ) {
         guard characteristic.uuid == Self.txUUID else { return }
         if let error {
-            resolveStart(error: "Could not subscribe to BLE RNode data: \(error.localizedDescription)")
+            if Self.isPairingRemoved(error) {
+                resolveStart(error: Self.pairingLost)
+            } else if Self.isAuthenticationFailure(error) {
+                resolveStart(error: Self.notPaired)
+            } else {
+                resolveStart(error: "Could not subscribe to BLE RNode data: \(error.localizedDescription)")
+            }
             return
         }
         guard characteristic.isNotifying else {
             resolveStart(error: "The BLE RNode did not enable UART notifications.")
             return
         }
+        let name = discoveredName ?? peripheral.name ?? ""
+        resolvedDevice = peripheral.identifier.uuidString + "\t" + name
         flushPendingWrites()
         startLoopbackListener()
     }
@@ -300,6 +374,27 @@ final class StarlingRNodeBluetoothBridge: NSObject, CBCentralManagerDelegate, CB
         tcpConnection = nil
         pendingWrite.removeAll(keepingCapacity: true)
         pendingRead.removeAll(keepingCapacity: true)
+    }
+
+    /// CBError.peerRemovedPairingInformation: the RNode discarded its pairing with this iPhone.
+    static func isPairingRemoved(_ error: Error?) -> Bool {
+        isCoreBluetoothError(error, code: 14)
+    }
+
+    /// The UART service needs an authenticated or encrypted link and iOS did not establish one.
+    static func isAuthenticationFailure(_ error: Error?) -> Bool {
+        guard let error = error as NSError? else { return false }
+        if error.domain == CBATTErrorDomain {
+            return error.code == CBATTError.Code.insufficientAuthentication.rawValue
+                || error.code == CBATTError.Code.insufficientEncryption.rawValue
+        }
+        // CBError.encryptionTimedOut
+        return error.domain == CBErrorDomain && error.code == 15
+    }
+
+    static func isCoreBluetoothError(_ error: Error?, code: Int) -> Bool {
+        guard let error = error as NSError? else { return false }
+        return error.domain == CBErrorDomain && error.code == code
     }
 
     private func resolveStart(error: String?) {

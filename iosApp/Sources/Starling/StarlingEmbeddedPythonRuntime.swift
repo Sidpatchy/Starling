@@ -9,6 +9,7 @@ final class StarlingEmbeddedPythonRuntime: NSObject, IosPythonRuntime {
     private let executablePath: String
     private let runtimeLock = NSRecursiveLock()
     private let rnodeBluetoothBridge = StarlingRNodeBluetoothBridge()
+    private let rnodeBluetoothScanner = StarlingRNodeBluetoothScanner()
     private var didInitialize = false
     private var startupError: String?
 
@@ -60,11 +61,31 @@ final class StarlingEmbeddedPythonRuntime: NSObject, IosPythonRuntime {
         return StarlingPythonInvoke(command)
     }
 
-    func startRNodeBleProxy(deviceName: String) -> String? {
-        rnodeBluetoothBridge.start(targetName: deviceName.isEmpty ? nil : deviceName)
+    func startRNodeBleProxy(target: String) -> String? {
+        rnodeBluetoothBridge.start(target: target.isEmpty ? nil : target)
     }
 
     func stopRNodeBleProxy() {
         rnodeBluetoothBridge.stop()
+    }
+
+    func rnodeBleProxyDevice() -> String? {
+        rnodeBluetoothBridge.connectedDevice
+    }
+
+    func startRNodeBleScan(listener: IosRNodeBleListener) {
+        rnodeBluetoothScanner.startScan(listener: listener)
+    }
+
+    func stopRNodeBleScan() {
+        rnodeBluetoothScanner.stopScan()
+    }
+
+    func startRNodeBleTrial(identifier: String, listener: IosRNodeBleListener) {
+        rnodeBluetoothScanner.startTrial(identifier: identifier, listener: listener)
+    }
+
+    func cancelRNodeBleTrial() {
+        rnodeBluetoothScanner.cancelTrial()
     }
 }

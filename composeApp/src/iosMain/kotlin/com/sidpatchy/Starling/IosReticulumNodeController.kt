@@ -23,9 +23,20 @@ import kotlin.time.TimeSource
 interface IosPythonRuntime {
     val dataDirectory: String
     fun invoke(command: String): String
-    /** Start a CoreBluetooth UART bridge; an empty name accepts the first RNode. */
-    fun startRNodeBleProxy(deviceName: String): String?
+    /**
+     * Start a CoreBluetooth UART bridge. [target] is a peripheral identifier, a
+     * device name saved by an older version, or empty to accept the first RNode.
+     * Returns null on success, or a message or `RNODE_BLE:` failure code.
+     */
+    fun startRNodeBleProxy(target: String): String?
     fun stopRNodeBleProxy()
+    /** The peripheral the bridge connected to, as "identifier<TAB>name"; null before a successful start. */
+    fun rnodeBleProxyDevice(): String?
+    fun startRNodeBleScan(listener: IosRNodeBleListener)
+    fun stopRNodeBleScan()
+    /** Connects once and subscribes to the UART service, which is when iOS pairs if the RNode requires it. */
+    fun startRNodeBleTrial(identifier: String, listener: IosRNodeBleListener)
+    fun cancelRNodeBleTrial()
 }
 
 /** RNS/LXMF node lifecycle backed by the bundled reference Python modules. */
@@ -40,6 +51,10 @@ class IosReticulumNodeController(
     override val state: StateFlow<ReticulumNodeState> = _state.asStateFlow()
     override val isSupported: Boolean = true
     override val supportsRNodeInterfaces: Boolean = true
+    override val supportsBleRNodes: Boolean = true
+    override val rnodeBlePicker: RNodeBlePicker = IosRNodeBlePicker(runtime)
+    private val _resolvedBleRNode = MutableStateFlow<ResolvedBleRNode?>(null)
+    override val resolvedBleRNode: StateFlow<ResolvedBleRNode?> = _resolvedBleRNode.asStateFlow()
     val bridgeEvents: SharedFlow<String> = _bridgeEvents.asSharedFlow()
 
     private var activeConfig: ReticulumNodeConfig? = null
@@ -48,7 +63,7 @@ class IosReticulumNodeController(
     private var bleProxyStarted = false
 
     override suspend fun start(config: ReticulumNodeConfig) = operations.withLock {
-        config.validationError()?.let {
+        config.validationError(supportsBleRNodes)?.let {
             _state.value = ReticulumNodeState.Failed(it)
             return@withLock
         }
@@ -92,10 +107,16 @@ class IosReticulumNodeController(
             }.getOrElse { it.message ?: "Could not start the iOS BLE RNode bridge." }
             if (error != null) {
                 runCatching { withContext(Dispatchers.Default) { runtime.stopRNodeBleProxy() } }
-                _state.value = ReticulumNodeState.Failed(error)
+                _state.value = ReticulumNodeState.Failed(
+                    iosRNodeBleProxyError(error, rnodeBleLabel(bleInterface.port, bleInterface.bleName)),
+                )
                 return@withLock
             }
             bleProxyStarted = true
+            _resolvedBleRNode.value = runCatching { runtime.rnodeBleProxyDevice() }.getOrNull()?.let { device ->
+                val identifier = device.substringBefore('\t').trim()
+                if (identifier.isEmpty()) null else ResolvedBleRNode(identifier, device.substringAfter('\t', "").trim())
+            }
         }
         runtimeUsed = true
         val response = try {
@@ -236,6 +257,7 @@ class IosReticulumNodeController(
     }
 
     private suspend fun stopBleProxy() {
+        _resolvedBleRNode.value = null
         if (!bleProxyStarted) return
         bleProxyStarted = false
         runCatching { withContext(Dispatchers.Default) { runtime.stopRNodeBleProxy() } }
