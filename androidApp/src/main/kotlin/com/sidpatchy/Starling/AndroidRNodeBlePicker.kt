@@ -315,14 +315,8 @@ internal class AndroidRNodeBlePicker(
                     state == BluetoothDevice.BOND_NONE && previous == BluetoothDevice.BOND_BONDING -> {
                         // Android does not document this extra; it is read on a best-effort basis.
                         val reason = intent.getIntExtra(EXTRA_UNBOND_REASON, 0)
-                        failPairing(
-                            when (reason) {
-                                UNBOND_REASON_AUTH_FAILED -> RNodeBlePairingFailure.WRONG_PIN
-                                UNBOND_REASON_AUTH_TIMEOUT -> RNodeBlePairingFailure.TIMEOUT
-                                else -> RNodeBlePairingFailure.OTHER
-                            },
-                            reason,
-                        )
+                        Log.i(TAG, "Pairing ended without a bond (Android reason $reason)")
+                        failPairing(rnodePairingFailureForAndroidUnbondReason(reason), reason)
                     }
                 }
             }
@@ -463,8 +457,6 @@ internal class AndroidRNodeBlePicker(
         const val SCAN_START_HISTORY_MS = 60_000L
         const val PAIRING_TIMEOUT_MS = 60_000L
         const val EXTRA_UNBOND_REASON = "android.bluetooth.device.extra.REASON"
-        const val UNBOND_REASON_AUTH_FAILED = 1
-        const val UNBOND_REASON_AUTH_TIMEOUT = 6
         val SERVICE_UUID: UUID = UUID.fromString("6E400001-B5A3-F393-E0A9-E50E24DCCA9E")
         val TX_UUID: UUID = UUID.fromString("6E400003-B5A3-F393-E0A9-E50E24DCCA9E")
         val CCCD_UUID: UUID = UUID.fromString("00002902-0000-1000-8000-00805F9B34FB")

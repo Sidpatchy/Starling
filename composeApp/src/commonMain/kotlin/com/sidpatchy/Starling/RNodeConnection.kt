@@ -336,6 +336,18 @@ sealed interface RNodeBleScanStatus {
 
 enum class RNodeBlePairingFailure { WRONG_PIN, TIMEOUT, STALE_BOND, OTHER }
 
+/** Android's reason for a pairing it gave up on waiting for. */
+const val ANDROID_UNBOND_REASON_AUTH_TIMEOUT = 6
+
+/**
+ * The failure for the reason Android gives when a pairing ends without a
+ * bond. Over Bluetooth LE Android gives the same reason for a PIN that did
+ * not match, a PIN prompt that was cancelled and a link that dropped, so no
+ * reason is treated as a wrong PIN.
+ */
+fun rnodePairingFailureForAndroidUnbondReason(reason: Int): RNodeBlePairingFailure =
+    if (reason == ANDROID_UNBOND_REASON_AUTH_TIMEOUT) RNodeBlePairingFailure.TIMEOUT else RNodeBlePairingFailure.OTHER
+
 /** Progress of pairing on Android, or of the first trial connection on iOS. */
 sealed interface RNodeBlePairingState {
     data object Idle : RNodeBlePairingState

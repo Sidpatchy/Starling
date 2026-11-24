@@ -358,6 +358,27 @@ class RNodeConnectionTest {
     }
 
     @Test
+    fun noAndroidUnbondReasonIsReportedAsAWrongPin() {
+        // 1 authentication failed, 2 rejected, 3 cancelled, 4 device down, 5 discovery in progress,
+        // 7 repeated attempts, 8 cancelled by the other device, 9 removed; 0 when Android gives none.
+        for (reason in listOf(0, 1, 2, 3, 4, 5, 7, 8, 9, 42)) {
+            assertEquals(RNodeBlePairingFailure.OTHER, rnodePairingFailureForAndroidUnbondReason(reason), "reason $reason")
+        }
+        assertEquals(RNodeBlePairingFailure.TIMEOUT, rnodePairingFailureForAndroidUnbondReason(6))
+
+        val cancelled = RNodeBlePairingState.Failed("RNode A1B2", rnodePairingFailureForAndroidUnbondReason(1), 1)
+        assertEquals(
+            "Pairing didn't finish. Make sure the RNode is on and in pairing mode, then try again.",
+            RNodeBleText.pairingFailureMessage(cancelled, RNodeBlePlatform.ANDROID),
+        )
+        val timedOut = RNodeBlePairingState.Failed("RNode A1B2", rnodePairingFailureForAndroidUnbondReason(6), 6)
+        assertEquals(
+            "Pairing timed out. Wake the RNode's screen, then try again.",
+            RNodeBleText.pairingFailureMessage(timedOut, RNodeBlePlatform.ANDROID),
+        )
+    }
+
+    @Test
     fun pairingFailuresAndNodeStartErrorsNameTheRNode() {
         val android = RNodeBlePlatform.ANDROID
         fun failed(reason: RNodeBlePairingFailure, code: Int = 0) = RNodeBlePairingState.Failed("RNode A1B2", reason, code)
