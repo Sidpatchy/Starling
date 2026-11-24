@@ -85,7 +85,7 @@ class ReticulumNodeService : Service() {
             }
             ACTION_RRC_CONNECT, ACTION_RRC_DISCONNECT, ACTION_RRC_JOIN, ACTION_RRC_PART, ACTION_RRC_SEND ->
                 handleRrcCommand(intent)
-            ACTION_LXMF_SEND, ACTION_LXMF_SET_NAME -> handleLxmfCommand(intent)
+            ACTION_LXMF_SEND, ACTION_LXMF_SET_NAME, ACTION_LXMF_ANNOUNCE -> handleLxmfCommand(intent)
             ACTION_RRC_STATUS -> publishRrcCurrentState()
             else -> stopSelf(startId)
         }
@@ -282,13 +282,19 @@ class ReticulumNodeService : Service() {
 
     private fun handleLxmfCommand(intent: Intent) {
         val module = lxmfModule
+        val isAnnounce = intent.action == ACTION_LXMF_ANNOUNCE
         if (module == null) {
-            publishLxmfError("Start the Reticulum node before sending LXMF messages.")
+            publishLxmfError(
+                if (isAnnounce) "Start the Reticulum node before announcing."
+                else "Start the Reticulum node before sending LXMF messages.",
+            )
             return
         }
         rrcWorker.execute {
             try {
-                if (intent.action == ACTION_LXMF_SET_NAME) {
+                if (isAnnounce) {
+                    module.callAttr("announce")
+                } else if (intent.action == ACTION_LXMF_SET_NAME) {
                     module.callAttr("set_display_name", intent.getStringExtra(EXTRA_DISPLAY_NAME).orEmpty())
                 } else {
                     module.callAttr(
@@ -299,8 +305,13 @@ class ReticulumNodeService : Service() {
                 }
                 drainLxmfEvents()
             } catch (error: Exception) {
-                Log.w(TAG, "LXMF send failed", error)
-                publishLxmfError(error.message ?: "Could not send the LXMF message.")
+                if (isAnnounce) {
+                    Log.w(TAG, "LXMF announce failed", error)
+                    publishLxmfError(error.message ?: "Could not announce the LXMF address.")
+                } else {
+                    Log.w(TAG, "LXMF send failed", error)
+                    publishLxmfError(error.message ?: "Could not send the LXMF message.")
+                }
             }
         }
     }
@@ -472,6 +483,7 @@ class ReticulumNodeService : Service() {
         const val ACTION_RRC_STATUS = "com.sidpatchy.Starling.action.RRC_STATUS"
         const val ACTION_LXMF_SEND = "com.sidpatchy.Starling.action.LXMF_SEND"
         const val ACTION_LXMF_SET_NAME = "com.sidpatchy.Starling.action.LXMF_SET_NAME"
+        const val ACTION_LXMF_ANNOUNCE = "com.sidpatchy.Starling.action.LXMF_ANNOUNCE"
         const val EXTRA_MODE = "mode"
         const val EXTRA_TCP_PEERS = "tcp_peers"
         const val EXTRA_TCP_STATUS = "tcp_status"

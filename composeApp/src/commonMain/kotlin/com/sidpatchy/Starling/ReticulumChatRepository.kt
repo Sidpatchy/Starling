@@ -106,6 +106,12 @@ class ReticulumChatRepository(
     private val _contactRequests = MutableStateFlow(
         restoredState?.contactRequests.orEmpty().filterNot { it.isPreview || preview.isPreviewMember(it.sender.id) },
     )
+    private val liveNearbyPeers = MutableStateFlow(
+        pruneNearbyPeers(
+            restoredState?.nearbyPeers.orEmpty().filterNot { it.isPreview },
+            Clock.System.now().toEpochMilliseconds(),
+        ).associateBy { it.address },
+    )
     private val messageByRequestId = mutableMapOf<String, LxmfDirectMessage>()
     private val _lastError = MutableStateFlow<String?>(null)
     val rrcError: StateFlow<String?> = combine(
@@ -178,6 +184,23 @@ class ReticulumChatRepository(
         scope,
         SharingStarted.Eagerly,
         if (restoredPreviewMode) preview.contactRequests.value else _contactRequests.value.filterNot { it.isPreview },
+    )
+
+    override val nearbyPeers: StateFlow<List<NearbyPeer>> = combine(
+        preview.nearbyPeers,
+        liveNearbyPeers,
+        preview.previewMode,
+        liveBlockedMemberIds,
+        discoveredMembers,
+    ) { previewPeers, livePeers, previewEnabled, blockedIds, members ->
+        visibleNearbyPeers(previewPeers, livePeers.values, previewEnabled, blockedIds, members)
+    }.stateIn(
+        scope,
+        SharingStarted.Eagerly,
+        visibleNearbyPeers(
+            preview.nearbyPeers.value, liveNearbyPeers.value.values, restoredPreviewMode,
+            liveBlockedMemberIds.value, discoveredMembers.value,
+        ),
     )
 
     init {
@@ -399,6 +422,7 @@ class ReticulumChatRepository(
                         _directMessageError.value = event.message
                     }
                     is ReticulumEvent.DeliveryStatus -> updateDeliveryStatus(event)
+                    is ReticulumEvent.NearbyPeerHeard -> receiveNearbyPeer(event.peer)
                     is ReticulumEvent.RoomsChanged -> Unit // RRC core intentionally has no room enumeration command.
                 }
             }
@@ -573,6 +597,27 @@ class ReticulumChatRepository(
         liveContactMemberIds.value = normalizeContactIds(liveContactMemberIds.value + canonical.id, discoveredMembers.value)
         persistState()
         return canonical
+    }
+
+    override fun addContactFromAnnounce(peer: NearbyPeer, name: String?): ChatMember? {
+        if (preview.previewMode.value) return preview.addContactFromAnnounce(peer, name)
+        if (peer.isPreview) return null
+        val address = normalizeLxmfAddress(peer.address) ?: return null
+        // An announce never renames someone who is already a contact.
+        nearbyContactFor(peer.copy(address = address), knownMembers.value, liveContactMemberIds.value)?.let { return it }
+        val displayName = sanitizeNearbyName(name ?: peer.name)
+        if (displayName.isBlank()) return null
+        return addContact(ChatMember("lxmf-$address", displayName, address = address))
+    }
+
+    /** Announce the local LXMF delivery address so others can see this device. */
+    suspend fun announce() {
+        if (preview.previewMode.value) return
+        try {
+            transport.announce()
+        } catch (error: Exception) {
+            _directMessageError.value = error.message ?: "Could not announce the LXMF address."
+        }
     }
 
     override fun toggleContact(member: ChatMember) {
@@ -1101,6 +1146,27 @@ class ReticulumChatRepository(
         persistState()
     }
 
+    private fun receiveNearbyPeer(heard: NearbyPeer) {
+        val address = normalizeLxmfAddress(heard.address) ?: return
+        if (address == transport.localDeliveryAddress.value?.let(::normalizeLxmfAddress)) return
+        val peer = heard.copy(address = address, name = sanitizeNearbyName(heard.name), isPreview = false)
+        val current = liveNearbyPeers.value
+        val merged = current + (address to mergeNearbyPeer(current[address], peer))
+        liveNearbyPeers.value = pruneNearbyPeers(merged.values, Clock.System.now().toEpochMilliseconds())
+            .associateBy { it.address }
+        persistState()
+    }
+
+    private fun visibleNearbyPeers(
+        previewPeers: List<NearbyPeer>,
+        livePeers: Collection<NearbyPeer>,
+        previewEnabled: Boolean,
+        blockedIds: Set<String>,
+        members: List<ChatMember>,
+    ): List<NearbyPeer> =
+        if (previewEnabled) previewPeers.filter { it.isPreview }
+        else livePeers.filterNot { it.isPreview || isNearbyPeerBlocked(it, members, blockedIds) }
+
     private fun receiveAcceptedDirect(member: ChatMember, message: LxmfDirectMessage) {
         val timestampMillis = message.timestampMillis.takeIf { it > 0 }
             ?: Clock.System.now().toEpochMilliseconds()
@@ -1236,6 +1302,7 @@ class ReticulumChatRepository(
             roomMessages = liveMessages.value,
             directMessages = liveDirectMessages.value,
             uiSettings = _uiSettings.value,
+            nearbyPeers = liveNearbyPeers.value.values.filter { it.networkHeardMillis > 0 },
         )
         runCatching { stateStore.write(ChatStateCodec.encode(state)) }
             .onFailure { _lastError.value = "Could not save chat data: ${it.message ?: "storage error"}" }

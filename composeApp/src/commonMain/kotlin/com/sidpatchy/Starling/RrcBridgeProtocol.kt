@@ -95,6 +95,21 @@ fun parseRrcBridgeEvent(line: String): ParsedRrcBridgeEvent? {
                 ),
             )
         }
+        "NEARBY_PEER" -> {
+            if (fields.size < 8) return null
+            val address = normalizeLxmfAddress(fields[1].decodeBridgeBase64()) ?: return null
+            val peer = NearbyPeer(
+                address = address,
+                name = sanitizeNearbyName(fields[2].decodeBridgeBase64()),
+                bleHeardMillis = fields[3].toLongOrNull()?.coerceAtLeast(0) ?: 0L,
+                bleHops = fields[4].toIntOrNull() ?: 0,
+                networkHeardMillis = fields[5].toLongOrNull()?.coerceAtLeast(0) ?: 0L,
+                networkHops = fields[6].toIntOrNull() ?: 0,
+                networkKind = sanitizeNearbyName(fields[7].decodeBridgeBase64()),
+            )
+            if (peer.bleHeardMillis == 0L && peer.networkHeardMillis == 0L) null
+            else ParsedRrcBridgeEvent(event = ReticulumEvent.NearbyPeerHeard(peer))
+        }
         "DELIVERY_STATUS" -> ParsedRrcBridgeEvent(
             event = ReticulumEvent.DeliveryStatus(
                 messageId = fields.getOrNull(1)?.decodeBridgeBase64().orEmpty(),

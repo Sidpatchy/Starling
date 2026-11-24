@@ -51,6 +51,7 @@ class ReticulumChatRepositoryTest {
             sentDirectMessages += address to body
         }
         override suspend fun setLocalDisplayName(displayName: String) = Unit
+        override suspend fun announce() = Unit
     }
 
     private object FakeStateStore : ChatStateStore {
