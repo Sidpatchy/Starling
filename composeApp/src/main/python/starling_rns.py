@@ -16,8 +16,11 @@ _reticulum = None
 _mode = None
 _tcp_peers = []
 _rnode_interfaces = []
+_ble_peers = False
 _rpc_key_hex = None
 _config_dir = None
+# Mirrors starling_ble_android.INTERFACE_NAME without importing its BLE dependency.
+_BLE_PEER_INTERFACE_NAME = "Starling BLE Peers"
 
 
 def construct_without_required_process_signals(factory):
@@ -42,7 +45,30 @@ def construct_without_required_process_signals(factory):
         signal.signal = original_signal
 
 
-def _write_config(config_dir, mode, tcp_peers, rnode_interfaces, rpc_key_hex, android_platform=False):
+def _normalize_ble_peers(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str) and value.strip().lower() in ("true", "false"):
+        return value.strip().lower() == "true"
+    raise ValueError("BLE peering must be true or false")
+
+
+def _write_ble_peer_interface_module(config_dir):
+    """Install the loader RNS executes for the external BLE peer interface type."""
+    import starling_ble_android
+
+    interface_dir = os.path.join(config_dir, "interfaces")
+    os.makedirs(interface_dir, exist_ok=True)
+    module_path = os.path.join(interface_dir, starling_ble_android.INTERFACE_TYPE + ".py")
+    with open(module_path, "w", encoding="ascii") as module_file:
+        module_file.write(
+            "# Written by Starling when the node starts; edits are overwritten.\n"
+            "import starling_ble_android\n\n"
+            "interface_class = starling_ble_android.load_interface_class()\n"
+        )
+
+
+def _write_config(config_dir, mode, tcp_peers, rnode_interfaces, rpc_key_hex, android_platform=False, ble_peers=False):
     os.makedirs(config_dir, exist_ok=True)
     config_path = os.path.join(config_dir, "config")
 
@@ -105,6 +131,17 @@ def _write_config(config_dir, mode, tcp_peers, rnode_interfaces, rpc_key_hex, an
             else:
                 interface["port"] = radio.get("runtime_port", radio["port"])
             interfaces["Starling RNode " + str(index)] = interface
+        if ble_peers:
+            import starling_ble_android
+
+            # ble-reticulum v2.2 peers; the Kotlin bridge supplies the BLE driver.
+            interfaces[starling_ble_android.INTERFACE_NAME] = {
+                "type": starling_ble_android.INTERFACE_TYPE,
+                "enabled": "yes",
+                "enable_central": "yes",
+                "enable_peripheral": "yes",
+            }
+            _write_ble_peer_interface_module(config_dir)
         config["interfaces"] = interfaces
 
     config.write()
@@ -115,8 +152,9 @@ def _write_config(config_dir, mode, tcp_peers, rnode_interfaces, rpc_key_hex, an
         pass
 
 
-def start_node(config_dir, mode, tcp_peers="[]", rpc_key_hex="", rnode_interfaces="[]", allow_reconfigure=False):
-    global _reticulum, _mode, _tcp_peers, _rnode_interfaces, _rpc_key_hex, _config_dir
+def start_node(config_dir, mode, tcp_peers="[]", rpc_key_hex="", rnode_interfaces="[]", allow_reconfigure=False,
+               ble_peers=False):
+    global _reticulum, _mode, _tcp_peers, _rnode_interfaces, _ble_peers, _rpc_key_hex, _config_dir
     import RNS
     from starling_identity import load_identity
 
@@ -209,10 +247,21 @@ def start_node(config_dir, mode, tcp_peers="[]", rpc_key_hex="", rnode_interface
     rnode_runtime_ports = [radio["runtime_port"].lower() for radio in normalized_rnodes]
     if len(set(rnode_runtime_ports)) != len(rnode_runtime_ports):
         raise ValueError("Each RNode interface must use a unique runtime connection")
-    if mode == "embedded" and not normalized_peers and not normalized_rnodes:
+    ble_peers = _normalize_ble_peers(ble_peers)
+    if mode == "embedded" and not normalized_peers and not normalized_rnodes and not ble_peers:
         raise ValueError("Add a TCP peer or an RNode interface before starting the embedded node")
-    if mode == "existing_shared_instance" and (normalized_peers or normalized_rnodes):
+    if mode == "existing_shared_instance" and (normalized_peers or normalized_rnodes or ble_peers):
         raise ValueError("Interfaces can only be configured for Starling's embedded node")
+    if ble_peers:
+        if not android_platform:
+            raise ValueError("Bluetooth peers are only available on Android")
+        try:
+            import starling_ble_android
+            starling_ble_android.load_interface_class()
+        except ImportError:
+            raise ValueError("Bluetooth peer support is not installed")
+        if not starling_ble_android.has_bridge():
+            raise ValueError("The Android Bluetooth peer bridge is not available")
     if mode == "existing_shared_instance":
         normalized_peers = []
         normalized_rnodes = []
@@ -222,6 +271,7 @@ def start_node(config_dir, mode, tcp_peers="[]", rpc_key_hex="", rnode_interface
             _mode == mode
             and _tcp_peers == normalized_peers
             and _rnode_interfaces == normalized_rnodes
+            and _ble_peers == ble_peers
             and _rpc_key_hex == (rpc_key_hex or None)
         )
         if same_configuration and mode == "existing_shared_instance" and not _reticulum.is_connected_to_shared_instance:
@@ -239,7 +289,7 @@ def start_node(config_dir, mode, tcp_peers="[]", rpc_key_hex="", rnode_interface
             _disconnect_configured_interfaces()
             if android_platform and normalized_rnodes:
                 _install_android_tcp_rnode_compat()
-            _write_config(config_dir, mode, normalized_peers, normalized_rnodes, rpc_key_hex, android_platform)
+            _write_config(config_dir, mode, normalized_peers, normalized_rnodes, rpc_key_hex, android_platform, ble_peers)
             if mode == "embedded":
                 from RNS.vendor.configobj import ConfigObj
 
@@ -253,6 +303,7 @@ def start_node(config_dir, mode, tcp_peers="[]", rpc_key_hex="", rnode_interface
             _mode = mode
             _tcp_peers = normalized_peers
             _rnode_interfaces = normalized_rnodes
+            _ble_peers = ble_peers
             _rpc_key_hex = rpc_key_hex or None
             _config_dir = config_dir
         return status()
@@ -265,7 +316,7 @@ def start_node(config_dir, mode, tcp_peers="[]", rpc_key_hex="", rnode_interface
     os.umask(0o077)
     if android_platform and normalized_rnodes:
         _install_android_tcp_rnode_compat()
-    _write_config(config_dir, mode, normalized_peers, normalized_rnodes, rpc_key_hex, android_platform)
+    _write_config(config_dir, mode, normalized_peers, normalized_rnodes, rpc_key_hex, android_platform, ble_peers)
     _reticulum = construct_without_required_process_signals(lambda: RNS.Reticulum(
         configdir=config_dir,
         loglevel=RNS.LOG_NOTICE,
@@ -274,6 +325,7 @@ def start_node(config_dir, mode, tcp_peers="[]", rpc_key_hex="", rnode_interface
     _mode = mode
     _tcp_peers = normalized_peers
     _rnode_interfaces = normalized_rnodes
+    _ble_peers = ble_peers
     _rpc_key_hex = rpc_key_hex or None
     _config_dir = config_dir
     return status()
@@ -287,8 +339,14 @@ def _disconnect_configured_interfaces():
 
     if _mode == "embedded":
         for interface in list(RNS.Transport.interfaces):
+            if interface.name is None:
+                continue
             if interface.name.startswith("Starling TCP ") or interface.name.startswith("Starling RNode "):
                 _reticulum._detach_interface(interface.name, internal_forced=True)
+            elif _ble_peers and interface.name == _BLE_PEER_INTERFACE_NAME:
+                # Its detach() also removes the per-peer interfaces and stops the driver.
+                interface.detach()
+                RNS.Transport.remove_interface(interface)
     elif _mode == "existing_shared_instance":
         interface = _reticulum.shared_instance_interface
         if interface is not None:
@@ -306,9 +364,10 @@ def _disconnect_configured_interfaces():
 def disconnect_node():
     """Detach Starling's interfaces but keep the in-process RNS core reusable."""
     _disconnect_configured_interfaces()
-    global _tcp_peers, _rnode_interfaces
+    global _tcp_peers, _rnode_interfaces, _ble_peers
     _tcp_peers = []
     _rnode_interfaces = []
+    _ble_peers = False
     return True
 
 
@@ -359,11 +418,20 @@ def status():
                 for radio in _rnode_interfaces
             ]
 
+    ble_peer_status = {"enabled": False, "online": False, "peer_count": 0}
+    if _mode == "embedded" and _ble_peers:
+        try:
+            import starling_ble_android
+            ble_peer_status = starling_ble_android.interface_status()
+        except Exception:
+            ble_peer_status = {"enabled": True, "online": False, "peer_count": 0}
+
     return json.dumps({
         "running": True,
         "mode": _mode,
         "tcp_interfaces": tcp_interfaces,
         "rnode_interfaces": rnode_interfaces,
+        "ble_peers": ble_peer_status,
         "shared_instance_connected": bool(getattr(_reticulum, "is_connected_to_shared_instance", False)),
     })
 
@@ -397,7 +465,7 @@ def _install_android_tcp_rnode_compat():
 
 
 def stop_node():
-    global _reticulum, _mode, _tcp_peers, _rnode_interfaces, _rpc_key_hex, _config_dir
+    global _reticulum, _mode, _tcp_peers, _rnode_interfaces, _ble_peers, _rpc_key_hex, _config_dir
     try:
         if _reticulum is not None:
             import RNS
@@ -409,6 +477,7 @@ def stop_node():
         _mode = None
         _tcp_peers = []
         _rnode_interfaces = []
+        _ble_peers = False
         _rpc_key_hex = None
         _config_dir = None
     return True
