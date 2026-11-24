@@ -22,11 +22,11 @@ uses PyCA `cryptography`, built as device and simulator iOS wheels and packaged 
 frameworks. RNS identities and config live in app-private Application Support;
 chat preferences and history use the shared persisted-state codec. iOS does not
 provide an Android-style background service, so live networking is foreground-only.
-For RNode radios, use `tcp://host` for a Wi-Fi RNode on port 7633, or `ble://device name`
-for a BLE RNode advertising the Nordic UART service. A bare `ble://` selects the first
-nearby device advertising as an RNode. BLE runs through CoreBluetooth and is proxied
+For RNode radios, choose Wi-Fi and enter the RNode's host (port 7633), or choose Bluetooth
+and pick the radio with Find RNode in Settings. Starling saves the peripheral's identifier
+and connects to that RNode only. BLE runs through CoreBluetooth and is proxied
 over loopback to the bundled RNS TCP RNode transport; approve any iOS Bluetooth pairing
-prompt. Direct USB serial is unavailable on iOS or Android.
+prompt the first time Starling connects. Direct USB serial is unavailable on iOS or Android.
 
 The unsigned release IPA workflow prepares the pinned Python support framework,
 builds the release Compose framework, asks xtool to generate an Xcode project,
