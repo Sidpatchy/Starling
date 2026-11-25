@@ -10,8 +10,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -23,8 +21,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -36,6 +32,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
@@ -63,7 +60,9 @@ private enum class IdentityConfirmation(val title: String, val message: String, 
 }
 
 @Composable
-internal fun IdentityPage(
+internal fun IdentitySettingsContent(
+    modifier: Modifier,
+    horizontalPadding: Dp,
     previewMode: Boolean,
     nodeState: ReticulumNodeState,
     rrcState: ReticulumConnectionState,
@@ -85,11 +84,6 @@ internal fun IdentityPage(
     networks: List<ChatNetwork>,
     onGlobalNicknameChange: (String) -> Unit,
     onNetworkNicknameChange: (String, String?) -> Unit,
-    compact: Boolean = false,
-    showBackButton: Boolean = false,
-    onBack: () -> Unit = {},
-    showNavigationButton: Boolean = false,
-    onOpenNavigation: () -> Unit = {},
     onDismissKeyboard: () -> Unit = {},
     onManageNetwork: () -> Unit,
 ) {
@@ -102,26 +96,9 @@ internal fun IdentityPage(
     val identityMutable = identitySupported && !identityBusy && nodeState == ReticulumNodeState.Stopped
     val identityActionHeight = 56.dp
 
-    Column(Modifier.fillMaxSize().background(Canvas)) {
-        Row(
-            modifier = Modifier.fillMaxWidth().height(68.dp).background(Paper)
-                .padding(horizontal = if (compact) 8.dp else 20.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            if (showBackButton) {
-                IconButton(onClick = { onDismissKeyboard(); onBack() }) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back to settings", tint = Accent)
-                }
-                Spacer(Modifier.width(6.dp))
-            } else if (compact || showNavigationButton) {
-                NavigationToggle(onClick = { onDismissKeyboard(); onOpenNavigation() })
-                Spacer(Modifier.width(6.dp))
-            }
-            Text("Identity", color = Ink, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
-        }
-        Column(
-            modifier = Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState())
-                .preferredFrameRate(120f).padding(horizontal = 24.dp, vertical = 26.dp),
+    Column(
+            modifier = modifier.fillMaxWidth().verticalScroll(rememberScrollState())
+                .preferredFrameRate(120f).padding(horizontal = horizontalPadding, vertical = 26.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             Text("DEVICE IDENTITY", color = Muted, fontSize = 10.sp, letterSpacing = 1.3.sp, fontWeight = FontWeight.Bold)
@@ -347,7 +324,6 @@ internal fun IdentityPage(
             Button(onClick = { onDismissKeyboard(); onManageNetwork() }, colors = ButtonDefaults.buttonColors(containerColor = Accent)) {
                 Text("Network settings")
             }
-        }
     }
     identityConfirmation?.let { action ->
         AlertDialog(

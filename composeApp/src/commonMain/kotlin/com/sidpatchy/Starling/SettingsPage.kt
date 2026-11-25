@@ -21,7 +21,6 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Switch
@@ -49,6 +48,7 @@ import androidx.compose.ui.preferredFrameRate
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -68,6 +68,20 @@ internal enum class SettingsBackTarget {
 
 internal fun settingsBackTarget(isWideLayout: Boolean, showSectionIndex: Boolean): SettingsBackTarget =
     if (!isWideLayout && !showSectionIndex) SettingsBackTarget.SETTINGS_INDEX else SettingsBackTarget.EXIT_SETTINGS
+
+internal val SettingsTwoPaneMinWidth = 900.dp
+
+@Composable
+private fun SettingsBackButton(label: String, onClick: () -> Unit) {
+    TextButton(
+        onClick = onClick,
+        colors = ButtonDefaults.textButtonColors(contentColor = Accent),
+    ) {
+        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null, modifier = Modifier.size(20.dp))
+        Spacer(Modifier.width(8.dp))
+        Text(label)
+    }
+}
 
 @Composable
 private fun RuntimeModeSelection(
@@ -146,10 +160,10 @@ private fun NetworkHubPicker(
 
 @Composable
 internal fun SettingsPage(
+    isWideLayout: Boolean,
     selectedSection: SettingsSection,
     onSectionSelected: (SettingsSection) -> Unit,
     showSectionIndex: Boolean,
-    onShowSectionIndex: () -> Unit,
     themePreference: ThemePreference,
     onThemeChange: (ThemePreference) -> Unit,
     bubbleStyle: Boolean,
@@ -172,7 +186,7 @@ internal fun SettingsPage(
     nodeSupported: Boolean,
     identityAvailable: Boolean,
     identityBusy: Boolean,
-    onManageIdentity: () -> Unit,
+    identityContent: @Composable (Modifier, Dp) -> Unit,
     supportsReticulumProtocol: Boolean,
     supportsRNodeInterfaces: Boolean,
     supportsBleRNodes: Boolean = false,
@@ -183,8 +197,6 @@ internal fun SettingsPage(
     rrcState: ReticulumConnectionState,
     rrcError: String?,
     localDeliveryAddress: String?,
-    showNavigationButton: Boolean = false,
-    onOpenNavigation: () -> Unit = {},
     onDismissKeyboard: () -> Unit = {},
     onStartNode: (ReticulumNodeConfig) -> Unit,
     onDisconnectNode: () -> Unit,
@@ -328,41 +340,23 @@ internal fun SettingsPage(
     }
 
     Column(Modifier.fillMaxSize().background(Canvas)) {
-        BoxWithConstraints(Modifier.fillMaxWidth()) {
-            val backTarget = settingsBackTarget(maxWidth >= 900.dp, showSectionIndex)
-            Row(
-                modifier = Modifier.fillMaxWidth().height(68.dp).background(Paper)
-                    .padding(horizontal = 20.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                IconButton(
-                    onClick = {
-                        onDismissKeyboard()
-                        when (backTarget) {
-                            SettingsBackTarget.SETTINGS_INDEX -> onShowSectionIndex()
-                            SettingsBackTarget.EXIT_SETTINGS -> onBack()
-                        }
-                    },
-                    modifier = Modifier.size(48.dp),
-                ) {
-                    Icon(
-                        Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = if (backTarget == SettingsBackTarget.SETTINGS_INDEX) "Back to settings sections" else "Back",
-                        tint = Accent,
-                    )
-                }
-                Spacer(Modifier.width(10.dp))
-                Text(
-                    if (backTarget == SettingsBackTarget.SETTINGS_INDEX) selectedSection.label else "Settings",
-                    color = Ink,
-                    fontSize = 17.sp,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                if (showNavigationButton) {
-                    Spacer(Modifier.weight(1f))
-                    NavigationToggle { onDismissKeyboard(); onOpenNavigation() }
-                }
-            }
+        val showingCompactSection = settingsBackTarget(isWideLayout, showSectionIndex) == SettingsBackTarget.SETTINGS_INDEX
+        Row(
+            modifier = Modifier.fillMaxWidth().heightIn(min = 68.dp).background(Paper)
+                .padding(horizontal = if (isWideLayout) 20.dp else 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            SettingsBackButton(if (showingCompactSection) "Back to Settings" else "Back to Chat", onBack)
+            Spacer(Modifier.width(10.dp))
+            Text(
+                if (showingCompactSection) selectedSection.label else "Settings",
+                modifier = Modifier.weight(1f),
+                color = Ink,
+                fontSize = 17.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
 
         val sectionContent: @Composable (Modifier, Dp) -> Unit = { contentModifier, contentHorizontalPadding ->
@@ -911,7 +905,10 @@ internal fun SettingsPage(
                                 )
                                 Text(nodeActionBlockedReason, color = Muted, fontSize = 11.sp, lineHeight = 16.sp)
                                 if (!identityAvailable) {
-                                    TextButton(onClick = { onDismissKeyboard(); onManageIdentity() }) { Text("Set up identity") }
+                                    TextButton(onClick = {
+                                        onDismissKeyboard()
+                                        onSectionSelected(SettingsSection.IDENTITY)
+                                    }) { Text("Set up identity") }
                                 }
                             }
                         }
@@ -1052,14 +1049,13 @@ internal fun SettingsPage(
             }
         }
         }
-        BoxWithConstraints(Modifier.fillMaxWidth().weight(1f)) {
-        if (maxWidth >= 900.dp) {
-            Row(Modifier.fillMaxSize()) {
+        val selectedSectionContent = if (selectedSection == SettingsSection.IDENTITY) identityContent else sectionContent
+        if (isWideLayout) {
+            Row(Modifier.fillMaxWidth().weight(1f)) {
                 SettingsSectionNavigation(
                     modifier = Modifier.width(250.dp).fillMaxHeight(),
                     selectedSection = selectedSection,
                     onSectionSelected = onSectionSelected,
-                    onManageIdentity = onManageIdentity,
                     onDismissKeyboard = onDismissKeyboard,
                 )
                 Column(Modifier.weight(1f).fillMaxHeight().background(Canvas)) {
@@ -1070,20 +1066,18 @@ internal fun SettingsPage(
                         fontSize = 20.sp,
                         fontWeight = FontWeight.SemiBold,
                     )
-                    sectionContent(Modifier.weight(1f), 24.dp)
+                    selectedSectionContent(Modifier.weight(1f), 24.dp)
                 }
             }
         } else if (showSectionIndex) {
             SettingsSectionNavigation(
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier.fillMaxWidth().weight(1f),
                 selectedSection = selectedSection,
                 onSectionSelected = onSectionSelected,
-                onManageIdentity = onManageIdentity,
                 onDismissKeyboard = onDismissKeyboard,
             )
         } else {
-            sectionContent(Modifier.fillMaxSize(), 16.dp)
-        }
+            selectedSectionContent(Modifier.fillMaxWidth().weight(1f), 16.dp)
         }
     }
 }
@@ -1181,7 +1175,6 @@ private fun SettingsSectionNavigation(
     modifier: Modifier,
     selectedSection: SettingsSection,
     onSectionSelected: (SettingsSection) -> Unit,
-    onManageIdentity: () -> Unit,
     onDismissKeyboard: () -> Unit,
 ) {
     Column(
@@ -1197,8 +1190,7 @@ private fun SettingsSectionNavigation(
                     .background(if (isSelected) PaleAccent else Color.Transparent)
                     .clickable(role = Role.Button) {
                         onDismissKeyboard()
-                        if (section == SettingsSection.IDENTITY) onManageIdentity()
-                        else onSectionSelected(section)
+                        onSectionSelected(section)
                     }
                     .semantics { selected = isSelected }
                     .padding(horizontal = 14.dp, vertical = 12.dp),

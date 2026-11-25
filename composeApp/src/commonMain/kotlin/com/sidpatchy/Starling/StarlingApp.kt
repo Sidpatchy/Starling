@@ -27,7 +27,6 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.WindowInsets
@@ -53,7 +52,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.ModalDrawerSheet
-import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -70,18 +68,20 @@ import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.KeyboardHide
 import androidx.compose.material.icons.filled.Schedule
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.SaveableStateHolder
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
@@ -104,6 +104,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.input.pointer.PointerEventPass
@@ -179,6 +181,8 @@ fun StarlingApp(
     val networks by repository.networks.collectAsState()
     val rooms by repository.rooms.collectAsState()
     val previewMode by repository.previewMode.collectAsState()
+    // Keep drafts when a conversation leaves composition, but never share them between preview and live.
+    val draftStateHolder = key(previewMode) { rememberSaveableStateHolder() }
     val selectedRoom = rooms.firstOrNull { it.id == selectedRoomId } ?: rooms.firstOrNull() ?: EMPTY_CHAT_ROOM
     val messages by repository.messages(selectedRoom.id).collectAsState(initial = emptyList())
     val members by repository.members(selectedRoom.id).collectAsState(initial = emptyList())
@@ -312,13 +316,12 @@ fun StarlingApp(
     var showMembersDrawer by rememberSaveable { mutableStateOf(false) }
     var showDesktopNavigation by rememberSaveable { mutableStateOf(true) }
     var forceGreeterVisible by remember(forceGreeterOnLaunch) { mutableStateOf(forceGreeterOnLaunch) }
-    var showSettings by rememberSaveable { mutableStateOf(false) }
+    var page by rememberSaveable { mutableStateOf(MainPage.CHAT) }
     var settingsSection by rememberSaveable { mutableStateOf(SettingsSection.APPEARANCE) }
     var showSettingsIndex by rememberSaveable { mutableStateOf(true) }
-    var returnToSettingsAfterIdentity by rememberSaveable { mutableStateOf(false) }
-    var showIdentityPage by rememberSaveable { mutableStateOf(false) }
-    var showContactRequests by rememberSaveable { mutableStateOf(false) }
-    var showNearby by rememberSaveable { mutableStateOf(false) }
+    val inSettings = page.tab == MainTab.SETTINGS
+    val showContactRequests = page == MainPage.CONTACT_REQUESTS
+    val showNearby = page == MainPage.NEARBY
     // The details dialog keeps the row it was opened from, so it can outlive the entry.
     var nearbyDetail by remember { mutableStateOf<NearbyRow?>(null) }
     var nearbyNameRequest by remember { mutableStateOf<NearbyPeer?>(null) }
@@ -331,7 +334,6 @@ fun StarlingApp(
     var localBubbleStyle by rememberSaveable { mutableStateOf(false) }
     var localDenseMessages by rememberSaveable { mutableStateOf(false) }
     var showNetworkDiagnostics by remember { mutableStateOf(false) }
-    var diagnosticsNetwork by remember { mutableStateOf<ChatNetwork?>(null) }
     val repositoryUiSettings by remember(liveChatRepository) {
         liveChatRepository?.uiSettings ?: flowOf(StarlingUiSettings())
     }.collectAsState(initial = liveChatRepository?.uiSettings?.value ?: StarlingUiSettings())
@@ -357,11 +359,35 @@ fun StarlingApp(
     var roomToManage by remember { mutableStateOf<ChatRoom?>(null) }
     var networkToInspect by remember { mutableStateOf<ChatNetwork?>(null) }
     var autoConnectAttempted by remember(liveChatRepository) { mutableStateOf(false) }
-    val hasBackDestination = showAddContact || showAddNetwork || addChannelToNetworkId != null ||
+    fun openChat() {
+        dismissKeyboard()
+        showMembersDrawer = false
+        page = MainPage.CHAT
+    }
+    fun openSettings(section: SettingsSection? = null) {
+        dismissKeyboard()
+        forceGreeterVisible = false
+        showMembersDrawer = false
+        if (section != null) {
+            settingsSection = section
+            showSettingsIndex = false
+        } else if (page.tab != MainTab.SETTINGS) {
+            showSettingsIndex = true
+        }
+        page = MainPage.SETTINGS
+    }
+    fun openIdentitySettings() = openSettings(SettingsSection.IDENTITY)
+    val selectMainTab: (MainTab) -> Unit = { tab ->
+        when (tab) {
+            MainTab.CHAT -> openChat()
+            MainTab.SETTINGS -> openSettings()
+        }
+    }
+    val hasChatBackDestination = showAddContact || showAddNetwork || addChannelToNetworkId != null ||
         roomToManage != null || networkToInspect != null || selectedMember != null || showMembersDrawer ||
         nearbyNameRequest != null || nearbyDetail != null || showNearby ||
-        showContactRequests || showIdentityPage || showSettings || selectedDirectMessageId != null
-    PlatformBackHandler(enabled = hasBackDestination) {
+        showContactRequests || selectedDirectMessageId != null
+    PlatformBackHandler(enabled = !inSettings && hasChatBackDestination) {
         if (keyboardVisible) {
             dismissKeyboard()
         } else {
@@ -375,17 +401,7 @@ fun StarlingApp(
                 showMembersDrawer -> showMembersDrawer = false
                 nearbyNameRequest != null -> nearbyNameRequest = null
                 nearbyDetail != null -> nearbyDetail = null
-                showContactRequests -> showContactRequests = false
-                showNearby -> showNearby = false
-                showIdentityPage -> {
-                    showIdentityPage = false
-                    if (returnToSettingsAfterIdentity) {
-                        showSettings = true
-                    }
-                    returnToSettingsAfterIdentity = false
-                }
-                showSettings && !showSettingsIndex -> showSettingsIndex = true
-                showSettings -> showSettings = false
+                showContactRequests || showNearby -> page = page.parent ?: MainPage.CHAT
                 selectedDirectMessageId != null -> selectedDirectMessageId = null
             }
         }
@@ -394,35 +410,24 @@ fun StarlingApp(
         if (enabled) {
             selectedDirectMessageId = null
             selectedMember = null
-            showContactRequests = false
-            showNearby = false
-            showIdentityPage = false
+            if (page.tab == MainTab.CHAT) openChat()
             networkToInspect = null
         }
         repository.setPreviewMode(enabled)
     }
     val onGreeterSetUpIdentity: () -> Unit = {
         forceGreeterVisible = false
-        showIdentityPage = true
-        showSettings = false
-        showContactRequests = false
-        showNearby = false
+        openIdentitySettings()
         selectedDirectMessageId = null
     }
     val onGreeterContinueInPreview: () -> Unit = {
         forceGreeterVisible = false
         changePreviewMode(true)
     }
-    val onGreeterOpenSettings: () -> Unit = {
-        forceGreeterVisible = false
-        showSettings = true
-        showSettingsIndex = true
-    }
     LaunchedEffect(previewMode) {
         if (previewMode) {
             selectedDirectMessageId = null
             selectedMember = null
-            showIdentityPage = false
             networkToInspect = null
         }
         // Sample and live people never share a dialog.
@@ -433,11 +438,7 @@ fun StarlingApp(
     val nodeRunning = !previewMode && reticulumNodeState is ReticulumNodeState.Running
     val nearbyBadgeCount = if (nodeRunning) nearbyListing.newBluetoothCount else 0
     val openNearby: () -> Unit = {
-        selectedDirectMessageId = null
-        showNearby = true
-        showContactRequests = false
-        showSettings = false
-        showIdentityPage = false
+        page = MainPage.NEARBY
     }
     val announceNow: () -> Unit = { scope.launch { liveChatRepository?.announce() } }
     val addNearbyContact: (NearbyRow) -> Unit = { row ->
@@ -462,12 +463,7 @@ fun StarlingApp(
                 nearbyAddedAddress = null
                 nearbyDetail = row
             },
-            onOpenSettings = {
-                showNearby = false
-                settingsSection = SettingsSection.NETWORK
-                showSettingsIndex = false
-                showSettings = true
-            },
+            onOpenSettings = { openSettings(SettingsSection.NETWORK) },
             compact = compact,
             showNavigationButton = showNavigationButton,
             onOpenNavigation = onOpenNavigation,
@@ -615,14 +611,116 @@ fun StarlingApp(
     val sidebarSelection = sidebarSelectionForVisiblePage(
         roomId = selectedRoom.id.takeIf { rooms.isNotEmpty() },
         directMessageId = selectedDirectMessage?.id,
-        showSettings = showSettings,
-        showIdentityPage = showIdentityPage,
-        showContactRequests = showContactRequests,
-        showNearby = showNearby,
+        page = page,
     )
     val directMessages by remember(selectedDirectMessageId) {
         selectedDirectMessageId?.let(repository::directMessages) ?: flowOf(emptyList())
     }.collectAsState(initial = emptyList())
+    val identityContent: @Composable (Modifier, Dp) -> Unit = { modifier, horizontalPadding ->
+        IdentitySettingsContent(
+            modifier = modifier,
+            horizontalPadding = horizontalPadding,
+            previewMode = previewMode,
+            nodeState = reticulumNodeState,
+            rrcState = visibleConnectionState,
+            identityHash = if (identityManager != null) managedIdentity?.hash else localIdentityHash,
+            localDeliveryAddress = managedIdentity?.deliveryAddress ?: visibleDeliveryAddress,
+            identityState = identityState,
+            identityBusy = identityBusy,
+            identityError = identityError,
+            identityNotice = identityNotice,
+            identitySupported = identityManager != null,
+            onCreateIdentity = createIdentity,
+            onImportIdentity = importIdentity,
+            onExportIdentity = exportIdentity,
+            onDeleteIdentity = deleteIdentity,
+            onDisconnectNode = disconnectIdentityNode,
+            canAnnounce = nodeRunning && liveChatRepository != null,
+            onAnnounce = announceNow,
+            globalNickname = globalNickname,
+            networks = networks,
+            onGlobalNicknameChange = { liveChatRepository?.saveGlobalNickname(it) },
+            onNetworkNicknameChange = { id, nickname -> repository.updateNetworkNickname(id, nickname) },
+            onDismissKeyboard = dismissKeyboard,
+            onManageNetwork = { openSettings(SettingsSection.NETWORK) },
+        )
+    }
+
+    val settingsContent: @Composable () -> Unit = {
+        BoxWithConstraints(Modifier.fillMaxSize()) {
+            val isWideLayout = maxWidth >= SettingsTwoPaneMinWidth
+            val backTarget = settingsBackTarget(isWideLayout, showSettingsIndex)
+            val backFromSettings: () -> Unit = {
+                when (backTarget) {
+                    SettingsBackTarget.SETTINGS_INDEX -> {
+                        dismissKeyboard()
+                        showSettingsIndex = true
+                    }
+                    SettingsBackTarget.EXIT_SETTINGS -> openChat()
+                }
+            }
+            PlatformBackHandler(enabled = true) {
+                if (keyboardVisible) dismissKeyboard() else backFromSettings()
+            }
+            SettingsPage(
+                isWideLayout = isWideLayout,
+                selectedSection = settingsSection,
+                onSectionSelected = { section ->
+                    settingsSection = section
+                    showSettingsIndex = false
+                },
+                showSectionIndex = showSettingsIndex,
+                themePreference = uiSettings.themePreference,
+                onThemeChange = { updateUiSettings(uiSettings.copy(themePreference = it)) },
+                bubbleStyle = uiSettings.bubbleStyle,
+                onBubbleStyleChange = { updateUiSettings(uiSettings.copy(bubbleStyle = it)) },
+                denseMessages = uiSettings.denseMessages,
+                onDenseMessagesChange = { updateUiSettings(uiSettings.copy(denseMessages = it)) },
+                reduceMotion = uiSettings.reduceMotion,
+                onReduceMotionChange = { updateUiSettings(uiSettings.copy(reduceMotion = it)) },
+                timestampTimeZone = uiSettings.timestampTimeZone,
+                onTimestampTimeZoneChange = { updateUiSettings(uiSettings.copy(timestampTimeZone = it)) },
+                previewMode = previewMode,
+                onPreviewModeChange = changePreviewMode,
+                networks = networks,
+                nodeConfig = persistedNodeConfig,
+                onNodeConfigChange = { config -> liveChatRepository?.saveNodeConfig(config) },
+                globalNickname = globalNickname,
+                preferredHubNetworkId = preferredHubNetworkId,
+                onPreferredHubNetworkChange = { id -> liveChatRepository?.savePreferredHubNetworkId(id) },
+                nodeState = reticulumNodeState,
+                nodeSupported = nodeController.isSupported,
+                identityAvailable = managedIdentity != null,
+                identityBusy = identityBusy,
+                identityContent = identityContent,
+                supportsReticulumProtocol = nodeController.supportsReticulumProtocol,
+                supportsRNodeInterfaces = nodeController.supportsRNodeInterfaces,
+                supportsBleRNodes = nodeController.supportsBleRNodes,
+                rnodeBlePicker = nodeController.rnodeBlePicker,
+                resolvedBleRNode = resolvedBleRNode,
+                rnodeUpgradeNote = rnodeUpgradeNote,
+                supportsBlePeering = nodeController.supportsBlePeering,
+                rrcState = visibleConnectionState,
+                rrcError = visibleRrcError,
+                localDeliveryAddress = visibleDeliveryAddress,
+                onStartNode = { config -> scope.launch { nodeController.start(config) } },
+                onDisconnectNode = {
+                    scope.launch {
+                        liveChatRepository?.disconnectFromHub()
+                        nodeController.disconnect()
+                    }
+                },
+                onConnectHub = { config -> scope.launch { liveChatRepository?.connectToHub(config) } },
+                onDisconnectHub = { scope.launch { liveChatRepository?.disconnectFromHub() } },
+                onOpenNetworkDiagnostics = {
+                    dismissKeyboard()
+                    showNetworkDiagnostics = true
+                },
+                onBack = backFromSettings,
+                onDismissKeyboard = dismissKeyboard,
+            )
+        }
+    }
 
     StarlingTheme(
         preference = uiSettings.themePreference,
@@ -633,9 +731,16 @@ fun StarlingApp(
             BoxWithConstraints(
                 Modifier.fillMaxSize().safeDrawingPadding().imePadding().dismissKeyboardOnUpwardScroll(),
             ) {
-                val isWide = maxWidth >= 1000.dp
-                if (isWide) {
-                    Row(Modifier.fillMaxSize()) {
+                if (maxWidth >= 1000.dp) {
+                    WideNavigationLayout(
+                        selectedTab = page.tab,
+                        onTabSelected = selectMainTab,
+                        showRail = !forceGreeterVisible,
+                    ) {
+                        if (inSettings) {
+                            settingsContent()
+                            return@WideNavigationLayout
+                        }
                         if (showDesktopNavigation && !forceGreeterVisible) RoomSidebar(
                             networks = networks,
                             rooms = rooms,
@@ -648,15 +753,12 @@ fun StarlingApp(
                             selectedRoomId = sidebarSelection.roomId,
                             selectedDirectMessageId = sidebarSelection.directMessageId,
                             onRoomSelected = {
+                                openChat()
                                 selectedRoomId = it
                                 selectedDirectMessageId = null
-                                showContactRequests = false
-                                showNearby = false
-                                showSettings = false
-                                showIdentityPage = false
                             },
-                            onContactSelected = { selectedDirectMessageId = it.id; showContactRequests = false; showNearby = false; showSettings = false; showIdentityPage = false },
-                            onRequestsClick = { selectedDirectMessageId = null; showContactRequests = true; showNearby = false; showSettings = false; showIdentityPage = false },
+                            onContactSelected = { openChat(); selectedDirectMessageId = it.id },
+                            onRequestsClick = { page = MainPage.CONTACT_REQUESTS },
                             nearbyCount = nearbyBadgeCount,
                             onNearbyClick = openNearby,
                             onAddContact = { showAddContact = true },
@@ -667,92 +769,14 @@ fun StarlingApp(
                             canHideNavigation = true,
                             onHideNavigation = { showDesktopNavigation = false },
                             onDismissKeyboard = dismissKeyboard,
-                            onSettingsClick = {
-                                showSettings = true
-                                showSettingsIndex = true
-                                showIdentityPage = false
-                                returnToSettingsAfterIdentity = false
-                            },
-                            onIdentityClick = {
-                                showIdentityPage = true
-                                showSettings = false
-                                returnToSettingsAfterIdentity = false
-                                showContactRequests = false
-                                showNearby = false
-                                selectedDirectMessageId = null
-                            },
+                            onIdentityClick = ::openIdentitySettings,
                         )
                         if (forceGreeterVisible) {
                             WelcomeScreen(
                                 modifier = Modifier.weight(1f).fillMaxHeight(),
                                 onSetUpIdentity = onGreeterSetUpIdentity,
                                 onContinueInPreview = onGreeterContinueInPreview,
-                                onSettings = onGreeterOpenSettings,
-                            )
-                        } else if (showSettings) {
-                            SettingsPage(
-                                selectedSection = settingsSection,
-                                onSectionSelected = { section ->
-                                    settingsSection = section
-                                    showSettingsIndex = false
-                                },
-                                showSectionIndex = showSettingsIndex,
-                                onShowSectionIndex = { showSettingsIndex = true },
-                                themePreference = uiSettings.themePreference,
-                                onThemeChange = { updateUiSettings(uiSettings.copy(themePreference = it)) },
-                                bubbleStyle = uiSettings.bubbleStyle,
-                                onBubbleStyleChange = { updateUiSettings(uiSettings.copy(bubbleStyle = it)) },
-                                denseMessages = uiSettings.denseMessages,
-                                onDenseMessagesChange = { updateUiSettings(uiSettings.copy(denseMessages = it)) },
-                                reduceMotion = uiSettings.reduceMotion,
-                                onReduceMotionChange = { updateUiSettings(uiSettings.copy(reduceMotion = it)) },
-                                timestampTimeZone = uiSettings.timestampTimeZone,
-                                onTimestampTimeZoneChange = { updateUiSettings(uiSettings.copy(timestampTimeZone = it)) },
-                                previewMode = previewMode,
-                                onPreviewModeChange = changePreviewMode,
-                                networks = networks,
-                                nodeConfig = persistedNodeConfig,
-                                onNodeConfigChange = { config -> liveChatRepository?.saveNodeConfig(config) },
-                                globalNickname = globalNickname,
-                                preferredHubNetworkId = preferredHubNetworkId,
-                                onPreferredHubNetworkChange = { id -> liveChatRepository?.savePreferredHubNetworkId(id) },
-                                nodeState = reticulumNodeState,
-                                nodeSupported = nodeController.isSupported,
-                                identityAvailable = managedIdentity != null,
-                                identityBusy = identityBusy,
-                                onManageIdentity = {
-                                    returnToSettingsAfterIdentity = true
-                                    showSettings = false
-                                    showIdentityPage = true
-                                },
-                                supportsReticulumProtocol = nodeController.supportsReticulumProtocol,
-                                supportsRNodeInterfaces = nodeController.supportsRNodeInterfaces,
-                                supportsBleRNodes = nodeController.supportsBleRNodes,
-                                rnodeBlePicker = nodeController.rnodeBlePicker,
-                                resolvedBleRNode = resolvedBleRNode,
-                                rnodeUpgradeNote = rnodeUpgradeNote,
-                                supportsBlePeering = nodeController.supportsBlePeering,
-                                rrcState = visibleConnectionState,
-                                rrcError = visibleRrcError,
-                                localDeliveryAddress = visibleDeliveryAddress,
-                                showNavigationButton = !showDesktopNavigation,
-                                onOpenNavigation = { showDesktopNavigation = true },
-                                onStartNode = { config -> scope.launch { nodeController.start(config) } },
-                                onDisconnectNode = {
-                                    scope.launch {
-                                        liveChatRepository?.disconnectFromHub()
-                                        nodeController.disconnect()
-                                    }
-                                },
-                                onConnectHub = { config -> scope.launch { liveChatRepository?.connectToHub(config) } },
-                                onDisconnectHub = { scope.launch { liveChatRepository?.disconnectFromHub() } },
-                                onOpenNetworkDiagnostics = {
-                                    dismissKeyboard()
-                                    diagnosticsNetwork = null
-                                    showNetworkDiagnostics = true
-                                },
-                                onBack = { showSettings = false; showSettingsIndex = true },
-                                onDismissKeyboard = dismissKeyboard,
+                                onSettings = { openSettings() },
                             )
                         } else if (showContactRequests) {
                             ContactRequestsPage(
@@ -765,51 +789,10 @@ fun StarlingApp(
                             )
                         } else if (showNearby) {
                             nearbyPage(false, !showDesktopNavigation) { dismissKeyboard(); showDesktopNavigation = true }
-                        } else if (showIdentityPage) {
-                            IdentityPage(
-                                previewMode = previewMode,
-                                nodeState = reticulumNodeState,
-                                rrcState = visibleConnectionState,
-                                identityHash = if (identityManager != null) managedIdentity?.hash else localIdentityHash,
-                                localDeliveryAddress = managedIdentity?.deliveryAddress ?: visibleDeliveryAddress,
-                                identityState = identityState,
-                                identityBusy = identityBusy,
-                                identityError = identityError,
-                                identityNotice = identityNotice,
-                                identitySupported = identityManager != null,
-                                onCreateIdentity = createIdentity,
-                                onImportIdentity = importIdentity,
-                                onExportIdentity = exportIdentity,
-                                onDeleteIdentity = deleteIdentity,
-                                onDisconnectNode = disconnectIdentityNode,
-                                canAnnounce = nodeRunning && liveChatRepository != null,
-                                onAnnounce = announceNow,
-                                globalNickname = globalNickname,
-                                networks = networks,
-                                onGlobalNicknameChange = { liveChatRepository?.saveGlobalNickname(it) },
-                                onNetworkNicknameChange = { id, nickname -> repository.updateNetworkNickname(id, nickname) },
-                                showNavigationButton = !showDesktopNavigation,
-                                onOpenNavigation = { showDesktopNavigation = true },
-                                onDismissKeyboard = dismissKeyboard,
-                                showBackButton = returnToSettingsAfterIdentity,
-                                onBack = {
-                                    showIdentityPage = false
-                                    if (returnToSettingsAfterIdentity) {
-                                        showSettings = true
-                                    }
-                                    returnToSettingsAfterIdentity = false
-                                },
-                                onManageNetwork = {
-                                    showIdentityPage = false
-                                    settingsSection = SettingsSection.NETWORK
-                                    showSettingsIndex = false
-                                    returnToSettingsAfterIdentity = false
-                                    showSettings = true
-                                },
-                            )
                         } else if (selectedDirectMessage != null) {
                             DirectMessageContent(
                                 member = selectedDirectMessage,
+                                draftStateHolder = draftStateHolder,
                                 messages = directMessages,
                                 bubbleStyle = uiSettings.bubbleStyle,
                                 denseMessages = uiSettings.denseMessages,
@@ -826,20 +809,14 @@ fun StarlingApp(
                                     WelcomeScreen(
                                         onSetUpIdentity = onGreeterSetUpIdentity,
                                         onContinueInPreview = onGreeterContinueInPreview,
-                                        onSettings = onGreeterOpenSettings,
+                                        onSettings = { openSettings() },
                                     )
                                 } else {
                                     EmptyNetworkContent(
                                         onAddNetwork = { dismissKeyboard(); showAddNetwork = true },
-                                        onSettings = { dismissKeyboard(); showSettings = true; showSettingsIndex = true },
+                                        onSettings = { openSettings() },
                                         showIdentitySetup = !previewMode && identityManager != null && identityState == ReticulumIdentityState.Missing,
-                                        onSetupIdentity = {
-                                            showIdentityPage = true
-                                            showSettings = false
-                                            showContactRequests = false
-                                            showNearby = false
-                                            selectedDirectMessageId = null
-                                        },
+                                        onSetupIdentity = ::openIdentitySettings,
                                     )
                                 }
                                 if (!showDesktopNavigation) {
@@ -853,6 +830,7 @@ fun StarlingApp(
                             ChatContent(
                                 modifier = Modifier.weight(1f).fillMaxHeight(),
                                 room = selectedRoom,
+                                draftStateHolder = draftStateHolder,
                                 networks = networks,
                                 messages = messages,
                                 members = members,
@@ -870,7 +848,7 @@ fun StarlingApp(
                                 onSend = { text -> scope.launch { repository.send(selectedRoom.id, text) } },
                             )
                         }
-                        if (!forceGreeterVisible && rooms.isNotEmpty() && showMembersPanel && !showSettings && !showContactRequests && !showNearby && !showIdentityPage && selectedDirectMessage == null) {
+                        if (!forceGreeterVisible && rooms.isNotEmpty() && showMembersPanel && page == MainPage.CHAT && selectedDirectMessage == null) {
                             MembersPane(
                                 members = members,
                                 offlineMembers = offlineMembers,
@@ -880,6 +858,13 @@ fun StarlingApp(
                             )
                         }
                     }
+                } else if (inSettings) {
+                    CompactNavigationLayout(
+                        selectedTab = page.tab,
+                        onTabSelected = selectMainTab,
+                        showBottomBar = page.tab.showsBottomNavigation(chatDrawerOpen = false),
+                        content = settingsContent,
+                    )
                 } else {
                     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
                     LaunchedEffect(drawerState.targetValue) {
@@ -888,10 +873,15 @@ fun StarlingApp(
                     val reducedMotion = LocalReducedMotion.current
                     val drawerEnter: EnterTransition = if (reducedMotion) EnterTransition.None else fadeIn()
                     val drawerExit: ExitTransition = if (reducedMotion) ExitTransition.None else (slideOutHorizontally(targetOffsetX = { it }) + fadeOut())
-                    ModalNavigationDrawer(
+                    CompactChatNavigationLayout(
                         drawerState = drawerState,
+                        gesturesEnabled = !forceGreeterVisible,
+                        onTabSelected = { tab ->
+                            selectMainTab(tab)
+                            if (tab == MainTab.CHAT) scope.launch { drawerState.close() }
+                        },
                         drawerContent = {
-                            ModalDrawerSheet(drawerContainerColor = Paper) {
+                            ModalDrawerSheet(drawerState = drawerState, drawerContainerColor = Paper) {
                                 RoomSidebar(
                                     networks = networks,
                                     rooms = rooms,
@@ -904,28 +894,18 @@ fun StarlingApp(
                                     selectedRoomId = sidebarSelection.roomId,
                                     selectedDirectMessageId = sidebarSelection.directMessageId,
                                     onRoomSelected = { roomId ->
+                                        openChat()
                                         selectedRoomId = roomId
                                         selectedDirectMessageId = null
-                                        showContactRequests = false
-                                        showNearby = false
-                                        showSettings = false
-                                        showIdentityPage = false
                                         scope.launch { drawerState.close() }
                                     },
                                     onContactSelected = { member ->
+                                        openChat()
                                         selectedDirectMessageId = member.id
-                                        showContactRequests = false
-                                        showNearby = false
-                                        showSettings = false
-                                        showIdentityPage = false
                                         scope.launch { drawerState.close() }
                                     },
                                     onRequestsClick = {
-                                        selectedDirectMessageId = null
-                                        showContactRequests = true
-                                        showNearby = false
-                                        showSettings = false
-                                        showIdentityPage = false
+                                        page = MainPage.CONTACT_REQUESTS
                                         scope.launch { drawerState.close() }
                                     },
                                     nearbyCount = nearbyBadgeCount,
@@ -947,23 +927,7 @@ fun StarlingApp(
                                         networkToInspect = it
                                         scope.launch { drawerState.close() }
                                     },
-                                    onSettingsClick = {
-                                        showSettings = true
-                                        showSettingsIndex = true
-                                        showIdentityPage = false
-                                        returnToSettingsAfterIdentity = false
-                                        showMembersDrawer = false
-                                        scope.launch { drawerState.close() }
-                                    },
-                                    onIdentityClick = {
-                                        showIdentityPage = true
-                                        showSettings = false
-                                        returnToSettingsAfterIdentity = false
-                                        showContactRequests = false
-                                        showNearby = false
-                                        selectedDirectMessageId = null
-                                        scope.launch { drawerState.close() }
-                                    },
+                                    onIdentityClick = ::openIdentitySettings,
                                     onDismissKeyboard = dismissKeyboard,
                                 )
                             }
@@ -974,73 +938,7 @@ fun StarlingApp(
                                 modifier = Modifier.fillMaxSize(),
                                 onSetUpIdentity = onGreeterSetUpIdentity,
                                 onContinueInPreview = onGreeterContinueInPreview,
-                                onSettings = onGreeterOpenSettings,
-                            )
-                        } else if (showSettings) {
-                            SettingsPage(
-                                selectedSection = settingsSection,
-                                onSectionSelected = { section ->
-                                    settingsSection = section
-                                    showSettingsIndex = false
-                                },
-                                showSectionIndex = showSettingsIndex,
-                                onShowSectionIndex = { showSettingsIndex = true },
-                                themePreference = uiSettings.themePreference,
-                                onThemeChange = { updateUiSettings(uiSettings.copy(themePreference = it)) },
-                                bubbleStyle = uiSettings.bubbleStyle,
-                                onBubbleStyleChange = { updateUiSettings(uiSettings.copy(bubbleStyle = it)) },
-                                denseMessages = uiSettings.denseMessages,
-                                onDenseMessagesChange = { updateUiSettings(uiSettings.copy(denseMessages = it)) },
-                                reduceMotion = uiSettings.reduceMotion,
-                                onReduceMotionChange = { updateUiSettings(uiSettings.copy(reduceMotion = it)) },
-                                timestampTimeZone = uiSettings.timestampTimeZone,
-                                onTimestampTimeZoneChange = { updateUiSettings(uiSettings.copy(timestampTimeZone = it)) },
-                                previewMode = previewMode,
-                                onPreviewModeChange = changePreviewMode,
-                                networks = networks,
-                                nodeConfig = persistedNodeConfig,
-                                onNodeConfigChange = { config -> liveChatRepository?.saveNodeConfig(config) },
-                                globalNickname = globalNickname,
-                                preferredHubNetworkId = preferredHubNetworkId,
-                                onPreferredHubNetworkChange = { id -> liveChatRepository?.savePreferredHubNetworkId(id) },
-                                nodeState = reticulumNodeState,
-                                nodeSupported = nodeController.isSupported,
-                                identityAvailable = managedIdentity != null,
-                                identityBusy = identityBusy,
-                                onManageIdentity = {
-                                    returnToSettingsAfterIdentity = true
-                                    showSettings = false
-                                    showIdentityPage = true
-                                    scope.launch { drawerState.close() }
-                                },
-                                supportsReticulumProtocol = nodeController.supportsReticulumProtocol,
-                                supportsRNodeInterfaces = nodeController.supportsRNodeInterfaces,
-                                supportsBleRNodes = nodeController.supportsBleRNodes,
-                                rnodeBlePicker = nodeController.rnodeBlePicker,
-                                resolvedBleRNode = resolvedBleRNode,
-                                rnodeUpgradeNote = rnodeUpgradeNote,
-                                supportsBlePeering = nodeController.supportsBlePeering,
-                                rrcState = visibleConnectionState,
-                                rrcError = visibleRrcError,
-                                localDeliveryAddress = visibleDeliveryAddress,
-                                showNavigationButton = true,
-                                onOpenNavigation = { scope.launch { drawerState.open() } },
-                                onStartNode = { config -> scope.launch { nodeController.start(config) } },
-                                onDisconnectNode = {
-                                    scope.launch {
-                                        liveChatRepository?.disconnectFromHub()
-                                        nodeController.disconnect()
-                                    }
-                                },
-                                onConnectHub = { config -> scope.launch { liveChatRepository?.connectToHub(config) } },
-                                onDisconnectHub = { scope.launch { liveChatRepository?.disconnectFromHub() } },
-                                onOpenNetworkDiagnostics = {
-                                    dismissKeyboard()
-                                    diagnosticsNetwork = null
-                                    showNetworkDiagnostics = true
-                                },
-                                onBack = { showSettings = false; showSettingsIndex = true },
-                                onDismissKeyboard = dismissKeyboard,
+                                onSettings = { openSettings() },
                             )
                         } else if (showContactRequests) {
                             ContactRequestsPage(
@@ -1053,51 +951,10 @@ fun StarlingApp(
                             )
                         } else if (showNearby) {
                             nearbyPage(true, true) { dismissKeyboard(); scope.launch { drawerState.open() } }
-                        } else if (showIdentityPage) {
-                            IdentityPage(
-                                previewMode = previewMode,
-                                nodeState = reticulumNodeState,
-                                rrcState = visibleConnectionState,
-                                identityHash = if (identityManager != null) managedIdentity?.hash else localIdentityHash,
-                                localDeliveryAddress = managedIdentity?.deliveryAddress ?: visibleDeliveryAddress,
-                                identityState = identityState,
-                                identityBusy = identityBusy,
-                                identityError = identityError,
-                                identityNotice = identityNotice,
-                                identitySupported = identityManager != null,
-                                onCreateIdentity = createIdentity,
-                                onImportIdentity = importIdentity,
-                                onExportIdentity = exportIdentity,
-                                onDeleteIdentity = deleteIdentity,
-                                onDisconnectNode = disconnectIdentityNode,
-                                canAnnounce = nodeRunning && liveChatRepository != null,
-                                onAnnounce = announceNow,
-                                globalNickname = globalNickname,
-                                networks = networks,
-                                onGlobalNicknameChange = { liveChatRepository?.saveGlobalNickname(it) },
-                                onNetworkNicknameChange = { id, nickname -> repository.updateNetworkNickname(id, nickname) },
-                                compact = true,
-                                onOpenNavigation = { scope.launch { drawerState.open() } },
-                                onDismissKeyboard = dismissKeyboard,
-                                showBackButton = returnToSettingsAfterIdentity,
-                                onBack = {
-                                    showIdentityPage = false
-                                    if (returnToSettingsAfterIdentity) {
-                                        showSettings = true
-                                    }
-                                    returnToSettingsAfterIdentity = false
-                                },
-                                onManageNetwork = {
-                                    showIdentityPage = false
-                                    settingsSection = SettingsSection.NETWORK
-                                    showSettingsIndex = false
-                                    returnToSettingsAfterIdentity = false
-                                    showSettings = true
-                                },
-                            )
                         } else if (selectedDirectMessage != null) {
                             DirectMessageContent(
                                 member = selectedDirectMessage,
+                                draftStateHolder = draftStateHolder,
                                 messages = directMessages,
                                 bubbleStyle = uiSettings.bubbleStyle,
                                 denseMessages = uiSettings.denseMessages,
@@ -1114,26 +971,25 @@ fun StarlingApp(
                                     modifier = Modifier.fillMaxSize(),
                                     onSetUpIdentity = onGreeterSetUpIdentity,
                                     onContinueInPreview = onGreeterContinueInPreview,
-                                    onSettings = onGreeterOpenSettings,
+                                    onSettings = { openSettings() },
                                 )
                             } else {
-                                EmptyNetworkContent(
-                                    onAddNetwork = { showAddNetwork = true },
-                                    onSettings = { showSettings = true; showSettingsIndex = true },
-                                    showIdentitySetup = !previewMode && identityManager != null && identityState == ReticulumIdentityState.Missing,
-                                    onSetupIdentity = {
-                                        showIdentityPage = true
-                                        showSettings = false
-                                        showContactRequests = false
-                                        showNearby = false
-                                        selectedDirectMessageId = null
-                                    },
-                                    modifier = Modifier.fillMaxSize(),
-                                )
+                                Box(Modifier.fillMaxSize()) {
+                                    EmptyNetworkContent(
+                                        onAddNetwork = { showAddNetwork = true },
+                                        onSettings = { openSettings() },
+                                        showIdentitySetup = !previewMode && identityManager != null && identityState == ReticulumIdentityState.Missing,
+                                        onSetupIdentity = ::openIdentitySettings,
+                                    )
+                                    NavigationToggle(Modifier.align(Alignment.TopStart)) {
+                                        scope.launch { drawerState.open() }
+                                    }
+                                }
                             }
                         } else Box(Modifier.fillMaxSize()) {
                             ChatContent(
                                 room = selectedRoom,
+                                draftStateHolder = draftStateHolder,
                                 networks = networks,
                                 messages = messages,
                                 members = members,
@@ -1189,6 +1045,22 @@ fun StarlingApp(
                 }
             }
 
+            if (inSettings) {
+                if (showNetworkDiagnostics) NetworkDiagnosticsDialog(
+                    network = null,
+                    nodeState = reticulumNodeState,
+                    rrcState = visibleConnectionState,
+                    activeHubNetworkId = visibleHubNetworkId,
+                    localDeliveryAddress = visibleDeliveryAddress,
+                    previewMode = previewMode,
+                    onDismiss = { showNetworkDiagnostics = false },
+                    onRefresh = { scope.launch { nodeController.refreshState() } },
+                    onReconnect = retryActiveHub,
+                    isRetrying = reconnecting,
+                )
+                return@Surface
+            }
+
             networkToInspect?.let { network ->
                 NetworkStatusDialog(
                     network = network,
@@ -1203,23 +1075,6 @@ fun StarlingApp(
                         repository.removeNetwork(network.id)
                         networkToInspect = null
                     },
-                )
-            }
-            if (showNetworkDiagnostics) {
-                NetworkDiagnosticsDialog(
-                    network = diagnosticsNetwork,
-                    nodeState = reticulumNodeState,
-                    rrcState = visibleConnectionState,
-                    activeHubNetworkId = visibleHubNetworkId,
-                    localDeliveryAddress = visibleDeliveryAddress,
-                    previewMode = previewMode,
-                    onDismiss = {
-                        showNetworkDiagnostics = false
-                        diagnosticsNetwork = null
-                    },
-                    onRefresh = { scope.launch { nodeController.refreshState() } },
-                    onReconnect = retryActiveHub,
-                    isRetrying = reconnecting,
                 )
             }
 
@@ -1262,11 +1117,8 @@ fun StarlingApp(
                     onAdd = { addNearbyContact(liveRow ?: opened) },
                     onMessage = { member ->
                         // Selecting a contact shows their timeline; nothing is created until a message is sent.
+                        openChat()
                         selectedDirectMessageId = member.id
-                        showNearby = false
-                        showContactRequests = false
-                        showSettings = false
-                        showIdentityPage = false
                         nearbyDetail = null
                     },
                     onDismiss = { nearbyDetail = null },
@@ -1306,11 +1158,9 @@ fun StarlingApp(
                         previewMode = previewMode,
                         onAdd = { name, topic ->
                             val room = repository.addRoom(networkId, name, topic)
+                            openChat()
                             selectedRoomId = room.id
                             selectedDirectMessageId = null
-                            showContactRequests = false
-                            showNearby = false
-                            showSettings = false
                             addChannelToNetworkId = null
                         },
                         onDismiss = { addChannelToNetworkId = null },
@@ -1358,6 +1208,7 @@ fun StarlingApp(
 private fun ChatContent(
     modifier: Modifier = Modifier,
     room: ChatRoom,
+    draftStateHolder: SaveableStateHolder,
     networks: List<ChatNetwork>,
     messages: List<ChatMessage>,
     members: List<ChatMember>,
@@ -1417,7 +1268,7 @@ private fun ChatContent(
                 horizontal = if (compact) 12.dp else 20.dp,
                 vertical = 8.dp,
             ),
-            verticalArrangement = Arrangement.spacedBy(if (denseMessages) 0.dp else 3.dp),
+            verticalArrangement = Arrangement.spacedBy(if (denseMessages) 0.dp else if (bubbleStyle) 3.dp else 2.dp),
         ) {
             item { DayDivider() }
             items(messages, key = { it.id }) { message ->
@@ -1436,13 +1287,16 @@ private fun ChatContent(
             }
         }
 
-        MessageComposer(onSend = onSend)
+        draftStateHolder.SaveableStateProvider("room:${room.id}") {
+            MessageComposer(onSend = onSend)
+        }
     }
 }
 
 @Composable
 private fun DirectMessageContent(
     member: ChatMember,
+    draftStateHolder: SaveableStateHolder,
     messages: List<ChatMessage>,
     bubbleStyle: Boolean,
     denseMessages: Boolean,
@@ -1528,7 +1382,9 @@ private fun DirectMessageContent(
                 }
             }
         }
-        MessageComposer(onSend = onSend, supportsSlashCommands = false)
+        draftStateHolder.SaveableStateProvider("dm:${member.id}") {
+            MessageComposer(onSend = onSend, supportsSlashCommands = false)
+        }
     }
 }
 
@@ -2143,7 +1999,6 @@ private fun RoomSidebar(
     canHideNavigation: Boolean = false,
     onHideNavigation: () -> Unit = {},
     onDismissKeyboard: () -> Unit = {},
-    onSettingsClick: () -> Unit,
     onIdentityClick: () -> Unit,
 ) {
     var expandedNetworkIds by remember {
@@ -2391,13 +2246,6 @@ private fun RoomSidebar(
                     color = Muted,
                     fontSize = 11.sp,
                     modifier = Modifier.padding(start = 16.dp, top = 4.dp),
-                )
-            }
-            IconButton(onClick = { onDismissKeyboard(); onSettingsClick() }, modifier = Modifier.size(SidebarActionSize)) {
-                Icon(
-                    imageVector = Icons.Filled.Settings,
-                    contentDescription = "Settings",
-                    tint = Muted,
                 )
             }
         }
@@ -2945,6 +2793,9 @@ private fun DayDivider() {
     }
 }
 
+private val IrcMessageMaxWidth = 720.dp
+private val MessageAuthorMaxWidth = 144.dp
+
 @Composable
 private fun MessageRow(
     message: ChatMessage,
@@ -2954,14 +2805,19 @@ private fun MessageRow(
     onMemberClick: () -> Unit,
     onSystemExpansion: () -> Unit = {},
 ) {
+    if (message.isSystem) {
+        SystemMessageRow(message, denseMessages, bubbleStyle, onSystemExpansion)
+        return
+    }
     val authorName = member?.displayName ?: message.author
     val palette = LocalStarlingPalette.current
     val timeZonePreference = LocalTimestampTimeZonePreference.current
     val displayTime = displayChatTime(message.time, message.timestampMillis, timeZonePreference)
     val authorColor = ircNickTextColor(authorName, darkTheme = palette == DarkPalette)
-    if (message.isSystem) {
-        SystemMessageRow(message, denseMessages, bubbleStyle, onSystemExpansion)
-    } else if (bubbleStyle) {
+    val openAuthorProfile = if (member != null && !member.isSelf) onMemberClick else null
+    val messageStyle = if (message.isAction) FontStyle.Italic else FontStyle.Normal
+    val formattedMessage = remember(message.text, palette) { markdown(message.text, palette) }
+    if (bubbleStyle) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(vertical = if (denseMessages) 0.dp else 1.dp),
             horizontalArrangement = if (message.isMine) Arrangement.End else Arrangement.Start,
@@ -2971,95 +2827,103 @@ private fun MessageRow(
                     .background(if (message.isMine) PaleAccent else Paper)
                     .padding(horizontal = 10.dp, vertical = if (denseMessages) 4.dp else 6.dp),
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        authorName,
-                        modifier = Modifier
-                            .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
-                            .clickable(enabled = member != null && !member.isSelf, role = Role.Button, onClick = onMemberClick)
-                            .semantics {
-                                contentDescription = if (member != null && !member.isSelf) "View profile for $authorName" else authorName
-                            },
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    MessageAuthor(
+                        authorName = authorName,
+                        label = authorName,
+                        modifier = Modifier.alignBy(FirstBaseline),
                         color = authorColor,
                         fontSize = 11.sp,
-                        fontWeight = FontWeight.SemiBold,
+                        fontStyle = FontStyle.Normal,
+                        onProfileClick = openAuthorProfile,
                     )
-                    Spacer(Modifier.width(8.dp))
-                    Text(displayTime, color = Muted, fontSize = 10.sp)
+                    Text(
+                        displayTime,
+                        modifier = Modifier.alignBy(FirstBaseline),
+                        color = Muted,
+                        fontSize = 10.sp,
+                        lineHeight = 13.sp,
+                    )
                     deliveryMarker(message.deliveryState)
                 }
                 Spacer(Modifier.height(2.dp))
                 SelectionContainer {
                     Text(
-                        text = markdown(message.text, palette),
+                        text = formattedMessage,
                         color = Ink,
                         fontSize = 13.sp,
                         lineHeight = if (denseMessages) 16.sp else 17.sp,
-                        fontStyle = if (message.isAction) FontStyle.Italic else FontStyle.Normal,
+                        fontStyle = messageStyle,
                     )
                 }
             }
         }
     } else {
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(vertical = if (denseMessages) 0.dp else 1.dp),
-        verticalAlignment = Alignment.Top,
-    ) {
-        Text(displayTime, modifier = Modifier.width(40.dp).padding(top = 1.dp), color = Muted, fontSize = 10.sp)
-        deliveryMarker(message.deliveryState)
-        if (message.isAction) {
+        Row(
+            modifier = Modifier.widthIn(max = IrcMessageMaxWidth).fillMaxWidth()
+                .padding(vertical = if (denseMessages) 0.dp else 1.dp),
+            horizontalArrangement = Arrangement.spacedBy(5.dp),
+        ) {
             Text(
-                "$authorName ",
-                modifier = Modifier
-                    .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
-                    .clickable(enabled = member != null && !member.isSelf, role = Role.Button, onClick = onMemberClick)
-                    .semantics {
-                        contentDescription = if (member != null && !member.isSelf) "View profile for $authorName" else authorName
-                    }
-                    .alignBy(FirstBaseline),
+                displayTime,
+                modifier = Modifier.widthIn(min = 36.dp).alignBy(FirstBaseline),
+                color = Muted,
+                fontSize = 10.sp,
+                lineHeight = 13.sp,
+            )
+            deliveryMarker(message.deliveryState, Modifier.alignBy { it.measuredHeight })
+            MessageAuthor(
+                authorName = authorName,
+                label = if (message.isAction) authorName else "$authorName:",
+                modifier = Modifier.alignBy(FirstBaseline),
                 color = authorColor,
                 fontSize = 13.sp,
-                fontStyle = FontStyle.Italic,
+                fontStyle = messageStyle,
+                onProfileClick = openAuthorProfile,
             )
             SelectionContainer(
                 modifier = Modifier.weight(1f).alignBy(FirstBaseline),
             ) {
                 Text(
-                    text = markdown(message.text, palette),
+                    text = formattedMessage,
                     color = Ink,
                     fontSize = 13.sp,
                     lineHeight = if (denseMessages) 16.sp else 17.sp,
-                    fontStyle = FontStyle.Italic,
-                )
-            }
-        } else {
-            Text(
-                "$authorName:",
-                modifier = Modifier
-                    .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
-                    .clickable(enabled = member != null && !member.isSelf, role = Role.Button, onClick = onMemberClick)
-                    .semantics {
-                        contentDescription = if (member != null && !member.isSelf) "View profile for $authorName" else authorName
-                    }
-                    .alignBy(FirstBaseline),
-                color = authorColor,
-                fontSize = 13.sp,
-                fontWeight = FontWeight.SemiBold,
-            )
-                Spacer(Modifier.width(5.dp))
-            SelectionContainer(
-                modifier = Modifier.weight(1f).alignBy(FirstBaseline),
-            ) {
-                Text(
-                    text = markdown(message.text, palette),
-                    color = Ink,
-                    fontSize = 13.sp,
-                    lineHeight = if (denseMessages) 16.sp else 18.sp,
+                    fontStyle = messageStyle,
                 )
             }
         }
     }
-    }
+}
+
+@Composable
+private fun MessageAuthor(
+    authorName: String,
+    label: String,
+    modifier: Modifier,
+    color: Color,
+    fontSize: TextUnit,
+    fontStyle: FontStyle,
+    onProfileClick: (() -> Unit)?,
+) {
+    // Keep the layout compact; Compose expands clickable touch targets without growing the line.
+    val profileLink = if (onProfileClick == null) Modifier else Modifier
+        .clickable(role = Role.Button, onClick = onProfileClick)
+        .semantics { contentDescription = "View profile for $authorName" }
+    Text(
+        label,
+        modifier = modifier.widthIn(max = MessageAuthorMaxWidth).then(profileLink),
+        color = color,
+        fontSize = fontSize,
+        lineHeight = fontSize * 1.25f,
+        fontWeight = if (fontStyle == FontStyle.Italic) FontWeight.Normal else FontWeight.SemiBold,
+        fontStyle = fontStyle,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+    )
 }
 
 @Composable
@@ -3123,7 +2987,7 @@ private fun SystemMessageRow(
             }
         }
     } else {
-        Column(Modifier.fillMaxWidth().padding(vertical = verticalPadding)) {
+        Column(Modifier.widthIn(max = IrcMessageMaxWidth).fillMaxWidth().padding(vertical = verticalPadding)) {
             Row(verticalAlignment = Alignment.Top) {
                 Text(displayTime, modifier = Modifier.width(40.dp).padding(top = 1.dp), color = Muted, fontSize = 10.sp)
                 SelectionContainer(
@@ -3184,7 +3048,7 @@ private fun SystemEventDetails(events: List<ChatSystemEvent>, modifier: Modifier
 }
 
 @Composable
-private fun deliveryMarker(state: String?) {
+private fun deliveryMarker(state: String?, modifier: Modifier = Modifier) {
     if (state == null) return
     val (icon, description, color) = when (state) {
         "queued" -> Triple(Icons.Filled.Schedule, "Queued", Muted)
@@ -3197,7 +3061,7 @@ private fun deliveryMarker(state: String?) {
     Icon(
         imageVector = icon,
         contentDescription = description,
-        modifier = Modifier.padding(start = 4.dp).size(12.dp),
+        modifier = modifier.size(12.dp),
         tint = color,
     )
 }

@@ -6,12 +6,9 @@ internal data class SidebarSelection(val roomId: String? = null, val directMessa
 internal fun sidebarSelectionForVisiblePage(
     roomId: String?,
     directMessageId: String?,
-    showSettings: Boolean = false,
-    showIdentityPage: Boolean = false,
-    showContactRequests: Boolean = false,
-    showNearby: Boolean = false,
+    page: MainPage = MainPage.CHAT,
 ): SidebarSelection = when {
-    showSettings || showIdentityPage || showContactRequests || showNearby -> SidebarSelection()
+    page != MainPage.CHAT -> SidebarSelection()
     directMessageId != null -> SidebarSelection(directMessageId = directMessageId)
     else -> SidebarSelection(roomId = roomId)
 }
