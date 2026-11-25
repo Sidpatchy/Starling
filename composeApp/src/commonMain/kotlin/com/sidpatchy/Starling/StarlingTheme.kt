@@ -26,6 +26,13 @@ enum class ThemePreference(val label: String) {
     DARK("Dark"),
 }
 
+internal enum class StarlingUiStyle {
+    DEFAULT,
+    IOS,
+}
+
+internal val LocalStarlingUiStyle = staticCompositionLocalOf { StarlingUiStyle.DEFAULT }
+
 internal val LightPalette = StarlingPalette(
     ink = Color(0xFF383A42),
     canvas = Color(0xFFFAFAFA),

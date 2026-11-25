@@ -471,6 +471,7 @@ class LocalPreviewChatRepository : ChatRepository {
 
     override suspend fun send(roomId: String, text: String) {
         val outgoing = parseOutgoingChatMessage(text) ?: return
+        val timestampMillis = Clock.System.now().toEpochMilliseconds()
 
         if (isLocalHelpCommand(outgoing.body)) {
             val help = ChatMessage(
@@ -479,7 +480,8 @@ class LocalPreviewChatRepository : ChatRepository {
                 text = RRC_COMMAND_HELP,
                 time = "now",
                 isSystem = true,
-                systemEvents = listOf(ChatSystemEvent(ChatSystemEventKind.HELP, RRC_COMMAND_HELP, "now")),
+                timestampMillis = timestampMillis,
+                systemEvents = listOf(ChatSystemEvent(ChatSystemEventKind.HELP, RRC_COMMAND_HELP, "now", timestampMillis)),
             )
             allMessagesByRoom.value = allMessagesByRoom.value +
                 (roomId to collapseRepeatedSystemMessage(allMessagesByRoom.value[roomId].orEmpty(), help))
@@ -494,6 +496,7 @@ class LocalPreviewChatRepository : ChatRepository {
             time = "now",
             isMine = true,
             isAction = outgoing.isAction,
+            timestampMillis = timestampMillis,
         )
         allMessagesByRoom.value = allMessagesByRoom.value +
             (roomId to (allMessagesByRoom.value[roomId].orEmpty() + message))
@@ -510,6 +513,7 @@ class LocalPreviewChatRepository : ChatRepository {
             time = "now",
             isMine = true,
             isAction = outgoing.isAction,
+            timestampMillis = Clock.System.now().toEpochMilliseconds(),
         )
         directMessagesByMember.value = directMessagesByMember.value +
             (memberId to (directMessagesByMember.value[memberId].orEmpty() + message))

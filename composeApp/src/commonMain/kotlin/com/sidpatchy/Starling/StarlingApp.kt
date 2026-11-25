@@ -25,12 +25,15 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
@@ -121,6 +124,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
@@ -728,8 +732,15 @@ fun StarlingApp(
         reducedMotion = uiSettings.reduceMotion,
     ) {
         Surface(modifier = Modifier.fillMaxSize(), color = Canvas) {
+            val safeInsets = WindowInsets.safeDrawing
+            // On iOS the bottom bar owns the bottom inset so its surface reaches the home indicator.
+            val rootInsets = if (LocalStarlingUiStyle.current == StarlingUiStyle.IOS) {
+                safeInsets.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)
+            } else {
+                safeInsets
+            }
             BoxWithConstraints(
-                Modifier.fillMaxSize().safeDrawingPadding().imePadding().dismissKeyboardOnUpwardScroll(),
+                Modifier.fillMaxSize().windowInsetsPadding(rootInsets).imePadding().dismissKeyboardOnUpwardScroll(),
             ) {
                 if (maxWidth >= 1000.dp) {
                     WideNavigationLayout(
@@ -1228,6 +1239,7 @@ private fun ChatContent(
     var systemExpansionScrollRequest by remember { mutableStateOf(0) }
     val listState = rememberLazyListState()
     val reducedMotion = LocalReducedMotion.current
+    val dayLabels = rememberChatDayLabels(messages)
     LaunchedEffect(systemExpansionScrollRequest) {
         if (systemExpansionScrollRequest > 0) {
             withFrameNanos { }
@@ -1270,20 +1282,21 @@ private fun ChatContent(
             ),
             verticalArrangement = Arrangement.spacedBy(if (denseMessages) 0.dp else if (bubbleStyle) 3.dp else 2.dp),
         ) {
-            item { DayDivider() }
-            items(messages, key = { it.id }) { message ->
+            itemsIndexed(messages, key = { _, message -> message.id }) { index, message ->
                 val author = members.firstOrNull { it.id == (message.authorId ?: message.author) }
                     ?: members.firstOrNull { it.displayName.equals(message.author, ignoreCase = true) }
-                MessageRow(
-                    message = message,
-                    member = author,
-                    bubbleStyle = bubbleStyle,
-                    denseMessages = denseMessages,
-                    onMemberClick = { author?.let(onMemberClick) },
-                    onSystemExpansion = {
-                        if (!listState.canScrollForward) systemExpansionScrollRequest++
-                    },
-                )
+                TranscriptRow(dayLabels[index]) {
+                    MessageRow(
+                        message = message,
+                        member = author,
+                        bubbleStyle = bubbleStyle,
+                        denseMessages = denseMessages,
+                        onMemberClick = { author?.let(onMemberClick) },
+                        onSystemExpansion = {
+                            if (!listState.canScrollForward) systemExpansionScrollRequest++
+                        },
+                    )
+                }
             }
         }
 
@@ -1311,6 +1324,7 @@ private fun DirectMessageContent(
     var systemExpansionScrollRequest by remember { mutableStateOf(0) }
     val listState = rememberLazyListState()
     val reducedMotion = LocalReducedMotion.current
+    val dayLabels = rememberChatDayLabels(messages)
     LaunchedEffect(systemExpansionScrollRequest) {
         if (systemExpansionScrollRequest > 0 && messages.isNotEmpty()) {
             withFrameNanos { }
@@ -1367,18 +1381,19 @@ private fun DirectMessageContent(
                     if (denseMessages) 0.dp else if (bubbleStyle) 4.dp else 2.dp,
                 ),
             ) {
-                item { DayDivider() }
-                items(messages, key = { it.id }) { message ->
-                    MessageRow(
-                        message = message,
-                        member = if (!message.isMine && (message.authorId == member.id || message.author == member.id)) member else null,
-                        bubbleStyle = bubbleStyle,
-                        denseMessages = denseMessages,
-                        onMemberClick = onMemberClick,
-                        onSystemExpansion = {
-                            if (!listState.canScrollForward) systemExpansionScrollRequest++
-                        },
-                    )
+                itemsIndexed(messages, key = { _, message -> message.id }) { index, message ->
+                    TranscriptRow(dayLabels[index]) {
+                        MessageRow(
+                            message = message,
+                            member = if (!message.isMine && (message.authorId == member.id || message.author == member.id)) member else null,
+                            bubbleStyle = bubbleStyle,
+                            denseMessages = denseMessages,
+                            onMemberClick = onMemberClick,
+                            onSystemExpansion = {
+                                if (!listState.canScrollForward) systemExpansionScrollRequest++
+                            },
+                        )
+                    }
                 }
             }
         }
@@ -2039,30 +2054,27 @@ private fun RoomSidebar(
             .border(width = 1.dp, color = Line),
     ) {
         Row(
-            modifier = Modifier.fillMaxWidth().height(76.dp).padding(horizontal = 22.dp),
+            modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)
+                .padding(start = 16.dp, end = SidebarEdgeInset),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(
-                Modifier.size(34.dp).clip(RoundedCornerShape(11.dp)).background(PaleAccent),
+                Modifier.size(28.dp).clip(RoundedCornerShape(8.dp)).background(PaleAccent),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
                     painter = painterResource(
                         if (LocalStarlingPalette.current == DarkPalette) Res.drawable.starling_dark else Res.drawable.starling_light,
                     ),
-                    contentDescription = "Starling",
+                    contentDescription = null,
                     tint = Color.Unspecified,
-                    modifier = Modifier.size(26.dp),
+                    modifier = Modifier.size(21.dp),
                 )
             }
-            Spacer(Modifier.width(11.dp))
-            Column {
-                Text("Starling", fontSize = 19.sp, fontWeight = FontWeight.Bold, color = Ink)
-                Text("RETICULUM CHAT", fontSize = 9.sp, letterSpacing = 1.5.sp, color = Muted)
-            }
+            Spacer(Modifier.width(9.dp))
+            Text("Starling", modifier = Modifier.weight(1f), fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = Ink)
             if (canHideNavigation) {
-                Spacer(Modifier.weight(1f))
-                IconButton(onClick = { onDismissKeyboard(); onHideNavigation() }) {
+                IconButton(onClick = { onDismissKeyboard(); onHideNavigation() }, modifier = Modifier.size(SidebarActionSize)) {
                     Icon(Icons.Filled.ChevronLeft, contentDescription = "Hide navigation", tint = Accent)
                 }
             }
@@ -2074,7 +2086,7 @@ private fun RoomSidebar(
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth()
-                    .padding(start = 22.dp, end = SidebarEdgeInset, top = 20.dp, bottom = 6.dp)
+                    .padding(start = 22.dp, end = SidebarEdgeInset, top = 4.dp, bottom = 6.dp)
                     .heightIn(min = 48.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -2785,10 +2797,36 @@ private fun LiveNotice(message: String) {
 }
 
 @Composable
-private fun DayDivider() {
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+private fun rememberChatDayLabels(messages: List<ChatMessage>): List<String?> {
+    val timeZonePreference = LocalTimestampTimeZonePreference.current
+    val formatDate = remember(timeZonePreference) { chatDateFormatter(timeZonePreference) }
+    val today by produceState(formatDate(Clock.System.now().toEpochMilliseconds()), formatDate) {
+        while (true) {
+            value = formatDate(Clock.System.now().toEpochMilliseconds())
+            delay(30_000)
+        }
+    }
+    return remember(messages, today, formatDate) { chatMessageDayLabels(messages, today, formatDate) }
+}
+
+@Composable
+private fun TranscriptRow(dayLabel: String?, content: @Composable () -> Unit) {
+    Column {
+        if (dayLabel != null) DayDivider(dayLabel)
+        content()
+    }
+}
+
+@Composable
+private fun DayDivider(label: String) {
+    Row(Modifier.fillMaxWidth().padding(vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
         Spacer(Modifier.weight(1f).height(1.dp).background(Line))
-        Text("TODAY", modifier = Modifier.padding(horizontal = 14.dp), color = Muted, fontSize = 9.sp, letterSpacing = 1.2.sp)
+        Text(
+            label,
+            modifier = Modifier.padding(horizontal = 12.dp).semantics { heading() },
+            color = Muted,
+            fontSize = 11.sp,
+        )
         Spacer(Modifier.weight(1f).height(1.dp).background(Line))
     }
 }

@@ -1,6 +1,7 @@
 package com.sidpatchy.Starling
 
 import androidx.compose.ui.window.ComposeUIViewController
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -43,11 +44,13 @@ fun MainViewController(runtime: IosPythonRuntime, documents: IosIdentityDocument
             onIdentityChanged = { repository.updateManagedIdentity(it?.hash) },
         )
     }
-    StarlingApp(
-        repository = repository,
-        nodeController = nodeController,
-        liveChatRepository = repository,
-        identityManager = identityManager,
-        foregroundEvents = foregroundEvents,
-    )
+    CompositionLocalProvider(LocalStarlingUiStyle provides StarlingUiStyle.IOS) {
+        StarlingApp(
+            repository = repository,
+            nodeController = nodeController,
+            liveChatRepository = repository,
+            identityManager = identityManager,
+            foregroundEvents = foregroundEvents,
+        )
+    }
 }

@@ -1,5 +1,6 @@
 package com.sidpatchy.Starling
 
+import androidx.compose.animation.core.updateTransition
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
@@ -7,18 +8,32 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Chat
+import androidx.compose.material.icons.filled.ChatBubble
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.outlined.ChatBubbleOutline
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.DrawerState
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.HorizontalDivider
@@ -36,12 +51,20 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 
-internal enum class MainTab(val label: String, val icon: ImageVector) {
-    CHAT("Chat", Icons.AutoMirrored.Filled.Chat),
-    SETTINGS("Settings", Icons.Filled.Settings);
+internal enum class MainTab(
+    val label: String,
+    val icon: ImageVector,
+    val iosSelectedIcon: ImageVector = icon,
+    val iosUnselectedIcon: ImageVector = icon,
+) {
+    CHAT("Chat", Icons.AutoMirrored.Filled.Chat, Icons.Filled.ChatBubble, Icons.Outlined.ChatBubbleOutline),
+    SETTINGS("Settings", Icons.Filled.Settings, iosUnselectedIcon = Icons.Outlined.Settings);
 
     fun showsBottomNavigation(chatDrawerOpen: Boolean): Boolean = when (this) {
         CHAT -> chatDrawerOpen
@@ -63,7 +86,7 @@ internal fun WideNavigationLayout(
     showRail: Boolean,
     content: @Composable RowScope.() -> Unit,
 ) {
-    Row(Modifier.fillMaxSize()) {
+    Row(Modifier.fillMaxSize().iosBottomSafeAreaPadding()) {
         if (showRail) {
             NavigationRail(
                 modifier = Modifier.width(80.dp).fillMaxHeight(),
@@ -102,10 +125,13 @@ internal fun CompactNavigationLayout(
     content: @Composable () -> Unit,
 ) {
     val reducedMotion = LocalReducedMotion.current
+    val transition = updateTransition(showBottomBar, label = "Bottom navigation")
+    val barOwnsBottomInset = transition.currentState || transition.targetState
     Column(Modifier.fillMaxSize()) {
-        Box(Modifier.weight(1f).fillMaxWidth()) { content() }
-        AnimatedVisibility(
-            visible = showBottomBar,
+        val contentModifier = Modifier.weight(1f).fillMaxWidth()
+        Box(if (barOwnsBottomInset) contentModifier else contentModifier.iosBottomSafeAreaPadding()) { content() }
+        transition.AnimatedVisibility(
+            visible = { it },
             enter = if (reducedMotion) EnterTransition.None else expandVertically(expandFrom = Alignment.Bottom) + fadeIn(),
             exit = if (reducedMotion) ExitTransition.None else shrinkVertically(shrinkTowards = Alignment.Bottom) + fadeOut(),
         ) {
@@ -140,6 +166,10 @@ internal fun CompactChatNavigationLayout(
 
 @Composable
 private fun BottomNavigationBar(selectedTab: MainTab, onTabSelected: (MainTab) -> Unit) {
+    if (LocalStarlingUiStyle.current == StarlingUiStyle.IOS) {
+        IosStyleBottomNavigationBar(selectedTab, onTabSelected)
+        return
+    }
     Column {
         HorizontalDivider(color = Line)
         NavigationBar(containerColor = Paper, tonalElevation = 0.dp, windowInsets = WindowInsets(0, 0, 0, 0)) {
@@ -163,6 +193,54 @@ private fun BottomNavigationBar(selectedTab: MainTab, onTabSelected: (MainTab) -
         }
     }
 }
+
+@Composable
+private fun IosStyleBottomNavigationBar(selectedTab: MainTab, onTabSelected: (MainTab) -> Unit) {
+    Column(Modifier.fillMaxWidth().background(Paper).iosBottomSafeAreaPadding()) {
+        HorizontalDivider(color = Line)
+        Row(Modifier.fillMaxWidth().selectableGroup()) {
+            MainTab.entries.forEach { tab ->
+                val selected = tab == selectedTab
+                val color = if (selected) Accent else Muted
+                Column(
+                    modifier = Modifier.weight(1f).heightIn(min = 49.dp)
+                        .selectable(
+                            selected = selected,
+                            role = Role.Tab,
+                            interactionSource = null,
+                            indication = null,
+                        ) { onTabSelected(tab) }
+                        .padding(horizontal = 4.dp, vertical = 4.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
+                ) {
+                    Icon(
+                        if (selected) tab.iosSelectedIcon else tab.iosUnselectedIcon,
+                        contentDescription = null,
+                        modifier = Modifier.size(24.dp),
+                        tint = color,
+                    )
+                    Text(
+                        tab.label,
+                        color = color,
+                        fontSize = 11.sp,
+                        lineHeight = 14.sp,
+                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+                        textAlign = TextAlign.Center,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun Modifier.iosBottomSafeAreaPadding(): Modifier =
+    if (LocalStarlingUiStyle.current == StarlingUiStyle.IOS) {
+        windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom))
+    } else {
+        this
+    }
 
 @Composable
 private fun MainTabLabel(tab: MainTab, selected: Boolean) {

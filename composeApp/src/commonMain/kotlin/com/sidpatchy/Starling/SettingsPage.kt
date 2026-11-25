@@ -1,5 +1,8 @@
 package com.sidpatchy.Starling
 
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -8,11 +11,14 @@ import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowBackIos
+import androidx.compose.material.icons.automirrored.filled.ArrowForwardIos
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.ChevronRight
@@ -20,6 +26,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
@@ -38,11 +45,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.preferredFrameRate
 import androidx.compose.ui.platform.LocalUriHandler
@@ -50,6 +59,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
@@ -73,6 +83,22 @@ internal val SettingsTwoPaneMinWidth = 900.dp
 
 @Composable
 private fun SettingsBackButton(label: String, onClick: () -> Unit) {
+    val isIos = LocalStarlingUiStyle.current == StarlingUiStyle.IOS
+    if (isIos) {
+        Row(
+            modifier = Modifier.heightIn(min = 44.dp).clickable(
+                role = Role.Button,
+                indication = null,
+                interactionSource = null,
+                onClick = onClick,
+            ).padding(horizontal = 4.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(Icons.AutoMirrored.Filled.ArrowBackIos, contentDescription = null, tint = Accent, modifier = Modifier.size(18.dp))
+            Text(label, color = Accent, fontSize = 15.sp, lineHeight = 19.sp)
+        }
+        return
+    }
     TextButton(
         onClick = onClick,
         colors = ButtonDefaults.textButtonColors(contentColor = Accent),
@@ -80,6 +106,29 @@ private fun SettingsBackButton(label: String, onClick: () -> Unit) {
         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null, modifier = Modifier.size(20.dp))
         Spacer(Modifier.width(8.dp))
         Text(label)
+    }
+}
+
+/** Decorative switch; the whole settings row owns the toggle and accessibility semantics. */
+@Composable
+private fun SettingsSwitch(checked: Boolean, enabled: Boolean = true) {
+    if (LocalStarlingUiStyle.current != StarlingUiStyle.IOS) {
+        Switch(checked = checked, onCheckedChange = null, enabled = enabled)
+        return
+    }
+    val offset by animateDpAsState(
+        targetValue = if (checked) 22.dp else 2.dp,
+        animationSpec = if (LocalReducedMotion.current) snap() else tween(160),
+        label = "Switch thumb",
+    )
+    Box(
+        Modifier.size(50.dp, 30.dp).alpha(if (enabled) 1f else 0.5f)
+            .background(if (checked) Accent else Muted.copy(alpha = 0.38f), CircleShape),
+    ) {
+        Box(
+            Modifier.align(Alignment.CenterStart).offset(x = offset).size(26.dp)
+                .background(Color.White, CircleShape),
+        )
     }
 }
 
@@ -340,9 +389,10 @@ internal fun SettingsPage(
     }
 
     Column(Modifier.fillMaxSize().background(Canvas)) {
+        val isIos = LocalStarlingUiStyle.current == StarlingUiStyle.IOS
         val showingCompactSection = settingsBackTarget(isWideLayout, showSectionIndex) == SettingsBackTarget.SETTINGS_INDEX
         Row(
-            modifier = Modifier.fillMaxWidth().heightIn(min = 68.dp).background(Paper)
+            modifier = Modifier.fillMaxWidth().heightIn(min = if (isIos) 44.dp else 68.dp).background(Paper)
                 .padding(horizontal = if (isWideLayout) 20.dp else 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -350,7 +400,7 @@ internal fun SettingsPage(
             Spacer(Modifier.width(10.dp))
             Text(
                 if (showingCompactSection) selectedSection.label else "Settings",
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.weight(1f).semantics { heading() },
                 color = Ink,
                 fontSize = 17.sp,
                 fontWeight = FontWeight.SemiBold,
@@ -358,6 +408,7 @@ internal fun SettingsPage(
                 overflow = TextOverflow.Ellipsis,
             )
         }
+        if (isIos) HorizontalDivider(color = Line)
 
         val sectionContent: @Composable (Modifier, Dp) -> Unit = { contentModifier, contentHorizontalPadding ->
         Column(
@@ -405,7 +456,7 @@ internal fun SettingsPage(
                             Text("Bubble messages", color = Ink, fontSize = 13.sp, fontWeight = FontWeight.Medium)
                             Text("Use a chat-bubble layout instead of the IRC-style timeline.", color = Muted, fontSize = 11.sp)
                         }
-                        Switch(checked = bubbleStyle, onCheckedChange = null)
+                        SettingsSwitch(checked = bubbleStyle)
                     }
                     Spacer(Modifier.height(8.dp))
                     Row(
@@ -421,7 +472,7 @@ internal fun SettingsPage(
                             Text("Dense messages", color = Ink, fontSize = 13.sp, fontWeight = FontWeight.Medium)
                             Text("Reduce vertical spacing in room and direct-message history.", color = Muted, fontSize = 11.sp)
                         }
-                        Switch(checked = denseMessages, onCheckedChange = null)
+                        SettingsSwitch(checked = denseMessages)
                     }
                     Spacer(Modifier.height(8.dp))
                     Row(
@@ -437,7 +488,7 @@ internal fun SettingsPage(
                         Text("Reduce motion", color = Ink, fontSize = 13.sp, fontWeight = FontWeight.Medium)
                         Text("Turn off slide and fade animations when showing panels and scrolling messages.", color = Muted, fontSize = 11.sp)
                     }
-                    Switch(checked = reduceMotion, onCheckedChange = null)
+                    SettingsSwitch(checked = reduceMotion)
                 }
                     Spacer(Modifier.height(5.dp))
                     Text("Message time zone", color = Ink, fontSize = 13.sp, fontWeight = FontWeight.Medium)
@@ -520,7 +571,7 @@ internal fun SettingsPage(
                             Text("Local preview", color = Ink, fontSize = 13.sp, fontWeight = FontWeight.Medium)
                             Text("Isolated sample data; live identity and connections are hidden.", color = Muted, fontSize = 11.sp)
                         }
-                        Switch(checked = previewMode, onCheckedChange = null)
+                        SettingsSwitch(checked = previewMode)
                     }
 
                     if (previewMode) {
@@ -826,7 +877,7 @@ internal fun SettingsPage(
                                         Text("Bluetooth peers", color = Ink, fontSize = 13.sp, fontWeight = FontWeight.Medium)
                                         Text("Connect directly to nearby Reticulum devices over Bluetooth.", color = Muted, fontSize = 11.sp)
                                     }
-                                    Switch(checked = blePeeringEnabled, onCheckedChange = null, enabled = !isRunning && !isStarting)
+                                    SettingsSwitch(checked = blePeeringEnabled, enabled = !isRunning && !isStarting)
                                 }
                             }
                         } else {
@@ -1075,6 +1126,7 @@ internal fun SettingsPage(
                 selectedSection = selectedSection,
                 onSectionSelected = onSectionSelected,
                 onDismissKeyboard = onDismissKeyboard,
+                highlightSelected = !isIos,
             )
         } else {
             selectedSectionContent(Modifier.fillMaxWidth().weight(1f), 16.dp)
@@ -1176,36 +1228,57 @@ private fun SettingsSectionNavigation(
     selectedSection: SettingsSection,
     onSectionSelected: (SettingsSection) -> Unit,
     onDismissKeyboard: () -> Unit,
+    highlightSelected: Boolean = true,
 ) {
+    val isIos = LocalStarlingUiStyle.current == StarlingUiStyle.IOS
     Column(
-        modifier = modifier.background(Paper).verticalScroll(rememberScrollState()).padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
+        modifier = modifier.background(if (isIos) Canvas else Paper)
+            .verticalScroll(rememberScrollState()).padding(16.dp),
     ) {
-        Text("SETTINGS", color = Muted, fontSize = 10.sp, letterSpacing = 1.2.sp, fontWeight = FontWeight.Bold)
-        Spacer(Modifier.height(4.dp))
-        SettingsSection.entries.forEach { section ->
-            val isSelected = section == selectedSection
-            Row(
-                modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
-                    .background(if (isSelected) PaleAccent else Color.Transparent)
-                    .clickable(role = Role.Button) {
-                        onDismissKeyboard()
-                        onSectionSelected(section)
+        if (!isIos) {
+            Text("SETTINGS", color = Muted, fontSize = 10.sp, letterSpacing = 1.2.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(16.dp))
+        }
+        Column(
+            modifier = if (isIos) Modifier.clip(RoundedCornerShape(12.dp)).background(Paper) else Modifier,
+            verticalArrangement = Arrangement.spacedBy(if (isIos) 0.dp else 6.dp),
+        ) {
+            SettingsSection.entries.forEachIndexed { index, section ->
+                if (isIos && index > 0) HorizontalDivider(Modifier.padding(start = 16.dp), color = Line)
+                val isSelected = highlightSelected && section == selectedSection
+                val rowShape = if (isIos) Modifier else Modifier.clip(RoundedCornerShape(10.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth().then(rowShape)
+                        .background(if (isSelected) PaleAccent else Color.Transparent)
+                        .heightIn(min = 44.dp).clickable(role = Role.Button) {
+                            onDismissKeyboard()
+                            onSectionSelected(section)
+                        }
+                        .semantics { if (highlightSelected) selected = isSelected }
+                        .padding(horizontal = if (isIos) 16.dp else 14.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            section.label,
+                            color = if (isSelected) Accent else Ink,
+                            fontSize = if (isIos) 17.sp else 14.sp,
+                            lineHeight = if (isIos) 21.sp else TextUnit.Unspecified,
+                            fontWeight = when {
+                                isSelected -> FontWeight.SemiBold
+                                isIos -> FontWeight.Normal
+                                else -> FontWeight.Medium
+                            },
+                        )
+                        Text(section.summary, color = Muted, fontSize = if (isIos) 13.sp else 11.sp, lineHeight = if (isIos) 17.sp else 15.sp)
                     }
-                    .semantics { selected = isSelected }
-                    .padding(horizontal = 14.dp, vertical = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        section.label,
-                        color = if (isSelected) Accent else Ink,
-                        fontSize = 14.sp,
-                        fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
+                    Icon(
+                        if (isIos) Icons.AutoMirrored.Filled.ArrowForwardIos else Icons.Filled.ChevronRight,
+                        contentDescription = null,
+                        tint = Muted,
+                        modifier = Modifier.padding(start = if (isIos) 8.dp else 0.dp).size(if (isIos) 14.dp else 18.dp),
                     )
-                    Text(section.summary, color = Muted, fontSize = 11.sp, lineHeight = 15.sp)
                 }
-                Icon(Icons.Filled.ChevronRight, contentDescription = null, tint = Muted, modifier = Modifier.size(18.dp))
             }
         }
     }
