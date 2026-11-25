@@ -27,7 +27,6 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.WindowInsets
@@ -106,6 +105,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.input.pointer.PointerEventPass
@@ -1268,7 +1268,7 @@ private fun ChatContent(
                 horizontal = if (compact) 12.dp else 20.dp,
                 vertical = 8.dp,
             ),
-            verticalArrangement = Arrangement.spacedBy(if (denseMessages) 0.dp else 3.dp),
+            verticalArrangement = Arrangement.spacedBy(if (denseMessages) 0.dp else if (bubbleStyle) 3.dp else 2.dp),
         ) {
             item { DayDivider() }
             items(messages, key = { it.id }) { message ->
@@ -2793,6 +2793,9 @@ private fun DayDivider() {
     }
 }
 
+private val IrcMessageMaxWidth = 720.dp
+private val MessageAuthorMaxWidth = 144.dp
+
 @Composable
 private fun MessageRow(
     message: ChatMessage,
@@ -2802,14 +2805,19 @@ private fun MessageRow(
     onMemberClick: () -> Unit,
     onSystemExpansion: () -> Unit = {},
 ) {
+    if (message.isSystem) {
+        SystemMessageRow(message, denseMessages, bubbleStyle, onSystemExpansion)
+        return
+    }
     val authorName = member?.displayName ?: message.author
     val palette = LocalStarlingPalette.current
     val timeZonePreference = LocalTimestampTimeZonePreference.current
     val displayTime = displayChatTime(message.time, message.timestampMillis, timeZonePreference)
     val authorColor = ircNickTextColor(authorName, darkTheme = palette == DarkPalette)
-    if (message.isSystem) {
-        SystemMessageRow(message, denseMessages, bubbleStyle, onSystemExpansion)
-    } else if (bubbleStyle) {
+    val openAuthorProfile = if (member != null && !member.isSelf) onMemberClick else null
+    val messageStyle = if (message.isAction) FontStyle.Italic else FontStyle.Normal
+    val formattedMessage = remember(message.text, palette) { markdown(message.text, palette) }
+    if (bubbleStyle) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(vertical = if (denseMessages) 0.dp else 1.dp),
             horizontalArrangement = if (message.isMine) Arrangement.End else Arrangement.Start,
@@ -2819,95 +2827,103 @@ private fun MessageRow(
                     .background(if (message.isMine) PaleAccent else Paper)
                     .padding(horizontal = 10.dp, vertical = if (denseMessages) 4.dp else 6.dp),
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        authorName,
-                        modifier = Modifier
-                            .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
-                            .clickable(enabled = member != null && !member.isSelf, role = Role.Button, onClick = onMemberClick)
-                            .semantics {
-                                contentDescription = if (member != null && !member.isSelf) "View profile for $authorName" else authorName
-                            },
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    MessageAuthor(
+                        authorName = authorName,
+                        label = authorName,
+                        modifier = Modifier.alignBy(FirstBaseline),
                         color = authorColor,
                         fontSize = 11.sp,
-                        fontWeight = FontWeight.SemiBold,
+                        fontStyle = FontStyle.Normal,
+                        onProfileClick = openAuthorProfile,
                     )
-                    Spacer(Modifier.width(8.dp))
-                    Text(displayTime, color = Muted, fontSize = 10.sp)
+                    Text(
+                        displayTime,
+                        modifier = Modifier.alignBy(FirstBaseline),
+                        color = Muted,
+                        fontSize = 10.sp,
+                        lineHeight = 13.sp,
+                    )
                     deliveryMarker(message.deliveryState)
                 }
                 Spacer(Modifier.height(2.dp))
                 SelectionContainer {
                     Text(
-                        text = markdown(message.text, palette),
+                        text = formattedMessage,
                         color = Ink,
                         fontSize = 13.sp,
                         lineHeight = if (denseMessages) 16.sp else 17.sp,
-                        fontStyle = if (message.isAction) FontStyle.Italic else FontStyle.Normal,
+                        fontStyle = messageStyle,
                     )
                 }
             }
         }
     } else {
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(vertical = if (denseMessages) 0.dp else 1.dp),
-        verticalAlignment = Alignment.Top,
-    ) {
-        Text(displayTime, modifier = Modifier.width(40.dp).padding(top = 1.dp), color = Muted, fontSize = 10.sp)
-        deliveryMarker(message.deliveryState)
-        if (message.isAction) {
+        Row(
+            modifier = Modifier.widthIn(max = IrcMessageMaxWidth).fillMaxWidth()
+                .padding(vertical = if (denseMessages) 0.dp else 1.dp),
+            horizontalArrangement = Arrangement.spacedBy(5.dp),
+        ) {
             Text(
-                "$authorName ",
-                modifier = Modifier
-                    .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
-                    .clickable(enabled = member != null && !member.isSelf, role = Role.Button, onClick = onMemberClick)
-                    .semantics {
-                        contentDescription = if (member != null && !member.isSelf) "View profile for $authorName" else authorName
-                    }
-                    .alignBy(FirstBaseline),
+                displayTime,
+                modifier = Modifier.widthIn(min = 36.dp).alignBy(FirstBaseline),
+                color = Muted,
+                fontSize = 10.sp,
+                lineHeight = 13.sp,
+            )
+            deliveryMarker(message.deliveryState, Modifier.alignBy { it.measuredHeight })
+            MessageAuthor(
+                authorName = authorName,
+                label = if (message.isAction) authorName else "$authorName:",
+                modifier = Modifier.alignBy(FirstBaseline),
                 color = authorColor,
                 fontSize = 13.sp,
-                fontStyle = FontStyle.Italic,
+                fontStyle = messageStyle,
+                onProfileClick = openAuthorProfile,
             )
             SelectionContainer(
                 modifier = Modifier.weight(1f).alignBy(FirstBaseline),
             ) {
                 Text(
-                    text = markdown(message.text, palette),
+                    text = formattedMessage,
                     color = Ink,
                     fontSize = 13.sp,
                     lineHeight = if (denseMessages) 16.sp else 17.sp,
-                    fontStyle = FontStyle.Italic,
-                )
-            }
-        } else {
-            Text(
-                "$authorName:",
-                modifier = Modifier
-                    .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
-                    .clickable(enabled = member != null && !member.isSelf, role = Role.Button, onClick = onMemberClick)
-                    .semantics {
-                        contentDescription = if (member != null && !member.isSelf) "View profile for $authorName" else authorName
-                    }
-                    .alignBy(FirstBaseline),
-                color = authorColor,
-                fontSize = 13.sp,
-                fontWeight = FontWeight.SemiBold,
-            )
-                Spacer(Modifier.width(5.dp))
-            SelectionContainer(
-                modifier = Modifier.weight(1f).alignBy(FirstBaseline),
-            ) {
-                Text(
-                    text = markdown(message.text, palette),
-                    color = Ink,
-                    fontSize = 13.sp,
-                    lineHeight = if (denseMessages) 16.sp else 18.sp,
+                    fontStyle = messageStyle,
                 )
             }
         }
     }
-    }
+}
+
+@Composable
+private fun MessageAuthor(
+    authorName: String,
+    label: String,
+    modifier: Modifier,
+    color: Color,
+    fontSize: TextUnit,
+    fontStyle: FontStyle,
+    onProfileClick: (() -> Unit)?,
+) {
+    // Keep the layout compact; Compose expands clickable touch targets without growing the line.
+    val profileLink = if (onProfileClick == null) Modifier else Modifier
+        .clickable(role = Role.Button, onClick = onProfileClick)
+        .semantics { contentDescription = "View profile for $authorName" }
+    Text(
+        label,
+        modifier = modifier.widthIn(max = MessageAuthorMaxWidth).then(profileLink),
+        color = color,
+        fontSize = fontSize,
+        lineHeight = fontSize * 1.25f,
+        fontWeight = if (fontStyle == FontStyle.Italic) FontWeight.Normal else FontWeight.SemiBold,
+        fontStyle = fontStyle,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+    )
 }
 
 @Composable
@@ -2971,7 +2987,7 @@ private fun SystemMessageRow(
             }
         }
     } else {
-        Column(Modifier.fillMaxWidth().padding(vertical = verticalPadding)) {
+        Column(Modifier.widthIn(max = IrcMessageMaxWidth).fillMaxWidth().padding(vertical = verticalPadding)) {
             Row(verticalAlignment = Alignment.Top) {
                 Text(displayTime, modifier = Modifier.width(40.dp).padding(top = 1.dp), color = Muted, fontSize = 10.sp)
                 SelectionContainer(
@@ -3032,7 +3048,7 @@ private fun SystemEventDetails(events: List<ChatSystemEvent>, modifier: Modifier
 }
 
 @Composable
-private fun deliveryMarker(state: String?) {
+private fun deliveryMarker(state: String?, modifier: Modifier = Modifier) {
     if (state == null) return
     val (icon, description, color) = when (state) {
         "queued" -> Triple(Icons.Filled.Schedule, "Queued", Muted)
@@ -3045,7 +3061,7 @@ private fun deliveryMarker(state: String?) {
     Icon(
         imageVector = icon,
         contentDescription = description,
-        modifier = Modifier.padding(start = 4.dp).size(12.dp),
+        modifier = modifier.size(12.dp),
         tint = color,
     )
 }
