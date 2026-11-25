@@ -17,32 +17,31 @@ class SidebarSelectionTest {
     @Test
     fun nearbyPeopleHidesBothChatHighlightsAndRestoresThemAfterwards() {
         for (directMessageId in listOf(null, "moss")) {
-            assertEquals(SidebarSelection(), sidebarSelectionForVisiblePage("general", directMessageId, showNearby = true))
+            assertEquals(SidebarSelection(), sidebarSelectionForVisiblePage("general", directMessageId, MainPage.NEARBY))
         }
-        assertEquals(SidebarSelection(roomId = "general"), sidebarSelectionForVisiblePage("general", null, showNearby = false))
+        assertEquals(SidebarSelection(roomId = "general"), sidebarSelectionForVisiblePage("general", null))
         assertEquals(SidebarSelection(directMessageId = "moss"), sidebarSelectionForVisiblePage("general", "moss"))
-        assertEquals(SidebarSelection(), sidebarSelectionForVisiblePage(null, null, showNearby = true))
+        assertEquals(SidebarSelection(), sidebarSelectionForVisiblePage(null, null, MainPage.NEARBY))
     }
 
     @Test
-    fun settingsIdentityAndRequestsHideBothChatHighlights() {
+    fun settingsAndRequestsHideBothChatHighlights() {
         for (directMessageId in listOf(null, "moss")) {
-            assertEquals(SidebarSelection(), sidebarSelectionForVisiblePage("general", directMessageId, showSettings = true))
-            assertEquals(SidebarSelection(), sidebarSelectionForVisiblePage("general", directMessageId, showIdentityPage = true))
-            assertEquals(SidebarSelection(), sidebarSelectionForVisiblePage("general", directMessageId, showContactRequests = true))
+            assertEquals(SidebarSelection(), sidebarSelectionForVisiblePage("general", directMessageId, MainPage.SETTINGS))
+            assertEquals(SidebarSelection(), sidebarSelectionForVisiblePage("general", directMessageId, MainPage.CONTACT_REQUESTS))
         }
     }
 
     @Test
     fun returningToChatRestoresTheRememberedChannelHighlight() {
         val rememberedRoom = "field-notes"
-        assertEquals(SidebarSelection(), sidebarSelectionForVisiblePage(rememberedRoom, null, showIdentityPage = true))
+        assertEquals(SidebarSelection(), sidebarSelectionForVisiblePage(rememberedRoom, null, MainPage.SETTINGS))
         assertEquals(SidebarSelection(roomId = rememberedRoom), sidebarSelectionForVisiblePage(rememberedRoom, null))
     }
 
     @Test
     fun returningFromSettingsToADirectMessageRestoresOnlyTheDirectMessageHighlight() {
-        assertEquals(SidebarSelection(), sidebarSelectionForVisiblePage("general", "moss", showSettings = true))
+        assertEquals(SidebarSelection(), sidebarSelectionForVisiblePage("general", "moss", MainPage.SETTINGS))
         assertEquals(SidebarSelection(directMessageId = "moss"), sidebarSelectionForVisiblePage("general", "moss"))
     }
 
