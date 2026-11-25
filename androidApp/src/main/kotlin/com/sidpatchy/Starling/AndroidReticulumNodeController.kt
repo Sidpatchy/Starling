@@ -136,13 +136,6 @@ class AndroidReticulumNodeController(
             _state.value = ReticulumNodeState.Failed("Use tcp:// followed by an RNode TCP/Wi-Fi host name or IP address.")
             return
         }
-        if (config.rnodeInterfaces.any { it.bandwidthHz > ANDROID_MAX_RNODE_BANDWIDTH_HZ }) {
-            _state.value = ReticulumNodeState.Failed(
-                "The Android RNS RNode adapter supports radio bandwidths up to 500 kHz.",
-            )
-            return
-        }
-
         config.validationError(supportsBleRNodes)?.let {
             _state.value = ReticulumNodeState.Failed(it)
             return
@@ -310,6 +303,5 @@ class AndroidReticulumNodeController(
     private companion object {
         const val BLE_PREFIX = "ble://"
         const val TCP_PREFIX = "tcp://"
-        const val ANDROID_MAX_RNODE_BANDWIDTH_HZ = 500_000
     }
 }

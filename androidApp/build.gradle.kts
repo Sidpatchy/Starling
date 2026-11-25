@@ -28,11 +28,25 @@ android {
     sourceSets.getByName("main").assets.directories.add(rootProject.file("licenses").path)
 }
 
+// Keep this Android-only compatibility patch pinned to the wheel checked by the patch script.
+val androidRnsWheel = layout.buildDirectory.file("starling-rns/rns-1.5.7-py3-none-any.whl")
+val patchRnsWheelScript = rootProject.layout.projectDirectory.file("packaging/android/patch_rns_wheel.py")
+val prepareAndroidRnsWheel = tasks.register<Exec>("prepareAndroidRnsWheel") {
+    inputs.file(patchRnsWheelScript)
+    outputs.file(androidRnsWheel)
+    commandLine("python3", patchRnsWheelScript.asFile.absolutePath, androidRnsWheel.get().asFile.absolutePath)
+}
+
+tasks.matching { it.name.startsWith("install") && it.name.endsWith("PythonRequirements") }.configureEach {
+    dependsOn(prepareAndroidRnsWheel)
+    inputs.file(androidRnsWheel)
+}
+
 chaquopy {
     defaultConfig {
         version = "3.13"
         pip {
-            install("rns==1.5.7")
+            install(androidRnsWheel.get().asFile.absolutePath)
             install("lxmf==1.2.0")
             // BLE peer protocol (MIT). Core package only: the Linux driver's
             // optional dependencies are not installed and Starling supplies its own driver.
