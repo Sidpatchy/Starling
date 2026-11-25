@@ -4,6 +4,7 @@ import platform.Foundation.NSDate
 import platform.Foundation.NSDateFormatter
 import platform.Foundation.NSLocale
 import platform.Foundation.NSTimeZone
+import platform.Foundation.timeZoneForSecondsFromGMT
 
 internal actual fun formatChatTimestamp(
     timestampMillis: Long,
