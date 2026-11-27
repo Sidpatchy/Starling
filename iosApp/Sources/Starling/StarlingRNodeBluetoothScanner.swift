@@ -3,8 +3,8 @@ import CoreBluetooth
 import Foundation
 
 /// Finds nearby RNodes for Settings and makes the first trial connection to the one
-/// that is picked. It is separate from the bridge that carries RNode traffic and is
-/// only used while the node is stopped.
+/// that is picked. It is separate from the bridge that carries RNode traffic, so
+/// setup can run while the node is using other interfaces.
 final class StarlingRNodeBluetoothScanner: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate, @unchecked Sendable {
     private static var serviceUUID: CBUUID { CBUUID(string: "6E400001-B5A3-F393-E0A9-E50E24DCCA9E") }
     private static var txUUID: CBUUID { CBUUID(string: "6E400003-B5A3-F393-E0A9-E50E24DCCA9E") }

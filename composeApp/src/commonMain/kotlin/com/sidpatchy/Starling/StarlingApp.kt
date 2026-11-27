@@ -554,22 +554,14 @@ fun StarlingApp(
             val canStartNode = identityManager == null || identityManager.state.value is ReticulumIdentityState.Available
             when (val state = nodeController.state.value) {
                 is ReticulumNodeState.Running -> {
-                    val hasTcpInterface = savedConfig?.let { config ->
-                        config.tcpPeers.isNotEmpty() || config.rnodeInterfaces.any { it.port.startsWith("tcp://", ignoreCase = true) }
-                    } == true
-                    fun hasConfiguredTcpInterfaceOnline(running: ReticulumNodeState.Running): Boolean {
-                        val config = savedConfig ?: return false
-                        return config.tcpPeers.any { it.id in running.onlineTcpPeerIds } ||
-                            config.rnodeInterfaces
-                                .filter { it.port.startsWith("tcp://", ignoreCase = true) }
-                                .any { it.id in running.onlineRNodePorts }
-                    }
-                    if (hasTcpInterface && !hasConfiguredTcpInterfaceOnline(state) && canStartNode) {
+                    // A newly saved connection does not become active until the next node start.
+                    // It must not be mistaken for a broken socket and force a restart on resume.
+                    if (savedConfig != null && canStartNode && state.needsTcpRecovery()) {
                         // Give RNS a moment to restore sockets after iOS resumes before restarting its interfaces.
                         delay(1_000)
                         nodeController.refreshState()
                         val refreshed = nodeController.state.value as? ReticulumNodeState.Running
-                        if (refreshed != null && !hasConfiguredTcpInterfaceOnline(refreshed)) {
+                        if (refreshed?.needsTcpRecovery() == true) {
                             nodeController.disconnect()
                             nodeController.start(savedConfig)
                         }

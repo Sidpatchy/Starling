@@ -275,7 +275,7 @@ internal fun SettingsPage(
                 }
             },
         ),
-    ) { mutableStateOf(nodeConfig?.tcpPeers ?: listOf(ReticulumTcpPeer("", 4242))) }
+    ) { mutableStateOf(nodeConfig?.tcpPeers.orEmpty().withoutEmptyDefaultTcpPeer()) }
     var rnodeInterfaces by rememberSaveable(
         stateSaver = listSaver(
             save = { radios: List<ReticulumRNodeInterface> ->
@@ -312,6 +312,7 @@ internal fun SettingsPage(
     var existingRpcKey by remember { mutableStateOf("") }
     var selectedHubNetworkId by rememberSaveable { mutableStateOf(preferredHubNetworkId.orEmpty()) }
     var connectionInputError by rememberSaveable { mutableStateOf<String?>(null) }
+    var showAddConnection by rememberSaveable { mutableStateOf(false) }
     val configuredNetworks = networks.filter { !it.isPreview && !it.hubDestination.isNullOrBlank() }
     val selectedHubNetwork = configuredNetworks.firstOrNull { it.id == selectedHubNetworkId } ?: configuredNetworks.firstOrNull()
     val selectedRrcNickname = selectedHubNetwork?.rrcNickname?.takeIf(String::isNotBlank) ?: globalNickname
@@ -617,18 +618,35 @@ internal fun SettingsPage(
                                 if (!supportsReticulumProtocol) {
                                     "This opens a plain TCP socket only; it does not exchange Reticulum traffic."
                                 } else if (supportsRNodeInterfaces) {
-                                    if (supportsBleRNodes) {
-                                        "Add TCP peers and/or an RNode. Choose Bluetooth or Wi-Fi for each RNode. Starling supports one Bluetooth RNode at a time and stays a client; Reticulum transport routing remains disabled."
-                                    } else {
-                                        "Add TCP peers and/or an RNode. Choose a serial port or Wi-Fi for each RNode. Starling stays a client; Reticulum transport routing remains disabled."
-                                    }
+                                    "Starling can use TCP peers and RNodes together. It stays a client and does not route traffic for other nodes."
                                 } else {
                                     "Manage outbound TCP client interfaces. Starling stays a client; Reticulum transport routing remains disabled."
                                 },
                                 color = Muted,
                                 fontSize = 11.sp,
                             )
-                            tcpPeers.forEachIndexed { index, peer ->
+                            val runningNode = nodeState as? ReticulumNodeState.Running
+                            Text(
+                                "Connections",
+                                modifier = Modifier.semantics { heading() },
+                                color = Ink,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            if (runningNode != null) {
+                                RunningConnectionList(
+                                    runningNode,
+                                    tcpPeers,
+                                    rnodeInterfaces,
+                                    resolvedBleRNode,
+                                    onRemoveSavedPeer = { peer -> tcpPeers = tcpPeers.filterNot { it.id == peer.id } },
+                                    onRemoveSavedRadio = { radio -> rnodeInterfaces = rnodeInterfaces.filterNot { it.id == radio.id } },
+                                )
+                            }
+                            if (runningNode == null && tcpPeers.isEmpty() && rnodeInterfaces.isEmpty()) {
+                                Text("No TCP peers or RNode radios configured yet.", color = Muted, fontSize = 11.sp)
+                            }
+                            if (runningNode == null) tcpPeers.forEachIndexed { index, peer ->
                                 Column(
                                     modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(Canvas)
                                         .border(1.dp, Line, RoundedCornerShape(10.dp)).padding(12.dp),
@@ -636,7 +654,7 @@ internal fun SettingsPage(
                                 ) {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
                                         Text("TCP connection ${index + 1}", modifier = Modifier.weight(1f), color = Ink, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                                        if ((tcpPeers.size > 1 || rnodeInterfaces.isNotEmpty() || (supportsBlePeering && blePeeringEnabled)) && !isRunning && !isStarting) {
+                                        if (!isStarting) {
                                             TextButton(onClick = {
                                                 onDismissKeyboard()
                                                 tcpPeers = tcpPeers.filterIndexed { i, _ -> i != index }
@@ -646,64 +664,16 @@ internal fun SettingsPage(
                                             }
                                         }
                                     }
-                                    OutlinedTextField(
-                                        value = peer.host,
-                                        onValueChange = { value -> tcpPeers = tcpPeers.mapIndexed { i, old -> if (i == index) old.copy(host = value) else old }; connectionInputError = null },
-                                        modifier = Modifier.fillMaxWidth(),
-                                        label = { Text("Peer host or IP") },
-                                        singleLine = true,
-                                        enabled = !isRunning && !isStarting,
-                                    )
-                                    OutlinedTextField(
-                                        value = if (peer.port > 0) peer.port.toString() else "",
-                                        onValueChange = { value ->
-                                            if (value.all(Char::isDigit)) {
-                                                tcpPeers = tcpPeers.mapIndexed { i, old -> if (i == index) old.copy(port = value.toIntOrNull() ?: 0) else old }
-                                                connectionInputError = null
-                                            }
-                                        },
-                                        modifier = Modifier.fillMaxWidth(),
-                                        label = { Text("TCP port") },
-                                        singleLine = true,
-                                        enabled = !isRunning && !isStarting,
-                                    )
-                                    if (supportsReticulumProtocol) {
-                                        OutlinedTextField(
-                                            value = peer.ifacNetworkName.orEmpty(),
-                                            onValueChange = { value -> tcpPeers = tcpPeers.mapIndexed { i, old -> if (i == index) old.copy(ifacNetworkName = value.takeIf(String::isNotBlank)) else old }; connectionInputError = null },
-                                            modifier = Modifier.fillMaxWidth(),
-                                            label = { Text("IFAC network name (optional)") },
-                                            singleLine = true,
-                                            enabled = !isRunning && !isStarting,
-                                        )
-                                        OutlinedTextField(
-                                            value = peer.ifacPassphrase.orEmpty(),
-                                            onValueChange = { value -> tcpPeers = tcpPeers.mapIndexed { i, old -> if (i == index) old.copy(ifacPassphrase = value.takeIf(String::isNotBlank)) else old }; connectionInputError = null },
-                                            modifier = Modifier.fillMaxWidth(),
-                                            label = { Text("IFAC passphrase (optional)") },
-                                            singleLine = true,
-                                            visualTransformation = PasswordVisualTransformation(),
-                                            enabled = !isRunning && !isStarting,
-                                        )
+                                    TcpConnectionFields(peer, supportsReticulumProtocol, enabled = !isStarting) { changed ->
+                                        tcpPeers = tcpPeers.mapIndexed { i, old -> if (i == index) changed else old }
+                                        connectionInputError = null
                                     }
                                 }
                             }
-                            if (supportsReticulumProtocol) {
+                            if (runningNode == null && tcpPeers.isNotEmpty() && supportsReticulumProtocol) {
                                 Text("IFAC values are per connection and must match that peer. Leave both blank to disable IFAC.", color = Muted, fontSize = 10.sp)
                             }
-                        if (!isRunning && !isStarting) {
-                            TextButton(onClick = {
-                                onDismissKeyboard()
-                                tcpPeers = tcpPeers + ReticulumTcpPeer("", 4242)
-                            }) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(Icons.Filled.Add, contentDescription = null, tint = Accent, modifier = Modifier.size(18.dp))
-                                    Spacer(Modifier.width(4.dp))
-                                    Text("Add TCP connection", color = Accent)
-                                }
-                            }
-                            }
-                            if (supportsRNodeInterfaces) {
+                            if (runningNode == null && supportsRNodeInterfaces) {
                                 rnodeInterfaces.forEachIndexed { index, radio ->
                                     Column(
                                         modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(Canvas)
@@ -712,7 +682,7 @@ internal fun SettingsPage(
                                     ) {
                                         Row(verticalAlignment = Alignment.CenterVertically) {
                                             Text("RNode radio ${index + 1}", modifier = Modifier.weight(1f), color = Ink, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                                            if (!isRunning && !isStarting) {
+                                            if (!isStarting) {
                                                 TextButton(onClick = {
                                                     onDismissKeyboard()
                                                     rnodeInterfaces = rnodeInterfaces.filterIndexed { radioIndex, _ -> radioIndex != index }
@@ -730,94 +700,19 @@ internal fun SettingsPage(
                                                 }
                                                 connectionInputError = null
                                             },
-                                            locked = isRunning || isStarting,
+                                            locked = isStarting,
                                             supportsBleRNodes = supportsBleRNodes,
                                             picker = rnodeBlePicker,
                                             upgradeNote = rnodeUpgradeNote,
                                             onDismissKeyboard = onDismissKeyboard,
                                         )
-                                        OutlinedTextField(
-                                            value = radio.frequencyHz.takeIf { it > 0 }?.toString().orEmpty(),
-                                            onValueChange = { value ->
-                                                if (value.all(Char::isDigit)) {
-                                                    rnodeInterfaces = rnodeInterfaces.mapIndexed { radioIndex, old ->
-                                                        if (radioIndex == index) old.copy(frequencyHz = value.toLongOrNull() ?: 0L) else old
-                                                    }
-                                                    connectionInputError = null
-                                                }
-                                            },
-                                            modifier = Modifier.fillMaxWidth(),
-                                            label = { Text("Radio frequency (Hz)") },
-                                            singleLine = true,
-                                            enabled = !isRunning && !isStarting,
-                                        )
+                                        RNodeRadioFields(radio, enabled = !isStarting) { changed ->
+                                            rnodeInterfaces = rnodeInterfaces.mapIndexed { radioIndex, old ->
+                                                if (radioIndex == index) changed else old
+                                            }
+                                            connectionInputError = null
+                                        }
                                         val bandwidthError = rnodeBandwidthValidationError(radio.bandwidthHz)
-                                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                            OutlinedTextField(
-                                                value = radio.bandwidthHz.toString(),
-                                                onValueChange = { value ->
-                                                    if (value.all(Char::isDigit)) {
-                                                        rnodeInterfaces = rnodeInterfaces.mapIndexed { radioIndex, old ->
-                                                            if (radioIndex == index) old.copy(bandwidthHz = value.toIntOrNull() ?: 0) else old
-                                                        }
-                                                        connectionInputError = null
-                                                    }
-                                                },
-                                                modifier = Modifier.weight(1f),
-                                                label = { Text("Bandwidth (Hz)") },
-                                                isError = bandwidthError != null,
-                                                singleLine = true,
-                                                enabled = !isRunning && !isStarting,
-                                            )
-                                            OutlinedTextField(
-                                                value = radio.txPowerDbm.toString(),
-                                                onValueChange = { value ->
-                                                    if (value.all(Char::isDigit)) {
-                                                        rnodeInterfaces = rnodeInterfaces.mapIndexed { radioIndex, old ->
-                                                            if (radioIndex == index) old.copy(txPowerDbm = value.toIntOrNull() ?: 0) else old
-                                                        }
-                                                        connectionInputError = null
-                                                    }
-                                                },
-                                                modifier = Modifier.weight(1f),
-                                                label = { Text("TX power (dBm)") },
-                                                singleLine = true,
-                                                enabled = !isRunning && !isStarting,
-                                            )
-                                        }
-                                        bandwidthError?.let { Text(it, color = ErrorText, fontSize = 10.sp) }
-                                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                            OutlinedTextField(
-                                                value = radio.spreadingFactor.toString(),
-                                                onValueChange = { value ->
-                                                    if (value.all(Char::isDigit)) {
-                                                        rnodeInterfaces = rnodeInterfaces.mapIndexed { radioIndex, old ->
-                                                            if (radioIndex == index) old.copy(spreadingFactor = value.toIntOrNull() ?: 0) else old
-                                                        }
-                                                        connectionInputError = null
-                                                    }
-                                                },
-                                                modifier = Modifier.weight(1f),
-                                                label = { Text("Spreading factor") },
-                                                singleLine = true,
-                                                enabled = !isRunning && !isStarting,
-                                            )
-                                            OutlinedTextField(
-                                                value = radio.codingRate.toString(),
-                                                onValueChange = { value ->
-                                                    if (value.all(Char::isDigit)) {
-                                                        rnodeInterfaces = rnodeInterfaces.mapIndexed { radioIndex, old ->
-                                                            if (radioIndex == index) old.copy(codingRate = value.toIntOrNull() ?: 0) else old
-                                                        }
-                                                        connectionInputError = null
-                                                    }
-                                                },
-                                                modifier = Modifier.weight(1f),
-                                                label = { Text("Coding rate (5–8)") },
-                                                singleLine = true,
-                                                enabled = !isRunning && !isStarting,
-                                            )
-                                        }
                                         // An RNode that is not chosen yet is not an error until a start is tried.
                                         radio.validationError(supportsBleRNodes)?.takeIf { validationError ->
                                             val showConnectionError = validationError != RNodeBleText.CHOOSE_BEFORE_START ||
@@ -829,35 +724,50 @@ internal fun SettingsPage(
                                         }
                                     }
                                 }
-                                Text(
-                                    "Set frequency, bandwidth, power, and spreading factor to match your RNode network and local radio rules. These settings control the radio itself.",
-                                    color = Muted,
-                                    fontSize = 10.sp,
-                                    lineHeight = 14.sp,
-                                )
-                                if (!isRunning && !isStarting) {
-                                    TextButton(onClick = {
-                                        onDismissKeyboard()
-                                        if (tcpPeers.size == 1 && tcpPeers.single().host.isBlank()) {
-                                            tcpPeers = emptyList()
-                                        }
-                                        rnodeInterfaces = rnodeInterfaces + ReticulumRNodeInterface(
-                                            port = "",
-                                            frequencyHz = 0L,
-                                            bandwidthHz = 125_000,
-                                            txPowerDbm = 0,
-                                            spreadingFactor = 7,
-                                            codingRate = 5,
-                                        )
-                                        connectionInputError = null
-                            }) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(Icons.Filled.Add, contentDescription = null, tint = Accent, modifier = Modifier.size(18.dp))
-                                    Spacer(Modifier.width(4.dp))
-                                    Text("Add RNode interface", color = Accent)
-                                }
                             }
-                                }
+                            TextButton(
+                                enabled = nodeSupported && !isStarting,
+                                onClick = {
+                                    onDismissKeyboard()
+                                    showAddConnection = true
+                                },
+                            ) {
+                                Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("Add connection")
+                            }
+                            Text(
+                                when {
+                                    isRunning && supportsRNodeInterfaces -> "Set up a TCP peer or RNode for the next node start."
+                                    isRunning -> "Set up a TCP peer for the next node start."
+                                    supportsRNodeInterfaces -> "Set up a TCP peer or an RNode radio."
+                                    else -> "Set up a TCP peer using its host and port."
+                                },
+                                color = Muted,
+                                fontSize = 11.sp,
+                            )
+                            if (showAddConnection && !isStarting) {
+                                AddNetworkConnectionDialog(
+                                    tcpPeers = nodeConfigDraft.tcpPeers + runningNode?.tcpPeers.orEmpty(),
+                                    radios = nodeConfigDraft.rnodeInterfaces + runningNode?.rnodeInterfaces.orEmpty(),
+                                    supportsReticulumProtocol = supportsReticulumProtocol,
+                                    supportsRNodeInterfaces = supportsRNodeInterfaces,
+                                    supportsBleRNodes = supportsBleRNodes,
+                                    picker = rnodeBlePicker,
+                                    nodeRunning = isRunning,
+                                    onAddPeer = { peer ->
+                                        tcpPeers = tcpPeers.withoutEmptyDefaultTcpPeer() + peer
+                                        connectionInputError = null
+                                        showAddConnection = false
+                                    },
+                                    onAddRadio = { radio ->
+                                        tcpPeers = tcpPeers.withoutEmptyDefaultTcpPeer()
+                                        rnodeInterfaces = rnodeInterfaces + radio
+                                        connectionInputError = null
+                                        showAddConnection = false
+                                    },
+                                    onDismiss = { showAddConnection = false },
+                                )
                             }
                             if (supportsBlePeering) {
                                 Row(
@@ -868,9 +778,7 @@ internal fun SettingsPage(
                                             role = Role.Switch,
                                         ) { enabled ->
                                             onDismissKeyboard()
-                                            if (enabled && tcpPeers.size == 1 && tcpPeers.single().host.isBlank()) {
-                                                tcpPeers = emptyList()
-                                            }
+                                            if (enabled) tcpPeers = tcpPeers.withoutEmptyDefaultTcpPeer()
                                             blePeeringEnabled = enabled
                                             connectionInputError = null
                                         }
@@ -878,8 +786,8 @@ internal fun SettingsPage(
                                     verticalAlignment = Alignment.CenterVertically,
                                 ) {
                                     Column(Modifier.weight(1f)) {
-                                        Text("Bluetooth peers", color = Ink, fontSize = 13.sp, fontWeight = FontWeight.Medium)
-                                        Text("Connect directly to nearby Reticulum devices over Bluetooth.", color = Muted, fontSize = 11.sp)
+                                        Text("Nearby Bluetooth peers", color = Ink, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                                        Text("Peer directly with nearby Reticulum devices, without an RNode radio.", color = Muted, fontSize = 11.sp)
                                     }
                                     SettingsSwitch(checked = blePeeringEnabled, enabled = !isRunning && !isStarting)
                                 }
@@ -908,15 +816,8 @@ internal fun SettingsPage(
                                 state.rnodeInterfaces.isNotEmpty() && state.tcpPeers.isNotEmpty() ->
                                     "${state.onlineTcpPeerIds.size} of ${state.tcpPeers.size} TCP connections online; " +
                                         "${state.onlineRNodePorts.size} of ${state.rnodeInterfaces.size} RNode radios online."
-                                state.rnodeInterfaces.isNotEmpty() -> "${state.onlineRNodePorts.size} of ${state.rnodeInterfaces.size} RNode radios online. " +
-                                    state.rnodeInterfaces.joinToString { radio ->
-                                        val saved = rnodeInterfaces.firstOrNull { it.id == radio.id } ?: radio
-                                        "${rnodeDisplayName(saved)} ${if (radio.id in state.onlineRNodePorts) "(online)" else "(retrying)"}" }
-                                state.tcpPeers.isNotEmpty() -> "${state.onlineTcpPeerIds.size} of ${state.tcpPeers.size} TCP connections online. " +
-                                    (if (supportsReticulumProtocol) "" else "Socket check only; RNS traffic is not implemented on iOS. ") +
-                                    state.tcpPeers.joinToString {
-                                        "${it.host}:${it.port} ${if (it.id in state.onlineTcpPeerIds) "(online)" else if (supportsReticulumProtocol) "(retrying)" else "(offline)"}"
-                                    }
+                                state.rnodeInterfaces.isNotEmpty() -> "${state.onlineRNodePorts.size} of ${state.rnodeInterfaces.size} RNode radios online."
+                                state.tcpPeers.isNotEmpty() -> "${state.onlineTcpPeerIds.size} of ${state.tcpPeers.size} TCP connections online."
                                 state.blePeeringEnabled -> ""
                                 else -> "RNS node is running without a configured interface."
                             }.let { interfaces ->

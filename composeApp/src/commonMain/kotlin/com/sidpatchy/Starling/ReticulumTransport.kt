@@ -146,6 +146,13 @@ sealed interface ReticulumNodeState {
     data class Unavailable(val reason: String) : ReticulumNodeState
 }
 
+/** Only the interfaces on the currently running node can indicate a lost TCP connection. */
+internal fun ReticulumNodeState.Running.needsTcpRecovery(): Boolean {
+    val wifiRadios = rnodeInterfaces.filter { rnodeConnectionType(it.port) == RNodeConnectionType.WIFI }
+    return (tcpPeers.isNotEmpty() || wifiRadios.isNotEmpty()) &&
+        onlineTcpPeerIds.isEmpty() && wifiRadios.none { it.id in onlineRNodePorts }
+}
+
 /** Platform-specific lifecycle for the local RNS runtime. */
 interface ReticulumNodeController {
     val state: StateFlow<ReticulumNodeState>

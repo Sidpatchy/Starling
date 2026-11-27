@@ -82,6 +82,21 @@ internal fun RNodeConnectionEditor(
             }
         }
     }
+    if (type == RNodeConnectionType.BLUETOOTH) {
+        if (picker != null) RNodeBluetoothDevice(radio, onRadioChange, locked, picker, upgradeNote, onDismissKeyboard)
+    } else {
+        RNodeEndpointField(type, radio, locked, onRadioChange)
+    }
+    if (locked) Text("Stop the node to change the RNode.", color = Muted, fontSize = 11.sp)
+}
+
+@Composable
+internal fun RNodeEndpointField(
+    type: RNodeConnectionType,
+    radio: ReticulumRNodeInterface,
+    locked: Boolean,
+    onRadioChange: (ReticulumRNodeInterface) -> Unit,
+) {
     when (type) {
         RNodeConnectionType.WIFI -> OutlinedTextField(
             value = rnodeWifiHost(radio.port),
@@ -108,10 +123,8 @@ internal fun RNodeConnectionEditor(
             singleLine = true,
             enabled = !locked,
         )
-        RNodeConnectionType.BLUETOOTH ->
-            if (picker != null) RNodeBluetoothDevice(radio, onRadioChange, locked, picker, upgradeNote, onDismissKeyboard)
+        RNodeConnectionType.BLUETOOTH -> Unit
     }
-    if (locked) Text("Stop the node to change the RNode.", color = Muted, fontSize = 11.sp)
 }
 
 private data class RNodePickerRequest(val pairDeviceId: String? = null, val pairDeviceName: String = "")
@@ -253,7 +266,7 @@ private fun RNodeBluetoothDevice(
  * RNode stays saved until [onChosen] reports a new one.
  */
 @Composable
-private fun RNodeScanDialog(
+internal fun RNodeScanDialog(
     picker: RNodeBlePicker,
     savedId: String?,
     pairDeviceId: String?,
@@ -327,7 +340,10 @@ private fun RNodeScanDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
-            Text(if (device == null) "Choose your RNode" else "Pair with ${device.second.ifBlank { "RNode" }}", color = Ink)
+            Text(
+                if (device == null) "Find a Bluetooth RNode" else "Set up ${device.second.ifBlank { "RNode" }}",
+                color = Ink,
+            )
         },
         text = {
             Column(
@@ -335,17 +351,11 @@ private fun RNodeScanDialog(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 if (device == null) {
-                    Text("Turn the RNode on and keep it close.", color = Muted, fontSize = 12.sp)
-                    if (!android && savedId == null) {
-                        Text(
-                            "iOS may ask to pair with the RNode the first time Starling connects to it. If iOS asks, " +
-                                "enter the PIN shown on the RNode's screen. Starling can't start pairing itself or tell " +
-                                "whether the RNode is already paired.",
-                            color = Muted,
-                            fontSize = 11.sp,
-                            lineHeight = 16.sp,
-                        )
-                    }
+                    Text(
+                        "Turn on your RNode and keep it nearby. Tap its name when it appears.",
+                        color = Muted,
+                        fontSize = 12.sp,
+                    )
                     rows.forEach { row ->
                         RNodeScanRowItem(
                             row = row,
@@ -388,6 +398,13 @@ private fun RNodeScanDialog(
                         // Pairing is not required to save an RNode; it may accept connections without it.
                         TextButton(onClick = { onChosen(device.first, device.second, false) }) { Text("Skip pairing") }
                     }
+                    if (pairDeviceId == null) {
+                        TextButton(onClick = {
+                            picker.cancelPairing()
+                            selected = null
+                            search()
+                        }) { Text("Choose another RNode") }
+                    }
                     TextButton(onClick = onDismiss) { Text("Cancel") }
                 }
             } else {
@@ -397,7 +414,9 @@ private fun RNodeScanDialog(
                             TextButton(onClick = { picker.stopScan() }) { Text("Stop", color = Accent) }
                         } else if (scanStatus != RNodeBleScanStatus.Unsupported) {
                             TextButton(
-                                enabled = now - lastSearchAt >= RESCAN_DEBOUNCE_MILLIS,
+                                enabled = now - lastSearchAt >= RESCAN_DEBOUNCE_MILLIS &&
+                                    RNodeBleText.scanBlockerAction(scanStatus, picker.platform) == null &&
+                                    scanStatus != RNodeBleScanStatus.BluetoothOff,
                                 onClick = { search() },
                             ) { Text("Rescan") }
                         }
@@ -427,7 +446,7 @@ private fun RNodePairingStep(name: String, pairing: RNodeBlePairingState, platfo
                 Text("Waiting for pairing...", color = Muted, fontSize = 12.sp)
             } else {
                 Text(
-                    "Connecting to $name. If iOS asks for a PIN, enter the one shown on your RNode's screen.",
+                    "Checking $name. If iOS asks to pair, enter the PIN shown on your RNode’s screen.",
                     color = Ink,
                     fontSize = 12.sp,
                     lineHeight = 17.sp,
@@ -435,7 +454,7 @@ private fun RNodePairingStep(name: String, pairing: RNodeBlePairingState, platfo
             }
             is RNodeBlePairingState.AlreadyPaired -> Text("Already paired", color = Ink, fontSize = 13.sp)
             is RNodeBlePairingState.Paired -> Text("Paired with $name.", color = Ink, fontSize = 13.sp)
-            is RNodeBlePairingState.Ready -> Text("Connected to $name. This RNode is ready.", color = Ink, fontSize = 13.sp)
+            is RNodeBlePairingState.Ready -> Text("$name is ready for setup.", color = Ink, fontSize = 13.sp)
             is RNodeBlePairingState.Failed ->
                 Text(RNodeBleText.pairingFailureMessage(pairing, platform), color = ErrorText, fontSize = 12.sp, lineHeight = 17.sp)
         }
