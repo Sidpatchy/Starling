@@ -751,6 +751,7 @@ internal fun SettingsPage(
                                             singleLine = true,
                                             enabled = !isRunning && !isStarting,
                                         )
+                                        val bandwidthError = rnodeBandwidthValidationError(radio.bandwidthHz)
                                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                             OutlinedTextField(
                                                 value = radio.bandwidthHz.toString(),
@@ -764,6 +765,7 @@ internal fun SettingsPage(
                                                 },
                                                 modifier = Modifier.weight(1f),
                                                 label = { Text("Bandwidth (Hz)") },
+                                                isError = bandwidthError != null,
                                                 singleLine = true,
                                                 enabled = !isRunning && !isStarting,
                                             )
@@ -783,6 +785,7 @@ internal fun SettingsPage(
                                                 enabled = !isRunning && !isStarting,
                                             )
                                         }
+                                        bandwidthError?.let { Text(it, color = ErrorText, fontSize = 10.sp) }
                                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                             OutlinedTextField(
                                                 value = radio.spreadingFactor.toString(),
@@ -817,9 +820,10 @@ internal fun SettingsPage(
                                         }
                                         // An RNode that is not chosen yet is not an error until a start is tried.
                                         radio.validationError(supportsBleRNodes)?.takeIf { validationError ->
-                                            validationError != RNodeBleText.CHOOSE_BEFORE_START ||
+                                            val showConnectionError = validationError != RNodeBleText.CHOOSE_BEFORE_START ||
                                                 validationError == connectionInputError ||
                                                 validationError == (nodeState as? ReticulumNodeState.Failed)?.message
+                                            validationError != bandwidthError && showConnectionError
                                         }?.let { validationError ->
                                             Text(validationError, color = ErrorText, fontSize = 10.sp)
                                         }

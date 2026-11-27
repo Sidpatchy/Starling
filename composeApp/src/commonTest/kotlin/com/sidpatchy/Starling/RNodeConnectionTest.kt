@@ -331,6 +331,25 @@ class RNodeConnectionTest {
     }
 
     @Test
+    fun wideRNodeBandwidthsAreAcceptedOverBluetoothAndTcp() {
+        for (port in listOf("ble://$address", "tcp://rnode.local")) {
+            val configured = radio.copy(port = port, frequencyHz = 2_440_000_000L)
+            for (bandwidthHz in listOf(406_250, 500_000, 812_500, 1_625_000)) {
+                val supported = configured.copy(bandwidthHz = bandwidthHz)
+                assertNull(supported.validationError(supportsBleRNodes = true))
+                assertNull(ReticulumNodeConfig(rnodeInterfaces = listOf(supported)).validationError(supportsBleRNodes = true))
+            }
+            for (bandwidthHz in listOf(7_799, 1_625_001)) {
+                val unsupported = configured.copy(bandwidthHz = bandwidthHz)
+                val error = assertNotNull(unsupported.validationError(supportsBleRNodes = true))
+                assertTrue("1.625 MHz" in error)
+                val config = ReticulumNodeConfig(rnodeInterfaces = listOf(unsupported))
+                assertEquals(error, config.validationError(supportsBleRNodes = true))
+            }
+        }
+    }
+
+    @Test
     fun scanStatesUseTheApprovedCopy() {
         val android = RNodeBlePlatform.ANDROID
         val ios = RNodeBlePlatform.IOS

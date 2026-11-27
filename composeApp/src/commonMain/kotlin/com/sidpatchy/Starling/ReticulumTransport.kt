@@ -29,6 +29,9 @@ data class ReticulumTcpPeer(
     }
 }
 
+internal fun rnodeBandwidthValidationError(bandwidthHz: Int): String? =
+    if (bandwidthHz in 7_800..1_625_000) null else "RNode bandwidth must be between 7.8 kHz and 1.625 MHz."
+
 /** A host-controlled RNode radio attached over serial, TCP, or BLE. */
 data class ReticulumRNodeInterface(
     val port: String,
@@ -45,17 +48,20 @@ data class ReticulumRNodeInterface(
     val id: String get() = port.trim().lowercase()
 
     /** [supportsBleRNodes] is true on phones, where a blank connection is an unchosen Bluetooth RNode. */
-    fun validationError(supportsBleRNodes: Boolean = false): String? = when {
-        port.isBlank() -> if (supportsBleRNodes) RNodeBleText.CHOOSE_BEFORE_START else "Enter the RNode's serial port."
-        port.any { it.code < 32 || it.code == 127 } -> "The RNode connection cannot contain control characters."
-        rnodeConnectionType(port) == RNodeConnectionType.WIFI && rnodeWifiHost(port).isBlank() ->
-            "Enter the RNode's host name or IP address."
-        frequencyHz !in 137_000_000L..3_000_000_000L -> "RNode frequency must be between 137 MHz and 3 GHz."
-        bandwidthHz !in 7_800..1_625_000 -> "RNode bandwidth must be between 7.8 kHz and 1.625 MHz."
-        txPowerDbm !in 0..37 -> "RNode transmit power must be between 0 and 37 dBm."
-        spreadingFactor !in 5..12 -> "RNode spreading factor must be between 5 and 12."
-        codingRate !in 5..8 -> "RNode coding rate must be between 5 and 8."
-        else -> null
+    fun validationError(supportsBleRNodes: Boolean = false): String? {
+        val bandwidthError = rnodeBandwidthValidationError(bandwidthHz)
+        return when {
+            port.isBlank() -> if (supportsBleRNodes) RNodeBleText.CHOOSE_BEFORE_START else "Enter the RNode's serial port."
+            port.any { it.code < 32 || it.code == 127 } -> "The RNode connection cannot contain control characters."
+            rnodeConnectionType(port) == RNodeConnectionType.WIFI && rnodeWifiHost(port).isBlank() ->
+                "Enter the RNode's host name or IP address."
+            frequencyHz !in 137_000_000L..3_000_000_000L -> "RNode frequency must be between 137 MHz and 3 GHz."
+            bandwidthError != null -> bandwidthError
+            txPowerDbm !in 0..37 -> "RNode transmit power must be between 0 and 37 dBm."
+            spreadingFactor !in 5..12 -> "RNode spreading factor must be between 5 and 12."
+            codingRate !in 5..8 -> "RNode coding rate must be between 5 and 8."
+            else -> null
+        }
     }
 }
 
@@ -95,8 +101,7 @@ data class ReticulumNodeConfig(
                 return "For each peer, enter both IFAC values or leave both blank."
             }
         }
-        val invalidRNode = rnodeInterfaces.firstOrNull { it.validationError(supportsBleRNodes) != null }
-        if (invalidRNode != null) return invalidRNode.validationError(supportsBleRNodes)
+        rnodeInterfaces.firstNotNullOfOrNull { it.validationError(supportsBleRNodes) }?.let { return it }
         if (rnodeInterfaces.map { it.id }.distinct().size != rnodeInterfaces.size) {
             return "Each RNode interface must use a unique connection."
         }

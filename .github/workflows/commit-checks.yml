@@ -32,6 +32,9 @@ jobs:
       - name: Test workflow scripts
         run: python -m unittest discover -s .github/scripts -p 'test_*.py' -v
 
+      - name: Test Android dependency patch
+        run: python -m unittest discover -s packaging/android -v
+
   desktop-tests:
     name: Kotlin desktop tests
     runs-on: ubuntu-latest
