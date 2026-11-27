@@ -180,6 +180,7 @@ class PreviewIsolationTest {
             bubbleStyle = true,
             denseMessages = true,
             timestampTimeZone = TimestampTimeZonePreference.UTC,
+            palettePreference = PalettePreference.CLASSIC,
         )
 
         repository.saveUiSettings(settings)

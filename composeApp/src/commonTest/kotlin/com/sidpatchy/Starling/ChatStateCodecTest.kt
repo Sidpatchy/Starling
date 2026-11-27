@@ -11,7 +11,7 @@ class ChatStateCodecTest {
         val state = PersistedChatState(previewMode = false, preferredHubNetworkId = "hub")
 
         assertEquals(
-            "STARLING_CHAT_STATE_V13\nP\tMA==\nU\taHVi\nG\tU3Rhcmxpbmc=\nA\tU1lTVEVN\tMA==\tMA==\tU1lTVEVN\tMA==\n",
+            "STARLING_CHAT_STATE_V13\nP\tMA==\nU\taHVi\nG\tU3Rhcmxpbmc=\nA\tU1lTVEVN\tMA==\tMA==\tU1lTVEVN\tMA==\tSVJJUw==\n",
             ChatStateCodec.encode(state),
         )
     }
@@ -62,10 +62,32 @@ class ChatStateCodecTest {
                 bubbleStyle = true,
                 denseMessages = true,
                 timestampTimeZone = TimestampTimeZonePreference.UTC,
+                palettePreference = PalettePreference.CLASSIC,
             ),
         )
 
         assertEquals(state, ChatStateCodec.decode(ChatStateCodec.encode(state)))
+    }
+
+    @Test
+    fun paletteRenamesKeepTheSavedColorsAndBrightness() {
+        val oldState = "STARLING_CHAT_STATE_V13\nA\tREFSSw==\tMQ==\tMA==\tVVRD\tMQ=="
+        val expected = StarlingUiSettings(
+            themePreference = ThemePreference.DARK,
+            bubbleStyle = true,
+            timestampTimeZone = TimestampTimeZonePreference.UTC,
+            reduceMotion = true,
+            palettePreference = PalettePreference.IRIS,
+        )
+
+        assertEquals(expected, ChatStateCodec.decode("$oldState\n")?.uiSettings)
+        for (oldKey in listOf("ROSE_PINE", "CLASSIC", "FUTURE")) {
+            assertEquals(expected, ChatStateCodec.decode("$oldState\t${Base64TextCodec.encode(oldKey)}\n")?.uiSettings)
+        }
+        assertEquals(
+            expected.copy(palettePreference = PalettePreference.CLASSIC),
+            ChatStateCodec.decode("$oldState\t${Base64TextCodec.encode("SLATE")}\n")?.uiSettings,
+        )
     }
 
     @Test

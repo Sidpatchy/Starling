@@ -220,7 +220,7 @@ private fun NearbyAvatar(displayName: String, size: Dp) {
 
 @Composable
 private fun NearbyPeerRow(row: NearbyRow, nowMillis: Long, onAdd: () -> Unit, onDetails: () -> Unit) {
-    val darkTheme = LocalStarlingPalette.current == DarkPalette
+    val darkTheme = LocalStarlingPalette.current.isDark
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Row(
             modifier = Modifier.weight(1f).clip(RoundedCornerShape(9.dp))
@@ -311,7 +311,7 @@ internal fun NearbyPeerDialog(
     onDismiss: () -> Unit,
 ) {
     val peer = row.peer
-    val darkTheme = LocalStarlingPalette.current == DarkPalette
+    val darkTheme = LocalStarlingPalette.current.isDark
     val timeZonePreference = LocalTimestampTimeZonePreference.current
     val clipboard = LocalClipboardManager.current
     var copied by remember { mutableStateOf(false) }

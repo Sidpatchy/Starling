@@ -101,8 +101,10 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.preferredFrameRate
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -112,6 +114,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.rememberTextMeasurer
@@ -120,6 +123,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
@@ -348,6 +352,7 @@ fun StarlingApp(
     var addChannelToNetworkId by rememberSaveable { mutableStateOf<String?>(null) }
     var selectedDirectMessageId by rememberSaveable { mutableStateOf<String?>(null) }
     var localThemePreference by rememberSaveable { mutableStateOf(ThemePreference.SYSTEM) }
+    var localPalettePreference by rememberSaveable { mutableStateOf(PalettePreference.IRIS) }
     var localBubbleStyle by rememberSaveable { mutableStateOf(false) }
     var localDenseMessages by rememberSaveable { mutableStateOf(false) }
     var showNetworkDiagnostics by remember { mutableStateOf(false) }
@@ -355,13 +360,19 @@ fun StarlingApp(
         liveChatRepository?.uiSettings ?: flowOf(StarlingUiSettings())
     }.collectAsState(initial = liveChatRepository?.uiSettings?.value ?: StarlingUiSettings())
     val uiSettings = if (liveChatRepository == null) {
-        StarlingUiSettings(localThemePreference, localBubbleStyle, localDenseMessages)
+        StarlingUiSettings(
+            themePreference = localThemePreference,
+            palettePreference = localPalettePreference,
+            bubbleStyle = localBubbleStyle,
+            denseMessages = localDenseMessages,
+        )
     } else {
         repositoryUiSettings
     }
     val updateUiSettings: (StarlingUiSettings) -> Unit = { settings ->
         if (liveChatRepository == null) {
             localThemePreference = settings.themePreference
+            localPalettePreference = settings.palettePreference
             localBubbleStyle = settings.bubbleStyle
             localDenseMessages = settings.denseMessages
         } else {
@@ -691,6 +702,8 @@ fun StarlingApp(
                 showSectionIndex = showSettingsIndex,
                 themePreference = uiSettings.themePreference,
                 onThemeChange = { updateUiSettings(uiSettings.copy(themePreference = it)) },
+                palettePreference = uiSettings.palettePreference,
+                onPaletteChange = { updateUiSettings(uiSettings.copy(palettePreference = it)) },
                 bubbleStyle = uiSettings.bubbleStyle,
                 onBubbleStyleChange = { updateUiSettings(uiSettings.copy(bubbleStyle = it)) },
                 denseMessages = uiSettings.denseMessages,
@@ -743,6 +756,7 @@ fun StarlingApp(
 
     StarlingTheme(
         preference = uiSettings.themePreference,
+        palettePreference = uiSettings.palettePreference,
         timestampTimeZonePreference = uiSettings.timestampTimeZone,
         reducedMotion = uiSettings.reduceMotion,
     ) {
@@ -1368,7 +1382,7 @@ private fun DirectMessageContent(
     }
     Column(Modifier.fillMaxSize().background(Canvas)) {
         Row(
-            modifier = Modifier.fillMaxWidth().height(68.dp).background(Paper)
+            modifier = Modifier.fillMaxWidth().height(68.dp).background(Chrome)
                 .padding(horizontal = if (compact) 8.dp else 20.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -1379,8 +1393,8 @@ private fun DirectMessageContent(
             MemberAvatar(member, size = 34.dp)
             Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
-                val palette = LocalStarlingPalette.current
-                Text(member.displayName, color = ircNickTextColor(member.displayName, palette == DarkPalette), fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                val isDark = LocalStarlingPalette.current.isDark
+                Text(member.displayName, color = ircNickTextColor(member.displayName, isDark), fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
                 Text("Direct message", color = Muted, fontSize = 11.sp)
             }
             TextButton(onClick = onMemberClick) { Text("Profile", color = Accent) }
@@ -1396,7 +1410,7 @@ private fun DirectMessageContent(
                     Spacer(Modifier.height(14.dp))
                     Text("No messages yet", color = Ink, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
                     Spacer(Modifier.height(5.dp))
-                    Text("Send a message to start this conversation.", color = Muted, fontSize = 12.sp)
+                    Text("Say hi to ${member.displayName}.", color = Muted, fontSize = 12.sp, textAlign = TextAlign.Center)
                 }
             }
         } else {
@@ -1482,8 +1496,8 @@ private fun ContactRequestsPage(
                             MemberAvatar(request.sender, size = 38.dp)
                             Spacer(Modifier.width(11.dp))
                             Column(Modifier.weight(1f)) {
-                                val palette = LocalStarlingPalette.current
-                                Text(request.sender.displayName, color = ircNickTextColor(request.sender.displayName, palette == DarkPalette), fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                                val isDark = LocalStarlingPalette.current.isDark
+                                Text(request.sender.displayName, color = ircNickTextColor(request.sender.displayName, isDark), fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
                                 Text(
                                     "Unknown sender · ${displayChatTime(request.time, request.timestampMillis, timeZonePreference)}",
                                     color = Muted,
@@ -1495,7 +1509,7 @@ private fun ContactRequestsPage(
                         Text(request.message, color = Ink, fontSize = 13.sp, lineHeight = 19.sp)
                         request.sender.address?.takeUnless { request.isPreview }?.let {
                             Spacer(Modifier.height(7.dp))
-                            Text("LXMF address: $it", color = Muted, fontSize = 10.sp)
+                            Text("LXMF address: $it", color = Muted, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
                         }
                         Spacer(Modifier.height(12.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -1546,7 +1560,7 @@ private fun AddContactDialog(
                         onValueChange = {},
                         label = { Text("LXMF address") },
                         readOnly = true,
-                        textStyle = TextStyle(fontSize = 11.sp),
+                        textStyle = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 11.sp),
                     )
                 } else if (!previewMode) {
                     OutlinedTextField(
@@ -1554,6 +1568,7 @@ private fun AddContactDialog(
                         onValueChange = { address = it },
                         label = { Text("LXMF address") },
                         isError = addressError,
+                        textStyle = LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace),
                         supportingText = {
                             Text(
                                 if (addressError) "Enter a 32-character hexadecimal address or lxmf:// address."
@@ -1635,6 +1650,8 @@ private fun EmptyNetworkContent(
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
+        StarlingMark(40.dp)
+        Spacer(Modifier.height(12.dp))
         Text("No channels to show", color = Ink, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
         Spacer(Modifier.height(8.dp))
         Text(
@@ -1681,13 +1698,7 @@ private fun WelcomeScreen(
             Modifier.size(66.dp).clip(RoundedCornerShape(16.dp)).background(PaleAccent),
             contentAlignment = Alignment.Center,
         ) {
-            Text(
-                "S",
-                color = Accent,
-                fontSize = 32.sp,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.semantics { contentDescription = "Starling" },
-            )
+            StarlingMark(46.dp)
         }
         Spacer(Modifier.height(24.dp))
         Text(
@@ -1893,6 +1904,7 @@ private fun ManageChannelDialog(
                                 onValueChange = { newKey = it },
                                 enabled = canSendRoomCommands,
                                 label = { Text("New room key") },
+                                textStyle = LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace),
                                 singleLine = true,
                                 modifier = Modifier.fillMaxWidth(),
                             )
@@ -2064,7 +2076,7 @@ private fun RoomSidebar(
         previewMode -> "Live identity hidden in preview" to Muted
         rrcState is ReticulumConnectionState.Connected ->
             "Connected to ${rrcState.hubName?.takeIf(String::isNotBlank) ?: "RRC hub"}" to Color(0xFF48A868)
-        rrcState is ReticulumConnectionState.Failed -> "Hub connection failed" to ErrorText
+        rrcState is ReticulumConnectionState.Failed -> "Hub connection failed" to ErrorIndicator
         rrcState is ReticulumConnectionState.Connecting || rrcState == ReticulumConnectionState.Starting ->
             "Connecting to hub" to Color(0xFFE1A448)
         nodeState is ReticulumNodeState.Running -> {
@@ -2079,7 +2091,7 @@ private fun RoomSidebar(
         }
         nodeState is ReticulumNodeState.Starting || nodeState is ReticulumNodeState.PreparingRuntime ->
             "Starting Reticulum" to Color(0xFFE1A448)
-        nodeState is ReticulumNodeState.Failed -> "Reticulum node failed" to ErrorText
+        nodeState is ReticulumNodeState.Failed -> "Reticulum node failed" to ErrorIndicator
         nodeState is ReticulumNodeState.Unavailable -> "Reticulum unavailable" to Muted
         else -> "Reticulum stopped" to Muted
     }
@@ -2088,8 +2100,7 @@ private fun RoomSidebar(
         modifier = Modifier
             .width(250.dp)
             .fillMaxHeight()
-            .background(Paper)
-            .border(width = 1.dp, color = Line),
+            .background(Chrome),
     ) {
         Row(
             modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)
@@ -2100,14 +2111,7 @@ private fun RoomSidebar(
                 Modifier.size(28.dp).clip(RoundedCornerShape(8.dp)).background(PaleAccent),
                 contentAlignment = Alignment.Center,
             ) {
-                Icon(
-                    painter = painterResource(
-                        if (LocalStarlingPalette.current == DarkPalette) Res.drawable.starling_dark else Res.drawable.starling_light,
-                    ),
-                    contentDescription = null,
-                    tint = Color.Unspecified,
-                    modifier = Modifier.size(21.dp),
-                )
+                StarlingMark(21.dp)
             }
             Spacer(Modifier.width(9.dp))
             Text(
@@ -2442,7 +2446,7 @@ private fun NetworkStatusDialog(
                         network.hubDestination?.let { destination ->
                             Text("RRC destination", color = Accent, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
                             SelectionContainer {
-                                Text(destination, color = Muted, fontSize = 11.sp)
+                                Text(destination, color = Muted, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
                             }
                         }
                         Text("Reticulum node", color = Accent, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
@@ -2595,6 +2599,16 @@ private fun NetworkRow(
 }
 
 @Composable
+private fun StarlingMark(size: Dp) {
+    Icon(
+        painter = painterResource(if (LocalStarlingPalette.current.isDark) Res.drawable.starling_dark else Res.drawable.starling_light),
+        contentDescription = null,
+        tint = Color.Unspecified,
+        modifier = Modifier.size(size),
+    )
+}
+
+@Composable
 private fun RoomRow(room: ChatRoom, selected: Boolean, onClick: () -> Unit, onManage: () -> Unit) {
     Row(
         modifier = Modifier
@@ -2649,7 +2663,7 @@ private fun ChatHeader(
     onOpenNavigation: () -> Unit,
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth().height(68.dp).background(Paper)
+        modifier = Modifier.fillMaxWidth().height(68.dp).background(Chrome)
             .padding(horizontal = if (compact) 10.dp else 22.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -2658,32 +2672,15 @@ private fun ChatHeader(
             Spacer(Modifier.width(6.dp))
         }
         Column(Modifier.weight(1f)) {
-            if (compact) {
-                Text("#${room.name}", color = Ink, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
-                Text(
-                    room.topic.ifBlank { networks.firstOrNull { it.id == room.networkId }?.name.orEmpty() },
-                    color = Muted,
-                    fontSize = 11.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            } else {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        networks.firstOrNull { it.id == room.networkId }?.name.orEmpty(),
-                        color = Muted,
-                        fontSize = 11.sp,
-                    )
-                    Text("  /  #${room.name}", color = Ink, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
-                }
-                Text(
-                    room.topic.ifBlank { "No topic set" },
-                    color = Muted,
-                    fontSize = 12.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(start = 20.dp),
-                )
+            Text(
+                "#${room.name}", color = Ink, fontWeight = FontWeight.SemiBold, fontSize = 17.sp,
+                maxLines = 1, overflow = TextOverflow.Ellipsis,
+            )
+            val networkName = networks.firstOrNull { it.id == room.networkId }?.name.orEmpty()
+            val subtitle = if (compact) room.topic.ifBlank { networkName }
+                else listOf(networkName, room.topic).filter { it.isNotBlank() }.joinToString(" · ")
+            if (subtitle.isNotBlank()) {
+                Text(subtitle, color = Muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
         Row(
@@ -2727,8 +2724,7 @@ private fun MembersPane(
     val panelModifier = if (drawer) {
         Modifier.width(282.dp).fillMaxHeight().background(Paper).padding(18.dp)
     } else {
-        Modifier.width(242.dp).fillMaxHeight().background(Paper)
-            .border(1.dp, Line).padding(16.dp)
+        Modifier.width(242.dp).fillMaxHeight().background(Paper).padding(16.dp)
     }
 
     Column(panelModifier.verticalScroll(rememberScrollState())) {
@@ -2794,7 +2790,7 @@ private fun MemberSectionLabel(label: String) {
 
 @Composable
 private fun MemberRow(member: ChatMember, isContact: Boolean, isOffline: Boolean = false, onClick: () -> Unit) {
-    val palette = LocalStarlingPalette.current
+    val isDark = LocalStarlingPalette.current.isDark
     Row(
         modifier = Modifier.fillMaxWidth().heightIn(min = InteractiveRowMinHeight).clip(RoundedCornerShape(9.dp))
             .clickable(enabled = !member.isSelf, role = Role.Button, onClick = onClick)
@@ -2806,7 +2802,7 @@ private fun MemberRow(member: ChatMember, isContact: Boolean, isOffline: Boolean
         Text(
             member.displayName,
             modifier = Modifier.weight(1f),
-            color = if (isOffline) Muted else ircNickTextColor(member.displayName, palette == DarkPalette),
+            color = if (isOffline) Muted else ircNickTextColor(member.displayName, isDark),
             fontSize = 12.sp,
             fontWeight = if (member.isSelf) FontWeight.Bold else FontWeight.Medium,
         )
@@ -2840,8 +2836,8 @@ private fun MemberProfileDialog(
                 MemberAvatar(member, size = 38.dp)
                 Spacer(Modifier.width(12.dp))
                 Column {
-                    val palette = LocalStarlingPalette.current
-                    Text(member.displayName, color = ircNickTextColor(member.displayName, palette == DarkPalette), fontWeight = FontWeight.SemiBold)
+                    val isDark = LocalStarlingPalette.current.isDark
+                    Text(member.displayName, color = ircNickTextColor(member.displayName, isDark), fontWeight = FontWeight.SemiBold)
                     Text("Reticulum member", color = Muted, fontSize = 11.sp)
                 }
             }
@@ -2892,11 +2888,10 @@ internal fun PreviewNotice(message: String) = ChatNoticeBanner(ConversationNotic
 
 @Composable
 private fun ChatNoticeBanner(notice: ConversationNotice) {
-    val isLightTheme = LocalStarlingPalette.current == LightPalette
-    val bannerBackground = if (notice.isError) Color(0x22C44545)
-        else if (isLightTheme) Color(0xFFFFF7E8) else Color(0xFF383226)
-    val bannerAccent = if (notice.isError) ErrorText else if (isLightTheme) Color(0xFF986520) else Color(0xFFE1B86A)
-    val bannerText = if (notice.isError) ErrorText else if (isLightTheme) Color(0xFF826B4B) else Color(0xFFC6B895)
+    val palette = LocalStarlingPalette.current
+    val bannerBackground = if (notice.isError) palette.errorBackground else palette.noticeBackground
+    val bannerAccent = if (notice.isError) palette.errorText else palette.noticeLabel
+    val bannerText = if (notice.isError) palette.errorText else palette.noticeText
     Row(
         modifier = Modifier.fillMaxWidth().background(bannerBackground)
             .semantics(mergeDescendants = true) {
@@ -3031,7 +3026,7 @@ private fun MessageRow(
     val palette = LocalStarlingPalette.current
     val timeZonePreference = LocalTimestampTimeZonePreference.current
     val displayTime = displayChatTime(message.time, message.timestampMillis, timeZonePreference)
-    val authorColor = ircNickTextColor(authorName, darkTheme = palette == DarkPalette)
+    val authorColor = ircNickTextColor(authorName, darkTheme = palette.isDark)
     val openAuthorProfile = if (member != null && !member.isSelf) onMemberClick else null
     val messageStyle = if (message.isAction) FontStyle.Italic else FontStyle.Normal
     val formattedMessage = remember(message.text, palette) { markdown(message.text, palette) }
@@ -3041,8 +3036,8 @@ private fun MessageRow(
         Text(
             text = formattedMessage,
             color = Ink,
-            fontSize = 13.sp,
-            lineHeight = if (denseMessages) 16.sp else 17.sp,
+            fontSize = if (denseMessages) 13.sp else 14.sp,
+            lineHeight = if (denseMessages) 16.sp else 19.sp,
             fontStyle = messageStyle,
         )
     }
@@ -3375,7 +3370,7 @@ private fun DeliveryStatusSlot(
     val (icon, color) = when (status) {
         ChatDeliveryStatus.QUEUED, ChatDeliveryStatus.SENDING -> Icons.Filled.Schedule to Muted
         ChatDeliveryStatus.SENT, ChatDeliveryStatus.DELIVERED -> Icons.Filled.Check to Accent
-        ChatDeliveryStatus.FAILED, ChatDeliveryStatus.REJECTED -> Icons.Filled.ErrorOutline to ErrorText
+        ChatDeliveryStatus.FAILED, ChatDeliveryStatus.REJECTED -> Icons.Filled.ErrorOutline to ErrorIndicator
     }
     Box(
         modifier = slot.clickable(
@@ -3432,6 +3427,7 @@ private fun MessageComposer(
     supportsSlashCommands: Boolean = true,
 ) {
     var draft by rememberSaveable { mutableStateOf("") }
+    var inputFocused by remember { mutableStateOf(false) }
     var selectedSlashSuggestionIndex by rememberSaveable { mutableStateOf(0) }
     val slashSuggestions = remember(draft, supportsSlashCommands) {
         if (supportsSlashCommands) slashCommandSuggestions(draft) else emptyList()
@@ -3510,14 +3506,14 @@ private fun MessageComposer(
                     modifier = Modifier.weight(1f)
                         .clip(RoundedCornerShape(14.dp))
                         .background(Paper)
-                        .border(1.dp, Line, RoundedCornerShape(14.dp))
+                        .border(1.dp, if (inputFocused) Accent else Line, RoundedCornerShape(14.dp))
                         .padding(horizontal = 16.dp, vertical = 14.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     BasicTextField(
                         value = draft,
                         onValueChange = { draft = limitChatMessageLength(it) },
-                        modifier = Modifier.weight(1f).semantics {
+                        modifier = Modifier.weight(1f).onFocusChanged { inputFocused = it.isFocused }.semantics {
                             contentDescription = "Message"
                         }.onPreviewKeyEvent { event ->
                             if (event.type != KeyEventType.KeyDown || slashSuggestions.isEmpty()) {
@@ -3543,9 +3539,13 @@ private fun MessageComposer(
                                 }
                             }
                         },
-                        textStyle = TextStyle(color = Ink, fontSize = 14.sp),
+                        textStyle = TextStyle(color = Ink, fontSize = 14.sp, fontFamily = LocalTextStyle.current.fontFamily),
+                        cursorBrush = SolidColor(Accent),
                         singleLine = true,
-                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                        keyboardOptions = KeyboardOptions(
+                            capitalization = KeyboardCapitalization.Sentences,
+                            imeAction = ImeAction.Send,
+                        ),
                         keyboardActions = KeyboardActions(onSend = {
                             if (!completeSelectedSlashCommand()) send()
                         }),
@@ -3590,7 +3590,11 @@ private fun MessageComposer(
 }
 
 internal fun ircNickTextColor(nickname: String, darkTheme: Boolean): Color =
-    hslColor(ircNickHue(nickname), saturation = 0.70f, lightness = if (darkTheme) 0.72f else 0.25f)
+    ircNickTextColorForHue(ircNickHue(nickname), darkTheme)
+
+// Keep low-contrast hues (dark blue and light yellow) readable on tinted surfaces too.
+internal fun ircNickTextColorForHue(hue: Float, darkTheme: Boolean): Color =
+    hslColor(hue, saturation = 0.70f, lightness = if (darkTheme) 0.79f else 0.23f)
 
 private fun nickAvatarColor(nickname: String): Color =
     hslColor(ircNickHue(nickname), saturation = 0.72f, lightness = 0.27f)

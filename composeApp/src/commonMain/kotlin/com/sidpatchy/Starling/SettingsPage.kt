@@ -21,6 +21,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.SegmentedButton
@@ -50,6 +51,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.preferredFrameRate
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
@@ -62,7 +64,7 @@ internal enum class SettingsSection(val label: String, val summary: String) {
     NETWORK("Network", "Reticulum node and connections"),
     MESSAGING("Messaging", "RRC rooms and LXMF direct messages"),
     IDENTITY("Identity", "Identity keys and nicknames"),
-    OPEN_SOURCE("Open source", "Licenses and acknowledgements"),
+    OPEN_SOURCE("Open source", "Licences and acknowledgements"),
 }
 
 internal enum class SettingsBackTarget {
@@ -94,9 +96,15 @@ private fun SettingsSwitch(checked: Boolean, enabled: Boolean = true) {
 }
 
 @Composable
-private fun ColorThemePicker(selected: ThemePreference, onSelect: (ThemePreference) -> Unit) {
+private fun <T> AppearancePicker(
+    title: String,
+    options: List<T>,
+    selected: T,
+    label: (T) -> String,
+    onSelect: (T) -> Unit,
+) {
     Text(
-        "Color theme",
+        title,
         modifier = Modifier.semantics { heading() },
         color = Ink,
         fontSize = 15.sp,
@@ -104,11 +112,11 @@ private fun ColorThemePicker(selected: ThemePreference, onSelect: (ThemePreferen
     )
     Spacer(Modifier.height(8.dp))
     SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-        ThemePreference.entries.forEachIndexed { index, option ->
+        options.forEachIndexed { index, option ->
             SegmentedButton(
                 selected = selected == option,
                 onClick = { if (selected != option) onSelect(option) },
-                shape = SegmentedButtonDefaults.itemShape(index, ThemePreference.entries.size),
+                shape = SegmentedButtonDefaults.itemShape(index, options.size),
                 modifier = Modifier.heightIn(min = 48.dp),
                 colors = SegmentedButtonDefaults.colors(
                     activeContainerColor = PaleAccent,
@@ -121,7 +129,7 @@ private fun ColorThemePicker(selected: ThemePreference, onSelect: (ThemePreferen
                 icon = {},
             ) {
                 Text(
-                    option.label,
+                    label(option),
                     fontSize = 13.sp,
                     fontWeight = if (selected == option) FontWeight.SemiBold else FontWeight.Normal,
                 )
@@ -213,6 +221,8 @@ internal fun SettingsPage(
     showSectionIndex: Boolean,
     themePreference: ThemePreference,
     onThemeChange: (ThemePreference) -> Unit,
+    palettePreference: PalettePreference,
+    onPaletteChange: (PalettePreference) -> Unit,
     bubbleStyle: Boolean,
     onBubbleStyleChange: (Boolean) -> Unit,
     denseMessages: Boolean,
@@ -390,7 +400,7 @@ internal fun SettingsPage(
     Column(Modifier.fillMaxSize().background(Canvas)) {
         val showingCompactSection = settingsBackTarget(isWideLayout, showSectionIndex) == SettingsBackTarget.SETTINGS_INDEX
         Row(
-            modifier = Modifier.fillMaxWidth().heightIn(min = 68.dp).background(Paper)
+            modifier = Modifier.fillMaxWidth().heightIn(min = 68.dp).background(Chrome)
                 .padding(horizontal = if (isWideLayout) 20.dp else 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -419,8 +429,22 @@ internal fun SettingsPage(
                         modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Paper)
                             .border(1.dp, Line, RoundedCornerShape(14.dp)).padding(18.dp),
                     ) {
-                        ColorThemePicker(themePreference, onThemeChange)
-                    Spacer(Modifier.height(8.dp))
+                    AppearancePicker(
+                        title = "Light or dark",
+                        options = ThemePreference.entries,
+                        selected = themePreference,
+                        label = ThemePreference::label,
+                        onSelect = onThemeChange,
+                    )
+                    Spacer(Modifier.height(16.dp))
+                    AppearancePicker(
+                        title = "Colour palette",
+                        options = PalettePreference.entries,
+                        selected = palettePreference,
+                        label = PalettePreference::label,
+                        onSelect = onPaletteChange,
+                    )
+                    Spacer(Modifier.height(12.dp))
                     Row(
                         modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
                             .toggleable(value = bubbleStyle, role = Role.Switch) {
@@ -791,6 +815,7 @@ internal fun SettingsPage(
                                 onValueChange = { value -> existingRpcKey = value.filter { it.digitToIntOrNull(16) != null }; connectionInputError = null },
                                 modifier = Modifier.fillMaxWidth(),
                                 label = { Text("Shared instance RPC key (hex)") },
+                                textStyle = LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace),
                                 singleLine = true,
                                 visualTransformation = PasswordVisualTransformation(),
                                 enabled = !isRunning && !isStarting,
@@ -981,7 +1006,7 @@ internal fun SettingsPage(
                         ) {
                             Text("YOUR LXMF ADDRESS · SELECT TO COPY", color = Muted, fontSize = 9.sp, letterSpacing = 1.sp, fontWeight = FontWeight.Bold)
                             SelectionContainer {
-                                Text("lxmf://$localDeliveryAddress", color = Accent, fontSize = 13.sp)
+                                Text("lxmf://$localDeliveryAddress", color = Accent, fontSize = 13.sp, fontFamily = FontFamily.Monospace)
                             }
                         }
                     }
@@ -1031,7 +1056,7 @@ private fun OpenSourceAcknowledgements() {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text(
             "Starling is open-source software. These acknowledgements cover Starling and selected libraries used by its clients. " +
-                "Open a license link to read the full terms; an internet connection may be required.",
+                "Open a licence link to read the full terms; an internet connection may be required.",
             color = Muted,
             fontSize = 12.sp,
             lineHeight = 18.sp,
@@ -1042,8 +1067,15 @@ private fun OpenSourceAcknowledgements() {
         AcknowledgementCard(
             name = "Starling",
             license = "GNU Affero General Public License v3.0",
-            detail = "Starling's source code and license are published in the project repository.",
+            detail = "Starling's source code and licence are published in the project repository.",
             licenseUrl = "https://github.com/Sidpatchy/Starling/blob/main/LICENSE",
+            onOpenLicense = { uriHandler.openUri(it) },
+        )
+        AcknowledgementCard(
+            name = "Inter",
+            license = "SIL Open Font License 1.1",
+            detail = "Copyright © 2016 The Inter Project Authors. Used for Starling’s shared interface and chat.",
+            licenseUrl = "https://github.com/rsms/inter/blob/v4.1/LICENSE.txt",
             onOpenLicense = { uriHandler.openUri(it) },
         )
         AcknowledgementCard(
@@ -1108,7 +1140,7 @@ private fun AcknowledgementCard(
         Text(license, color = Accent, fontSize = 12.sp, fontWeight = FontWeight.Medium)
         Text(detail, color = Muted, fontSize = 12.sp, lineHeight = 18.sp)
         TextButton(onClick = { onOpenLicense(licenseUrl) }) {
-            Text("View license")
+            Text("View licence")
         }
     }
 }
@@ -1121,7 +1153,7 @@ private fun SettingsSectionNavigation(
     onDismissKeyboard: () -> Unit,
 ) {
     Column(
-        modifier = modifier.background(Paper)
+        modifier = modifier.background(Chrome)
             .verticalScroll(rememberScrollState()).padding(16.dp),
     ) {
         Text("SETTINGS", color = Muted, fontSize = 10.sp, letterSpacing = 1.2.sp, fontWeight = FontWeight.Bold)

@@ -90,7 +90,7 @@ internal fun WideNavigationLayout(
         if (showRail) {
             NavigationRail(
                 modifier = Modifier.width(80.dp).fillMaxHeight(),
-                containerColor = Paper,
+                containerColor = Chrome,
                 windowInsets = WindowInsets(0, 0, 0, 0),
             ) {
                 MainTab.entries.forEach { tab ->
@@ -172,7 +172,7 @@ private fun BottomNavigationBar(selectedTab: MainTab, onTabSelected: (MainTab) -
     }
     Column {
         HorizontalDivider(color = Line)
-        NavigationBar(containerColor = Paper, tonalElevation = 0.dp, windowInsets = WindowInsets(0, 0, 0, 0)) {
+        NavigationBar(containerColor = Chrome, tonalElevation = 0.dp, windowInsets = WindowInsets(0, 0, 0, 0)) {
             MainTab.entries.forEach { tab ->
                 val selected = tab == selectedTab
                 NavigationBarItem(
@@ -196,7 +196,7 @@ private fun BottomNavigationBar(selectedTab: MainTab, onTabSelected: (MainTab) -
 
 @Composable
 private fun IosStyleBottomNavigationBar(selectedTab: MainTab, onTabSelected: (MainTab) -> Unit) {
-    Column(Modifier.fillMaxWidth().background(Paper).iosBottomSafeAreaPadding()) {
+    Column(Modifier.fillMaxWidth().background(Chrome).iosBottomSafeAreaPadding()) {
         HorizontalDivider(color = Line)
         Row(Modifier.fillMaxWidth().selectableGroup()) {
             MainTab.entries.forEach { tab ->

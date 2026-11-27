@@ -17,6 +17,7 @@ data class StarlingUiSettings(
     val denseMessages: Boolean = false,
     val timestampTimeZone: TimestampTimeZonePreference = TimestampTimeZonePreference.SYSTEM,
     val reduceMotion: Boolean = false,
+    val palettePreference: PalettePreference = PalettePreference.IRIS,
 )
 
 data class PersistedChatState(
@@ -68,6 +69,7 @@ object ChatStateCodec {
             state.uiSettings.denseMessages.bit(),
             state.uiSettings.timestampTimeZone.name,
             state.uiSettings.reduceMotion.bit(),
+            state.uiSettings.palettePreference.storageKey,
         )
         state.nodeConfig?.let { config ->
             appendRecord("V", config.mode.name)
@@ -163,6 +165,7 @@ object ChatStateCodec {
                             TimestampTimeZonePreference.valueOf(decoded.getOrNull(3).orEmpty())
                         }.getOrDefault(TimestampTimeZonePreference.SYSTEM),
                         reduceMotion = decoded.getOrNull(4) == "1",
+                        palettePreference = PalettePreference.fromStorage(decoded.getOrNull(5)),
                     )
                 }
                 "V" -> nodeMode = decoded.firstOrNull()?.let { name ->
