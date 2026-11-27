@@ -41,6 +41,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -51,6 +53,9 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DrawerValue
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalTextStyle
@@ -84,6 +89,7 @@ import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.SaveableStateHolder
+import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
@@ -96,6 +102,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.preferredFrameRate
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.FirstBaseline
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.text.TextStyle
@@ -612,6 +622,16 @@ fun StarlingApp(
         directMessageId = selectedDirectMessage?.id,
         page = page,
     )
+    val defaultSidebarSection = defaultChatSidebarSection(sidebarSelection, page)
+    var sidebarSection by rememberSaveable(defaultSidebarSection, previewMode) { mutableStateOf(defaultSidebarSection) }
+    var collapsedNetworkIds by rememberSaveable(
+        previewMode,
+        stateSaver = listSaver<Set<String>, String>(save = { it.toList() }, restore = { it.toSet() }),
+    ) { mutableStateOf(emptySet()) }
+    val sidebarCurrentRoom = selectedRoom.takeIf { rooms.isNotEmpty() }
+    val onToggleSidebarNetwork: (String) -> Unit = { id ->
+        collapsedNetworkIds = toggleSidebarNetwork(collapsedNetworkIds, id)
+    }
     val directMessages by remember(selectedDirectMessageId) {
         selectedDirectMessageId?.let(repository::directMessages) ?: flowOf(emptyList())
     }.collectAsState(initial = emptyList())
@@ -756,6 +776,11 @@ fun StarlingApp(
                             activeHubNetworkId = visibleHubNetworkId,
                             contacts = knownMembers.filter { it.id in contactMemberIds },
                             requestsCount = contactRequests.size,
+                            section = sidebarSection,
+                            onSectionSelected = { sidebarSection = it },
+                            currentRoom = sidebarCurrentRoom,
+                            collapsedNetworkIds = collapsedNetworkIds,
+                            onToggleNetwork = onToggleSidebarNetwork,
                             selectedRoomId = sidebarSelection.roomId,
                             selectedDirectMessageId = sidebarSelection.directMessageId,
                             onRoomSelected = {
@@ -802,6 +827,7 @@ fun StarlingApp(
                                 messages = directMessages,
                                 bubbleStyle = uiSettings.bubbleStyle,
                                 denseMessages = uiSettings.denseMessages,
+                                previewMode = previewMode,
                                 isLive = visibleDeliveryAddress != null,
                                 error = directMessageError,
                                 onMemberClick = { openMemberProfile(selectedDirectMessage) },
@@ -845,6 +871,7 @@ fun StarlingApp(
                                 denseMessages = uiSettings.denseMessages,
                                 compact = false,
                                 membersVisible = showMembersPanel,
+                                previewMode = previewMode,
                                 isLive = visibleConnectionState is ReticulumConnectionState.Connected && visibleHubNetworkId == selectedRoom.networkId,
                                 error = visibleRrcError,
                                 onToggleMembers = { dismissKeyboard(); showMembersPanel = !showMembersPanel },
@@ -897,6 +924,11 @@ fun StarlingApp(
                                     activeHubNetworkId = visibleHubNetworkId,
                                     contacts = knownMembers.filter { it.id in contactMemberIds },
                                     requestsCount = contactRequests.size,
+                                    section = sidebarSection,
+                                    onSectionSelected = { sidebarSection = it },
+                                    currentRoom = sidebarCurrentRoom,
+                                    collapsedNetworkIds = collapsedNetworkIds,
+                                    onToggleNetwork = onToggleSidebarNetwork,
                                     selectedRoomId = sidebarSelection.roomId,
                                     selectedDirectMessageId = sidebarSelection.directMessageId,
                                     onRoomSelected = { roomId ->
@@ -964,6 +996,7 @@ fun StarlingApp(
                                 messages = directMessages,
                                 bubbleStyle = uiSettings.bubbleStyle,
                                 denseMessages = uiSettings.denseMessages,
+                                previewMode = previewMode,
                                 isLive = visibleDeliveryAddress != null,
                                 error = directMessageError,
                                 compact = true,
@@ -1004,6 +1037,7 @@ fun StarlingApp(
                                 denseMessages = uiSettings.denseMessages,
                                 compact = true,
                                 membersVisible = false,
+                                previewMode = previewMode,
                                 isLive = visibleConnectionState is ReticulumConnectionState.Connected && visibleHubNetworkId == selectedRoom.networkId,
                                 error = visibleRrcError,
                                 onToggleMembers = { dismissKeyboard(); showMembersDrawer = true },
@@ -1164,6 +1198,7 @@ fun StarlingApp(
                         previewMode = previewMode,
                         onAdd = { name, topic ->
                             val room = repository.addRoom(networkId, name, topic)
+                            collapsedNetworkIds = collapsedNetworkIds - networkId
                             openChat()
                             selectedRoomId = room.id
                             selectedDirectMessageId = null
@@ -1223,6 +1258,7 @@ private fun ChatContent(
     denseMessages: Boolean,
     compact: Boolean,
     membersVisible: Boolean,
+    previewMode: Boolean,
     isLive: Boolean = false,
     error: String? = null,
     onToggleMembers: () -> Unit,
@@ -1256,16 +1292,8 @@ private fun ChatContent(
             membersVisible = membersVisible,
             onToggleMembers = onToggleMembers,
         )
-        if (isLive) LiveNotice("Connected to an RRC hub. Messages are live and are not stored by RRC.") else PreviewNotice()
-        error?.let {
-            Text(
-                it,
-                modifier = Modifier.fillMaxWidth().background(Color(0x22C44545))
-                    .semantics { liveRegion = LiveRegionMode.Assertive }
-                    .padding(horizontal = 18.dp, vertical = 8.dp),
-                color = ErrorText,
-                fontSize = 11.sp,
-            )
+        conversationNotice(ConversationKind.CHANNEL, previewMode, isLive, error)?.let {
+            ChatNoticeBanner(it)
         }
 
         LaunchedEffect(room.id, messages.size) {
@@ -1313,6 +1341,7 @@ private fun DirectMessageContent(
     messages: List<ChatMessage>,
     bubbleStyle: Boolean,
     denseMessages: Boolean,
+    previewMode: Boolean,
     isLive: Boolean = false,
     error: String? = null,
     compact: Boolean = false,
@@ -1354,10 +1383,8 @@ private fun DirectMessageContent(
             }
             TextButton(onClick = onMemberClick) { Text("Profile", color = Accent) }
         }
-        if (isLive) LiveNotice("Connected to LXMF. Delivery may wait for the recipient’s Reticulum path.")
-        else PreviewNotice("Direct messages are local preview only — start Reticulum to use LXMF.")
-        if (error != null) {
-            Text(error, modifier = Modifier.fillMaxWidth().background(Color(0x22C44545)).padding(horizontal = 18.dp, vertical = 8.dp), color = ErrorText, fontSize = 11.sp)
+        conversationNotice(ConversationKind.DIRECT_MESSAGE, previewMode, isLive, error)?.let {
+            ChatNoticeBanner(it)
         }
 
         if (messages.isEmpty()) {
@@ -2003,6 +2030,11 @@ private fun RoomSidebar(
     activeHubNetworkId: String?,
     contacts: List<ChatMember>,
     requestsCount: Int,
+    section: ChatSidebarSection,
+    onSectionSelected: (ChatSidebarSection) -> Unit,
+    currentRoom: ChatRoom?,
+    collapsedNetworkIds: Set<String>,
+    onToggleNetwork: (String) -> Unit,
     selectedRoomId: String?,
     selectedDirectMessageId: String?,
     onRoomSelected: (String) -> Unit,
@@ -2020,12 +2052,10 @@ private fun RoomSidebar(
     onDismissKeyboard: () -> Unit = {},
     onIdentityClick: () -> Unit,
 ) {
-    var expandedNetworkIds by remember {
-        mutableStateOf<Set<String>>(networks.map { it.id }.toSet())
-    }
-    LaunchedEffect(networks) {
-        expandedNetworkIds = expandedNetworkIds + networks.map { it.id }
-    }
+    val roomsByNetwork = remember(rooms) { rooms.groupBy { it.networkId } }
+    val actionNetwork = channelActionNetwork(networks, currentRoom, activeHubNetworkId)
+    val channelScroll = rememberScrollState()
+    val directMessageScroll = rememberScrollState()
     val (identityDetail, identityColor) = when {
         previewMode -> "Live identity hidden in preview" to Muted
         rrcState is ReticulumConnectionState.Connected ->
@@ -2076,7 +2106,28 @@ private fun RoomSidebar(
                 )
             }
             Spacer(Modifier.width(9.dp))
-            Text("Starling", modifier = Modifier.weight(1f), fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = Ink)
+            Text(
+                "Starling",
+                modifier = Modifier.weight(1f),
+                fontSize = 16.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = Ink,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (section == ChatSidebarSection.CHANNELS) {
+                ChannelActionsMenu(
+                    network = actionNetwork,
+                    room = currentRoom?.takeIf { it.networkId == actionNetwork?.id },
+                    onAddNetwork = { onDismissKeyboard(); onAddNetwork() },
+                    onNetworkDetails = { onDismissKeyboard(); onNetworkDetails(it) },
+                    onManageRoom = { onDismissKeyboard(); onManageRoom(it) },
+                )
+            } else {
+                IconButton(onClick = { onDismissKeyboard(); onAddContact() }, modifier = Modifier.size(SidebarActionSize)) {
+                    Icon(Icons.Filled.Add, contentDescription = "Add contact", tint = Ink)
+                }
+            }
             if (canHideNavigation) {
                 IconButton(onClick = { onDismissKeyboard(); onHideNavigation() }, modifier = Modifier.size(SidebarActionSize)) {
                     Icon(Icons.Filled.ChevronLeft, contentDescription = "Hide navigation", tint = Accent)
@@ -2084,161 +2135,88 @@ private fun RoomSidebar(
             }
         }
 
-        Column(
-            modifier = Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState())
-                .preferredFrameRate(120f),
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth()
-                    .padding(start = 22.dp, end = SidebarEdgeInset, top = 4.dp, bottom = 6.dp)
-                    .heightIn(min = 48.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    "NETWORKS",
-                    modifier = Modifier.weight(1f),
-                    color = Muted,
-                    fontSize = 10.sp,
-                    letterSpacing = 1.3.sp,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                IconButton(onClick = { onDismissKeyboard(); onAddNetwork() }, modifier = Modifier.size(SidebarActionSize)) {
-                    Icon(Icons.Filled.Add, contentDescription = "Add network", tint = Accent)
-                }
-            }
-            networks.forEach { network ->
-                NetworkRow(
-                    network = network,
-                    expanded = network.id in expandedNetworkIds,
-                    connectionColor = networkConnectionColor(network, previewMode, activeHubNetworkId, rrcState, nodeState),
-                    connectionDescription = networkConnectionDescription(network, previewMode, activeHubNetworkId, rrcState, nodeState),
-                    onAddChannel = { onDismissKeyboard(); onAddChannel(network.id) },
-                    onDetails = { onDismissKeyboard(); onNetworkDetails(network) },
-                    onClick = {
-                        onDismissKeyboard()
-                        expandedNetworkIds = if (network.id in expandedNetworkIds) {
-                            expandedNetworkIds - network.id
-                        } else {
-                            expandedNetworkIds + network.id
-                        }
-                    },
-                )
-                if (network.id in expandedNetworkIds) {
-                    val networkRooms = rooms.filter { it.networkId == network.id }
-                    networkRooms.forEach { room ->
-                        RoomRow(
-                            room = room,
-                            selected = room.id == selectedRoomId,
-                            onClick = { onDismissKeyboard(); onRoomSelected(room.id) },
-                            onManage = { onDismissKeyboard(); onManageRoom(room) },
-                        )
-                    }
-                    if (networkRooms.isEmpty()) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth().heightIn(min = InteractiveRowMinHeight)
-                                .padding(start = 42.dp, end = 12.dp)
-                                .clip(RoundedCornerShape(8.dp))
-                                .clickable(role = Role.Button) { onDismissKeyboard(); onAddChannel(network.id) }
-                                .padding(vertical = 7.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Icon(Icons.Filled.Add, contentDescription = "Add a channel", tint = Muted, modifier = Modifier.size(14.dp))
-                            Spacer(Modifier.width(3.dp))
-                            Text("Add a channel", color = Muted, fontSize = 11.sp)
-                        }
-                    }
-                }
-            }
+        ChatSidebarSectionPicker(section, requestsCount) { onDismissKeyboard(); onSectionSelected(it) }
 
-            Row(
-                modifier = Modifier.fillMaxWidth()
-                    .padding(start = 22.dp, end = SidebarEdgeInset, top = 20.dp, bottom = 6.dp)
-                    .heightIn(min = 48.dp),
-                verticalAlignment = Alignment.CenterVertically,
+        if (section == ChatSidebarSection.CHANNELS) {
+            Column(
+                modifier = Modifier.fillMaxWidth().weight(1f).verticalScroll(channelScroll)
+                    .preferredFrameRate(120f),
             ) {
-                Text(
-                    "DIRECT MESSAGES",
-                    modifier = Modifier.weight(1f),
-                    color = Muted,
-                    fontSize = 10.sp,
-                    letterSpacing = 1.3.sp,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                IconButton(onClick = { onDismissKeyboard(); onAddContact() }, modifier = Modifier.size(SidebarActionSize)) {
-                    Icon(Icons.Filled.Add, contentDescription = "Add contact", tint = Accent)
+                if (networks.isEmpty()) {
+                    SidebarAddRow("Add a network", Modifier.padding(horizontal = SidebarEdgeInset)) {
+                        onDismissKeyboard()
+                        onAddNetwork()
+                    }
                 }
-            }
-            contacts.forEach { member ->
-                Row(
-                    modifier = Modifier.fillMaxWidth()
-                        .padding(horizontal = SidebarEdgeInset, vertical = 2.dp)
-                        .heightIn(min = InteractiveRowMinHeight).clip(RoundedCornerShape(9.dp))
-                        .background(if (member.id == selectedDirectMessageId) PaleAccent else Color.Transparent)
-                        .clickable(role = Role.Button) { onDismissKeyboard(); onContactSelected(member) }
-                        .semantics { selected = member.id == selectedDirectMessageId }
-                        .padding(horizontal = 10.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    MemberAvatar(member, size = 25.dp)
-                    Spacer(Modifier.width(9.dp))
-                    Text(member.displayName, color = Ink, fontSize = 13.sp)
-                }
-            }
-            if (contacts.isEmpty()) {
-                Text(
-                    "Add a contact by LXMF address, or find people under Nearby people.",
-                    modifier = Modifier.padding(start = 22.dp, end = 16.dp, bottom = 8.dp),
-                    color = Muted,
-                    fontSize = 11.sp,
-                )
-            }
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(start = SidebarEdgeInset, end = SidebarEdgeInset, top = 8.dp)
-                    .heightIn(min = InteractiveRowMinHeight).clip(RoundedCornerShape(9.dp))
-                    .clickable(role = Role.Button) { onDismissKeyboard(); onNearbyClick() }
-                    .padding(start = 10.dp, end = 8.dp, top = 7.dp, bottom = 7.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text("Nearby people", modifier = Modifier.weight(1f), color = Ink, fontSize = 12.sp)
-                if (nearbyCount > 0) {
-                    Text(
-                        nearbyCount.toString(),
-                        // As with requests, give the bare number its meaning for screen readers.
-                        modifier = Modifier
-                            .semantics { contentDescription = nearbyBadgeDescription(nearbyCount) }
-                            .clip(CircleShape).background(PaleAccent).padding(horizontal = 7.dp, vertical = 3.dp),
-                        color = Accent,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
+                networks.forEach { network ->
+                    val expanded = network.id !in collapsedNetworkIds
+                    NetworkRow(
+                        network = network,
+                        expanded = expanded,
+                        connectionColor = networkConnectionColor(network, previewMode, activeHubNetworkId, rrcState, nodeState)
+                            .takeIf { !previewMode && network.id == activeHubNetworkId },
+                        connectionDescription = networkConnectionDescription(network, previewMode, activeHubNetworkId, rrcState, nodeState),
+                        onAddChannel = { onDismissKeyboard(); onAddChannel(network.id) },
+                        onDetails = { onDismissKeyboard(); onNetworkDetails(network) },
+                        onToggle = {
+                            onDismissKeyboard()
+                            onToggleNetwork(network.id)
+                        },
                     )
+                    if (expanded) {
+                        val networkRooms = roomsByNetwork[network.id].orEmpty()
+                        networkRooms.forEach { room ->
+                            RoomRow(
+                                room = room,
+                                selected = room.id == selectedRoomId,
+                                onClick = { onDismissKeyboard(); onRoomSelected(room.id) },
+                                onManage = { onDismissKeyboard(); onManageRoom(room) },
+                            )
+                        }
+                    }
                 }
             }
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(start = SidebarEdgeInset, end = SidebarEdgeInset, top = 2.dp, bottom = 6.dp)
-                    .heightIn(min = InteractiveRowMinHeight).clip(RoundedCornerShape(9.dp))
-                    .clickable(role = Role.Button) { onDismissKeyboard(); onRequestsClick() }
-                    .padding(start = 10.dp, end = 8.dp, top = 7.dp, bottom = 7.dp),
-                verticalAlignment = Alignment.CenterVertically,
+        } else {
+            Column(
+                modifier = Modifier.fillMaxWidth().weight(1f).verticalScroll(directMessageScroll)
+                    .preferredFrameRate(120f),
             ) {
-                Text("Message requests", modifier = Modifier.weight(1f), color = Ink, fontSize = 12.sp)
-                if (requestsCount > 0) {
+                SidebarInboxRow("Message requests", requestsCount, messageRequestsBadgeDescription(requestsCount)) {
+                    onDismissKeyboard()
+                    onRequestsClick()
+                }
+                SidebarInboxRow("Nearby people", nearbyCount, nearbyBadgeDescription(nearbyCount)) {
+                    onDismissKeyboard()
+                    onNearbyClick()
+                }
+                HorizontalDivider(Modifier.padding(horizontal = SidebarEdgeInset, vertical = 6.dp), color = Line)
+                contacts.forEach { member ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth()
+                            .padding(horizontal = SidebarEdgeInset, vertical = 2.dp)
+                            .heightIn(min = InteractiveRowMinHeight).clip(RoundedCornerShape(9.dp))
+                            .background(if (member.id == selectedDirectMessageId) PaleAccent else Color.Transparent)
+                            .clickable(role = Role.Button) { onDismissKeyboard(); onContactSelected(member) }
+                            .semantics { selected = member.id == selectedDirectMessageId }
+                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        MemberAvatar(member, size = 25.dp)
+                        Spacer(Modifier.width(9.dp))
+                        Text(member.displayName, color = Ink, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+                if (contacts.isEmpty()) {
                     Text(
-                        requestsCount.toString(),
-                        // The row is a single button target, so give its compact numeric badge context.
-                        // This lets screen readers announce "3 pending requests" instead of just "3".
-                        modifier = Modifier
-                            .semantics {
-                                contentDescription = if (requestsCount == 1) {
-                                    "1 pending request"
-                                } else {
-                                    "$requestsCount pending requests"
-                                }
-                            }
-                            .clip(CircleShape).background(PaleAccent).padding(horizontal = 7.dp, vertical = 3.dp),
-                        color = Accent,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
+                        "No direct messages yet.",
+                        modifier = Modifier.padding(start = 22.dp, end = 16.dp, top = 8.dp),
+                        color = Muted,
+                        fontSize = 12.sp,
                     )
+                    SidebarAddRow("Add a contact", Modifier.padding(horizontal = SidebarEdgeInset)) {
+                        onDismissKeyboard()
+                        onAddContact()
+                    }
                 }
             }
         }
@@ -2264,6 +2242,131 @@ private fun RoomSidebar(
                     modifier = Modifier.padding(start = 16.dp, top = 4.dp),
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun ChatSidebarSectionPicker(
+    section: ChatSidebarSection,
+    requestsCount: Int,
+    onSelect: (ChatSidebarSection) -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(start = SidebarEdgeInset, end = SidebarEdgeInset, bottom = 8.dp)
+            .clip(RoundedCornerShape(9.dp)).background(Canvas).padding(2.dp).selectableGroup(),
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        ChatSidebarSection.entries.forEach { option ->
+            val isSelected = option == section
+            Row(
+                modifier = Modifier.weight(1f).heightIn(min = InteractiveRowMinHeight)
+                    .clip(RoundedCornerShape(7.dp))
+                    .background(if (isSelected) PaleAccent else Color.Transparent)
+                    .selectable(selected = isSelected, role = Role.Tab) { onSelect(option) }
+                    .padding(horizontal = 4.dp, vertical = 6.dp),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    option.label,
+                    color = if (isSelected) Accent else Ink,
+                    fontSize = 13.sp,
+                    fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (option == ChatSidebarSection.DIRECT_MESSAGES && requestsCount > 0) {
+                    Spacer(Modifier.width(4.dp))
+                    SidebarCountBadge(requestsCount, messageRequestsBadgeDescription(requestsCount))
+                }
+            }
+        }
+    }
+}
+
+private fun messageRequestsBadgeDescription(count: Int): String =
+    if (count == 1) "1 pending message request" else "$count pending message requests"
+
+@Composable
+private fun SidebarCountBadge(count: Int, description: String) {
+    Text(
+        if (count > 99) "99+" else count.toString(),
+        modifier = Modifier.semantics { contentDescription = description }
+            .clip(CircleShape).background(PaleAccent).padding(horizontal = 6.dp, vertical = 2.dp),
+        color = Accent,
+        fontSize = 10.sp,
+        fontWeight = FontWeight.Bold,
+        maxLines = 1,
+    )
+}
+
+@Composable
+private fun SidebarInboxRow(label: String, count: Int, badgeDescription: String, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = SidebarEdgeInset)
+            .heightIn(min = InteractiveRowMinHeight).clip(RoundedCornerShape(9.dp))
+            .clickable(role = Role.Button, onClick = onClick).padding(horizontal = 10.dp, vertical = 7.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(label, modifier = Modifier.weight(1f), color = Ink, fontSize = 13.sp)
+        if (count > 0) SidebarCountBadge(count, badgeDescription)
+    }
+}
+
+@Composable
+private fun SidebarAddRow(label: String, modifier: Modifier, onClick: () -> Unit) {
+    Row(
+        modifier = modifier.fillMaxWidth().heightIn(min = InteractiveRowMinHeight).clip(RoundedCornerShape(9.dp))
+            .clickable(role = Role.Button, onClick = onClick).padding(horizontal = 10.dp, vertical = 7.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Filled.Add, contentDescription = null, tint = Accent, modifier = Modifier.size(16.dp))
+        Spacer(Modifier.width(6.dp))
+        Text(label, color = Accent, fontSize = 13.sp)
+    }
+}
+
+@Composable
+private fun ChannelActionsMenu(
+    network: ChatNetwork?,
+    room: ChatRoom?,
+    onAddNetwork: () -> Unit,
+    onNetworkDetails: (ChatNetwork) -> Unit,
+    onManageRoom: (ChatRoom) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        IconButton(onClick = { expanded = true }, modifier = Modifier.size(SidebarActionSize)) {
+            Icon(Icons.Filled.MoreVert, contentDescription = "Channel actions", tint = Ink)
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }, containerColor = Paper) {
+            if (network != null) {
+                Text(
+                    network.name,
+                    modifier = Modifier.widthIn(max = 220.dp).padding(horizontal = 12.dp, vertical = 5.dp)
+                        .semantics { heading() },
+                    color = Muted,
+                    fontSize = 12.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                DropdownMenuItem(
+                    text = { Text("Network details", color = Ink) },
+                    onClick = { expanded = false; onNetworkDetails(network) },
+                )
+                if (room != null) {
+                    DropdownMenuItem(
+                        text = { Text("Manage current channel", color = Ink) },
+                        onClick = { expanded = false; onManageRoom(room) },
+                    )
+                }
+                HorizontalDivider(color = Line)
+            }
+            DropdownMenuItem(
+                text = { Text("Add network", color = Ink) },
+                onClick = { expanded = false; onAddNetwork() },
+            )
         }
     }
 }
@@ -2424,62 +2527,65 @@ private fun networkConnectionDescription(
 private fun NetworkRow(
     network: ChatNetwork,
     expanded: Boolean,
-    connectionColor: Color,
+    connectionColor: Color?,
     connectionDescription: String,
     onAddChannel: () -> Unit,
     onDetails: () -> Unit,
-    onClick: () -> Unit,
+    onToggle: () -> Unit,
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = SidebarEdgeInset, vertical = 2.dp)
-            .clip(RoundedCornerShape(9.dp)),
+            .padding(start = SidebarEdgeInset, end = SidebarEdgeInset, top = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Row(
-            modifier = Modifier.weight(1f).clip(RoundedCornerShape(9.dp))
-                .pointerInput(onDetails) {
-                    awaitPointerEventScope {
-                        while (true) {
-                            val event = awaitPointerEvent(PointerEventPass.Initial)
-                            if (event.type == PointerEventType.Press && event.buttons.isSecondaryPressed) {
-                                event.changes.forEach { it.consume() }
-                                onDetails()
-                            }
-                        }
-                    }
-                }
+            modifier = Modifier.weight(1f)
                 .heightIn(min = InteractiveRowMinHeight)
-                .combinedClickable(role = Role.Button, onClick = onClick, onLongClick = onDetails)
-                .semantics {
+                .clip(RoundedCornerShape(9.dp))
+                .onSidebarSecondaryClick(onDetails)
+                .combinedClickable(
+                    role = Role.Button,
+                    onClickLabel = if (expanded) "Collapse network" else "Expand network",
+                    onLongClickLabel = "Network details",
+                    onClick = onToggle,
+                    onLongClick = onDetails,
+                )
+                .semantics(mergeDescendants = true) {
+                    heading()
                     stateDescription = "${if (expanded) "Expanded" else "Collapsed"}, $connectionDescription"
                 }
-                .padding(start = 10.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
+                .padding(horizontal = 10.dp, vertical = 5.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Icon(
-                imageVector = if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
-                contentDescription = if (expanded) "Collapse network" else "Expand network",
-                tint = Muted,
-                modifier = Modifier.size(18.dp),
-            )
-            Spacer(Modifier.width(7.dp))
-            Box(Modifier.size(7.dp).clip(CircleShape).background(connectionColor))
-            Spacer(Modifier.width(8.dp))
             Text(
                 network.name,
-                color = Ink,
+                modifier = Modifier.weight(1f),
+                color = Muted,
                 fontWeight = FontWeight.SemiBold,
                 fontSize = 12.sp,
                 maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (connectionColor != null) {
+                Spacer(Modifier.width(6.dp))
+                Box(Modifier.size(7.dp).clip(CircleShape).background(connectionColor))
+            }
+            Spacer(Modifier.width(6.dp))
+            Icon(
+                imageVector = if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                contentDescription = null,
+                tint = Muted,
+                modifier = Modifier.size(16.dp),
             )
         }
-        IconButton(onClick = onDetails, modifier = Modifier.size(SidebarActionSize)) {
-            Icon(Icons.Filled.MoreVert, contentDescription = "Network status for ${network.name}", tint = Muted)
-        }
         IconButton(onClick = onAddChannel, modifier = Modifier.size(SidebarActionSize)) {
-            Icon(Icons.Filled.Add, contentDescription = "Add channel to ${network.name}", tint = Muted)
+            Icon(
+                Icons.Filled.Add,
+                contentDescription = "Add channel to ${network.name}",
+                tint = Accent,
+                modifier = Modifier.size(18.dp),
+            )
         }
     }
 }
@@ -2489,31 +2595,40 @@ private fun RoomRow(room: ChatRoom, selected: Boolean, onClick: () -> Unit, onMa
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = SidebarEdgeInset, vertical = 2.dp)
-            .clip(RoundedCornerShape(9.dp)),
+            .padding(horizontal = SidebarEdgeInset, vertical = 1.dp)
+            .heightIn(min = InteractiveRowMinHeight)
+            .clip(RoundedCornerShape(9.dp))
+            .background(if (selected) PaleAccent else Color.Transparent)
+            .onSidebarSecondaryClick(onManage)
+            .combinedClickable(
+                role = Role.Button,
+                onClick = onClick,
+                onLongClickLabel = "Manage channel",
+                onLongClick = onManage,
+            )
+            .semantics { this.selected = selected }
+            .padding(start = 18.dp, end = 10.dp, top = 8.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Row(
-            modifier = Modifier.weight(1f).clip(RoundedCornerShape(9.dp))
-                .background(if (selected) PaleAccent else Color.Transparent)
-                .heightIn(min = InteractiveRowMinHeight).clickable(role = Role.Button, onClick = onClick)
-                .semantics { this.selected = selected }
-                .padding(start = 31.dp, end = 8.dp, top = 10.dp, bottom = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text("#", color = if (selected) Accent else Muted, fontSize = 17.sp)
-            Spacer(Modifier.width(10.dp))
-            Text(
-                room.name,
-                modifier = Modifier.weight(1f),
-                color = if (selected) Accent else Ink,
-                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                fontSize = 14.sp,
-            )
-            if (selected) Text(room.members.toString(), color = Accent, fontSize = 11.sp)
-        }
-        IconButton(onClick = onManage, modifier = Modifier.size(SidebarActionSize)) {
-            Icon(Icons.Filled.MoreVert, contentDescription = "Manage #${room.name}", tint = Muted)
+        Text(
+            "#${room.name}",
+            color = if (selected) Accent else Ink,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+            fontSize = 14.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+private fun Modifier.onSidebarSecondaryClick(onClick: () -> Unit): Modifier = pointerInput(onClick) {
+    awaitPointerEventScope {
+        while (true) {
+            val event = awaitPointerEvent(PointerEventPass.Initial)
+            if (event.type == PointerEventType.Press && event.buttons.isSecondaryPressed) {
+                event.changes.forEach { it.consume() }
+                onClick()
+            }
         }
     }
 }
@@ -2769,34 +2884,26 @@ private fun PersonGlyph(color: Color) {
 }
 
 @Composable
-internal fun PreviewNotice(message: String = "Messages stay on this device for now — RRC isn’t connected yet.") {
-    val isLightTheme = LocalStarlingPalette.current == LightPalette
-    val bannerBackground = if (isLightTheme) Color(0xFFFFF7E8) else Color(0xFF383226)
-    val bannerAccent = if (isLightTheme) Color(0xFF986520) else Color(0xFFE1B86A)
-    val bannerText = if (isLightTheme) Color(0xFF826B4B) else Color(0xFFC6B895)
-    Row(
-        modifier = Modifier.fillMaxWidth().background(bannerBackground).padding(horizontal = 20.dp, vertical = 9.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text("PREVIEW", color = bannerAccent, fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
-        Spacer(Modifier.width(10.dp))
-        Text(message, modifier = Modifier.weight(1f), color = bannerText, fontSize = 11.sp, lineHeight = 14.sp)
-    }
-}
+internal fun PreviewNotice(message: String) = ChatNoticeBanner(ConversationNotice("Preview", message))
 
 @Composable
-private fun LiveNotice(message: String) {
+private fun ChatNoticeBanner(notice: ConversationNotice) {
     val isLightTheme = LocalStarlingPalette.current == LightPalette
-    val bannerBackground = if (isLightTheme) Color(0xFFEAF7EF) else Color(0xFF26372D)
-    val bannerAccent = if (isLightTheme) Color(0xFF2D7D4A) else Color(0xFF81C995)
-    val bannerText = if (isLightTheme) Color(0xFF426B50) else Color(0xFFB1D6BA)
+    val bannerBackground = if (notice.isError) Color(0x22C44545)
+        else if (isLightTheme) Color(0xFFFFF7E8) else Color(0xFF383226)
+    val bannerAccent = if (notice.isError) ErrorText else if (isLightTheme) Color(0xFF986520) else Color(0xFFE1B86A)
+    val bannerText = if (notice.isError) ErrorText else if (isLightTheme) Color(0xFF826B4B) else Color(0xFFC6B895)
     Row(
-        modifier = Modifier.fillMaxWidth().background(bannerBackground).padding(horizontal = 20.dp, vertical = 9.dp),
+        modifier = Modifier.fillMaxWidth().background(bannerBackground)
+            .semantics(mergeDescendants = true) {
+                liveRegion = if (notice.isError) LiveRegionMode.Assertive else LiveRegionMode.Polite
+            }
+            .padding(horizontal = 20.dp, vertical = 9.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text("LIVE", color = bannerAccent, fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+        Text(notice.label.uppercase(), color = bannerAccent, fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
         Spacer(Modifier.width(10.dp))
-        Text(message, modifier = Modifier.weight(1f), color = bannerText, fontSize = 11.sp, lineHeight = 14.sp)
+        Text(notice.message, modifier = Modifier.weight(1f), color = bannerText, fontSize = 11.sp, lineHeight = 14.sp)
     }
 }
 
@@ -2844,7 +2951,8 @@ private fun DayDivider(label: String) {
     }
 }
 
-private val IrcMessageMaxWidth = 720.dp
+private val IrcMessageMaxWidth = 960.dp
+private val SystemEventBubbleMaxWidth = 720.dp
 private val MessageAuthorMaxWidth = 144.dp
 private val IrcAuthorFontSize = 13.sp
 
@@ -3079,7 +3187,14 @@ private fun SystemMessageRow(
     }
     val isStandaloneSystemMessage = isErrorMessage || message.systemEvents.any { it.kind == ChatSystemEventKind.HELP }
     val canExpand = message.systemEvents.size > 1 && !isStandaloneSystemMessage
-    val summaryMaxLines = if (expanded || isStandaloneSystemMessage) Int.MAX_VALUE else 2
+    if (canExpand) {
+        SystemEventGroup(message, displayTime, denseMessages, bubbleStyle, expanded) {
+            onSystemExpansion()
+            expanded = !expanded
+        }
+        return
+    }
+    val summaryMaxLines = if (isStandaloneSystemMessage) Int.MAX_VALUE else 2
     val textColor = if (isErrorMessage) ErrorText else Muted
     val verticalPadding = if (denseMessages) 1.dp else 4.dp
 
@@ -3089,39 +3204,24 @@ private fun SystemMessageRow(
             horizontalArrangement = Arrangement.Center,
         ) {
             Column(
-                modifier = Modifier.widthIn(max = 720.dp).clip(RoundedCornerShape(10.dp))
+                modifier = Modifier.widthIn(max = SystemEventBubbleMaxWidth).clip(RoundedCornerShape(10.dp))
                     .background(if (isErrorMessage) Color(0x22C44545) else PaleAccent.copy(alpha = 0.55f))
                     .padding(horizontal = 14.dp, vertical = 7.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    SelectionContainer(
-                        modifier = Modifier.weight(1f),
-                    ) {
-                        Text(
-                            message.text,
-                            color = textColor,
-                            fontSize = 11.sp,
-                            lineHeight = 15.sp,
-                            textAlign = TextAlign.Center,
-                            maxLines = summaryMaxLines,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                    if (canExpand) SystemEventExpandButton(expanded) {
-                        onSystemExpansion()
-                        expanded = !expanded
-                    }
-                }
-                if (expanded && canExpand) {
-                    SystemEventDetails(message.systemEvents)
-                } else {
+                SelectionContainer(Modifier.fillMaxWidth()) {
                     Text(
-                        if (canExpand) "${message.systemEvents.size} events · last at $displayTime" else displayTime,
+                        message.text,
                         color = textColor,
-                        fontSize = 9.sp,
+                        fontSize = 11.sp,
+                        lineHeight = 15.sp,
+                        textAlign = TextAlign.Center,
+                        maxLines = summaryMaxLines,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.fillMaxWidth(),
                     )
                 }
+                Text(displayTime, color = textColor, fontSize = 9.sp)
             }
         }
     } else {
@@ -3141,26 +3241,96 @@ private fun SystemMessageRow(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-                if (canExpand) SystemEventExpandButton(expanded) {
-                    onSystemExpansion()
-                    expanded = !expanded
-                }
-            }
-            if (expanded && canExpand) {
-                SystemEventDetails(message.systemEvents, modifier = Modifier.padding(start = 40.dp, top = 4.dp))
             }
         }
     }
 }
 
 @Composable
-private fun SystemEventExpandButton(expanded: Boolean, onClick: () -> Unit) {
-    IconButton(onClick = onClick, modifier = Modifier.size(48.dp)) {
-        Icon(
-            imageVector = if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
-            contentDescription = if (expanded) "Collapse system events" else "Expand system events",
-            tint = Muted,
-        )
+private fun SystemEventGroup(
+    message: ChatMessage,
+    displayTime: String,
+    denseMessages: Boolean,
+    bubbleStyle: Boolean,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+) {
+    val pill = RoundedCornerShape(10.dp)
+    val muted = Muted
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = if (denseMessages) 1.dp else 3.dp),
+        horizontalArrangement = if (bubbleStyle) Arrangement.Center else Arrangement.Start,
+    ) {
+        Column(
+            modifier = Modifier.widthIn(max = if (bubbleStyle) SystemEventBubbleMaxWidth else IrcMessageMaxWidth).then(
+                if (bubbleStyle) Modifier.clip(pill).background(PaleAccent.copy(alpha = 0.55f))
+                else Modifier.fillMaxWidth(),
+            ),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth().clip(pill)
+                    .clickable(
+                        role = Role.Button,
+                        onClickLabel = if (expanded) "Collapse system events" else "Expand system events",
+                        onClick = onToggle,
+                    )
+                    .semantics { stateDescription = if (expanded) "Expanded" else "Collapsed" }
+                    .padding(
+                        horizontal = if (bubbleStyle) 10.dp else 0.dp,
+                        vertical = if (denseMessages) 2.dp else 4.dp,
+                    ),
+                horizontalArrangement = if (bubbleStyle) Arrangement.Center else Arrangement.Start,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (!bubbleStyle) {
+                    Text(displayTime, modifier = Modifier.width(40.dp), color = muted, fontSize = 10.sp, maxLines = 1)
+                }
+                Column(Modifier.weight(1f, fill = false)) {
+                    Text(
+                        message.text,
+                        color = muted,
+                        fontSize = if (bubbleStyle) 11.sp else 12.sp,
+                        lineHeight = if (bubbleStyle) 15.sp else 16.sp,
+                        fontStyle = if (bubbleStyle) FontStyle.Normal else FontStyle.Italic,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    if (bubbleStyle) {
+                        val count = "${message.systemEvents.size} events"
+                        Text(
+                            if (displayTime.isBlank()) count else "$count · last at $displayTime",
+                            color = muted,
+                            fontSize = 9.sp,
+                            lineHeight = 12.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+                Spacer(Modifier.width(5.dp))
+                ComposeCanvas(Modifier.size(width = 16.dp, height = 12.dp)) {
+                    val outerY = size.height * if (expanded) 0.7f else 0.3f
+                    val centerY = size.height - outerY
+                    drawPath(
+                        path = Path().apply {
+                            moveTo(size.width * 0.12f, outerY)
+                            lineTo(size.width / 2f, centerY)
+                            lineTo(size.width * 0.88f, outerY)
+                        },
+                        color = muted,
+                        style = Stroke(width = 1.6.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round),
+                    )
+                }
+            }
+            if (expanded) {
+                SelectionContainer(
+                    modifier = if (bubbleStyle) Modifier.padding(start = 10.dp, end = 10.dp, bottom = 6.dp)
+                    else Modifier.padding(start = 40.dp, top = 4.dp),
+                ) {
+                    SystemEventDetails(message.systemEvents)
+                }
+            }
+        }
     }
 }
 

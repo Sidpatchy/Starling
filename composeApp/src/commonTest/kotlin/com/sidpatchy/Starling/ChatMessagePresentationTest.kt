@@ -6,6 +6,36 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class ChatMessagePresentationTest {
+    @Test
+    fun connectedConversationsOnlyShowANoticeWhenThereIsAnError() {
+        for (kind in ConversationKind.entries) {
+            assertNull(conversationNotice(kind, previewMode = false, isLive = true, error = null))
+            assertNull(conversationNotice(kind, previewMode = false, isLive = true, error = " "))
+            assertEquals(
+                ConversationNotice("Error", "Could not send.", isError = true),
+                conversationNotice(kind, previewMode = false, isLive = true, error = "Could not send."),
+            )
+        }
+    }
+
+    @Test
+    fun offlineNoticesDescribeDifferentSendBehaviorAndDoNotSayPreview() {
+        val channel = conversationNotice(ConversationKind.CHANNEL, previewMode = false, isLive = false, error = null)
+        val dm = conversationNotice(ConversationKind.DIRECT_MESSAGE, previewMode = false, isLive = false, error = null)
+        assertEquals("Offline", channel?.label)
+        assertEquals("Offline", dm?.label)
+        assertTrue(channel?.message?.contains("queued") == true)
+        assertTrue(dm?.message?.contains("can’t be sent") == true)
+    }
+
+    @Test
+    fun previewNeverExposesLiveConnectionErrors() {
+        for (kind in ConversationKind.entries) {
+            val notice = conversationNotice(kind, previewMode = true, isLive = false, error = "Private hub failed.")
+            assertEquals(ConversationNotice("Preview", "Messages stay on this device in Local preview."), notice)
+        }
+    }
+
     private fun message(seconds: Long, author: String = "juniper", authorId: String? = "peer") =
         ChatMessage(seconds.toString(), author, "Message", "09:00", authorId = authorId, timestampMillis = seconds * 1_000)
 

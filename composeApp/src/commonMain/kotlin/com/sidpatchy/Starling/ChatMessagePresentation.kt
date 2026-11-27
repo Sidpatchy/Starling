@@ -1,5 +1,24 @@
 package com.sidpatchy.Starling
 
+internal enum class ConversationKind { CHANNEL, DIRECT_MESSAGE }
+
+internal data class ConversationNotice(val label: String, val message: String, val isError: Boolean = false)
+
+internal fun conversationNotice(
+    kind: ConversationKind,
+    previewMode: Boolean,
+    isLive: Boolean,
+    error: String?,
+): ConversationNotice? = when {
+    previewMode -> ConversationNotice("Preview", "Messages stay on this device in Local preview.")
+    !error.isNullOrBlank() -> ConversationNotice("Error", error, isError = true)
+    isLive -> null
+    kind == ConversationKind.CHANNEL -> ConversationNotice(
+        "Offline", "Messages are queued until you connect to this channel’s hub.",
+    )
+    else -> ConversationNotice("Offline", "Direct messages can’t be sent until Reticulum and LXMF are ready.")
+}
+
 internal enum class BubblePosition(val startsGroup: Boolean, val endsGroup: Boolean) {
     SINGLE(true, true),
     FIRST(true, false),
