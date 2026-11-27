@@ -53,6 +53,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.Surface
@@ -96,12 +97,14 @@ import androidx.compose.ui.preferredFrameRate
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.FirstBaseline
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -1232,6 +1235,10 @@ private fun ChatContent(
     val listState = rememberLazyListState()
     val reducedMotion = LocalReducedMotion.current
     val dayLabels = rememberChatDayLabels(messages)
+    val bubblePositions = rememberBubblePositions(messages, dayLabels, bubbleStyle)
+    val ircAuthorWidth = rememberIrcAuthorWidth(messages, members, bubbleStyle) {
+        roomMessageAuthor(it, members)
+    }
     LaunchedEffect(systemExpansionScrollRequest) {
         if (systemExpansionScrollRequest > 0) {
             withFrameNanos { }
@@ -1272,16 +1279,17 @@ private fun ChatContent(
                 horizontal = if (compact) 12.dp else 20.dp,
                 vertical = 8.dp,
             ),
-            verticalArrangement = Arrangement.spacedBy(if (denseMessages) 0.dp else if (bubbleStyle) 3.dp else 2.dp),
+            verticalArrangement = Arrangement.spacedBy(if (denseMessages) 0.dp else 2.dp),
         ) {
             itemsIndexed(messages, key = { _, message -> message.id }) { index, message ->
-                val author = members.firstOrNull { it.id == (message.authorId ?: message.author) }
-                    ?: members.firstOrNull { it.displayName.equals(message.author, ignoreCase = true) }
+                val author = roomMessageAuthor(message, members)
                 TranscriptRow(dayLabels[index]) {
                     MessageRow(
                         message = message,
                         member = author,
                         bubbleStyle = bubbleStyle,
+                        bubblePosition = bubblePositions.getOrElse(index) { BubblePosition.SINGLE },
+                        ircAuthorWidth = ircAuthorWidth,
                         denseMessages = denseMessages,
                         onMemberClick = { author?.let(onMemberClick) },
                         onSystemExpansion = {
@@ -1317,6 +1325,10 @@ private fun DirectMessageContent(
     val listState = rememberLazyListState()
     val reducedMotion = LocalReducedMotion.current
     val dayLabels = rememberChatDayLabels(messages)
+    val bubblePositions = rememberBubblePositions(messages, dayLabels, bubbleStyle)
+    val ircAuthorWidth = rememberIrcAuthorWidth(messages, member, bubbleStyle) {
+        directMessageAuthor(it, member)
+    }
     LaunchedEffect(systemExpansionScrollRequest) {
         if (systemExpansionScrollRequest > 0 && messages.isNotEmpty()) {
             withFrameNanos { }
@@ -1369,16 +1381,16 @@ private fun DirectMessageContent(
                     horizontal = if (compact) 12.dp else 20.dp,
                     vertical = 8.dp,
                 ),
-                verticalArrangement = Arrangement.spacedBy(
-                    if (denseMessages) 0.dp else if (bubbleStyle) 4.dp else 2.dp,
-                ),
+                verticalArrangement = Arrangement.spacedBy(if (denseMessages) 0.dp else 2.dp),
             ) {
                 itemsIndexed(messages, key = { _, message -> message.id }) { index, message ->
                     TranscriptRow(dayLabels[index]) {
                         MessageRow(
                             message = message,
-                            member = if (!message.isMine && (message.authorId == member.id || message.author == member.id)) member else null,
+                            member = directMessageAuthor(message, member),
                             bubbleStyle = bubbleStyle,
+                            bubblePosition = bubblePositions.getOrElse(index) { BubblePosition.SINGLE },
+                            ircAuthorWidth = ircAuthorWidth,
                             denseMessages = denseMessages,
                             onMemberClick = onMemberClick,
                             onSystemExpansion = {
@@ -1598,7 +1610,7 @@ private fun EmptyNetworkContent(
             if (showIdentitySetup) {
                 "Create an identity or import a backup before connecting. Then add an RRC network and channel."
             } else {
-                "Add an RRC network and a channel, or turn on Local preview in Settings to explore the sample chat."
+                "Add an RRC network and a channel, or turn on Local preview in Settings → Appearance to explore the sample chat."
             },
             color = Muted,
             fontSize = 13.sp,
@@ -2802,6 +2814,15 @@ private fun rememberChatDayLabels(messages: List<ChatMessage>): List<String?> {
 }
 
 @Composable
+private fun rememberBubblePositions(
+    messages: List<ChatMessage>,
+    dayLabels: List<String?>,
+    bubbleStyle: Boolean,
+): List<BubblePosition> = remember(messages, dayLabels, bubbleStyle) {
+    if (bubbleStyle) chatBubblePositions(messages, dayLabels) else emptyList()
+}
+
+@Composable
 private fun TranscriptRow(dayLabel: String?, content: @Composable () -> Unit) {
     Column {
         if (dayLabel != null) DayDivider(dayLabel)
@@ -2825,12 +2846,67 @@ private fun DayDivider(label: String) {
 
 private val IrcMessageMaxWidth = 720.dp
 private val MessageAuthorMaxWidth = 144.dp
+private val IrcAuthorFontSize = 13.sp
+
+private fun roomMessageAuthor(message: ChatMessage, members: List<ChatMember>): ChatMember? =
+    members.firstOrNull { it.id == (message.authorId ?: message.author) }
+        ?: members.firstOrNull { it.displayName.equals(message.author, ignoreCase = true) }
+
+private fun directMessageAuthor(message: ChatMessage, member: ChatMember): ChatMember? =
+    member.takeIf { !message.isMine && (message.authorId == it.id || message.author == it.id) }
+
+private fun ircAuthorLabel(name: String, isAction: Boolean): String = if (isAction) name else "$name:"
+
+private fun messageAuthorWeight(fontStyle: FontStyle): FontWeight =
+    if (fontStyle == FontStyle.Italic) FontWeight.Normal else FontWeight.SemiBold
+
+@Composable
+private fun rememberIrcAuthorWidth(
+    messages: List<ChatMessage>,
+    memberKey: Any,
+    bubbleStyle: Boolean,
+    findMember: (ChatMessage) -> ChatMember?,
+): Dp {
+    if (bubbleStyle) return 0.dp
+    val measurer = rememberTextMeasurer()
+    val density = LocalDensity.current
+    val textStyle = LocalTextStyle.current
+    return remember(messages, memberKey, measurer, density, textStyle) {
+        with(density) {
+            val maxWidth = MessageAuthorMaxWidth.roundToPx()
+            val measuredLabels = mutableSetOf<Pair<String, Boolean>>()
+            var widest = 0
+            for (message in messages) {
+                if (message.isSystem) continue
+                val label = ircAuthorLabel(findMember(message)?.displayName ?: message.author, message.isAction)
+                if (!measuredLabels.add(label to message.isAction)) continue
+                val style = if (message.isAction) FontStyle.Italic else FontStyle.Normal
+                val width = measurer.measure(
+                    label,
+                    style = textStyle.copy(
+                        fontSize = IrcAuthorFontSize,
+                        lineHeight = IrcAuthorFontSize * 1.25f,
+                        fontStyle = style,
+                        fontWeight = messageAuthorWeight(style),
+                    ),
+                    maxLines = 1,
+                    softWrap = false,
+                ).size.width
+                widest = maxOf(widest, width)
+                if (widest >= maxWidth) break
+            }
+            widest.coerceAtMost(maxWidth).toDp()
+        }
+    }
+}
 
 @Composable
 private fun MessageRow(
     message: ChatMessage,
     member: ChatMember?,
     bubbleStyle: Boolean,
+    bubblePosition: BubblePosition,
+    ircAuthorWidth: Dp,
     denseMessages: Boolean,
     onMemberClick: () -> Unit,
     onSystemExpansion: () -> Unit = {},
@@ -2847,51 +2923,72 @@ private fun MessageRow(
     val openAuthorProfile = if (member != null && !member.isSelf) onMemberClick else null
     val messageStyle = if (message.isAction) FontStyle.Italic else FontStyle.Normal
     val formattedMessage = remember(message.text, palette) { markdown(message.text, palette) }
+    val deliveryStatus = chatDeliveryStatus(message.deliveryState)
+    val iconBaselineInset = with(LocalDensity.current) { 4.sp.roundToPx() }
+    val body: @Composable () -> Unit = {
+        Text(
+            text = formattedMessage,
+            color = Ink,
+            fontSize = 13.sp,
+            lineHeight = if (denseMessages) 16.sp else 17.sp,
+            fontStyle = messageStyle,
+        )
+    }
     if (bubbleStyle) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(vertical = if (denseMessages) 0.dp else 1.dp),
-            horizontalArrangement = if (message.isMine) Arrangement.End else Arrangement.Start,
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(top = when {
+                !bubblePosition.startsGroup -> if (denseMessages) 1.dp else 0.dp
+                denseMessages -> 3.dp
+                else -> 5.dp
+            }),
+            horizontalAlignment = if (message.isMine) Alignment.End else Alignment.Start,
         ) {
-            Column(
-                modifier = Modifier.widthIn(max = 560.dp).clip(RoundedCornerShape(15.dp))
-                    .background(if (message.isMine) PaleAccent else Paper)
-                    .padding(horizontal = 10.dp, vertical = if (denseMessages) 4.dp else 6.dp),
-            ) {
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    MessageAuthor(
-                        authorName = authorName,
-                        label = authorName,
-                        modifier = Modifier.alignBy(FirstBaseline),
-                        color = authorColor,
-                        fontSize = 11.sp,
-                        fontStyle = FontStyle.Normal,
-                        onProfileClick = openAuthorProfile,
-                    )
-                    Text(
-                        displayTime,
-                        modifier = Modifier.alignBy(FirstBaseline),
-                        color = Muted,
-                        fontSize = 10.sp,
-                        lineHeight = 13.sp,
-                    )
-                    deliveryMarker(message.deliveryState)
-                }
-                Spacer(Modifier.height(2.dp))
-                SelectionContainer {
-                    Text(
-                        text = formattedMessage,
-                        color = Ink,
-                        fontSize = 13.sp,
-                        lineHeight = if (denseMessages) 16.sp else 17.sp,
-                        fontStyle = messageStyle,
+            if (!message.isMine && bubblePosition.startsGroup) {
+                MessageAuthor(
+                    authorName = authorName,
+                    label = authorName,
+                    modifier = Modifier.padding(start = 10.dp, bottom = 2.dp),
+                    color = authorColor,
+                    fontSize = 11.sp,
+                    fontStyle = FontStyle.Normal,
+                    onProfileClick = openAuthorProfile,
+                )
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                // Keep the outgoing bubble anchored to the same edge as its status changes.
+                if (message.isMine || deliveryStatus != null) {
+                    DeliveryStatusSlot(
+                        status = deliveryStatus,
+                        displayTime = displayTime,
+                        modifier = Modifier.alignBy { it.measuredHeight / 2 + iconBaselineInset },
                     )
                 }
+                val top = if (bubblePosition.startsGroup) 15.dp else 5.dp
+                val bottom = if (bubblePosition.endsGroup) 15.dp else 5.dp
+                val shape = if (message.isMine) {
+                    RoundedCornerShape(topStart = 15.dp, topEnd = top, bottomEnd = bottom, bottomStart = 15.dp)
+                } else {
+                    RoundedCornerShape(topStart = top, topEnd = 15.dp, bottomEnd = 15.dp, bottomStart = bottom)
+                }
+                SelectionContainer(
+                    modifier = Modifier.alignBy(FirstBaseline).widthIn(max = 560.dp).clip(shape)
+                        .background(if (message.isMine) PaleAccent else Paper)
+                        .padding(horizontal = 10.dp, vertical = if (denseMessages) 4.dp else 6.dp),
+                    content = body,
+                )
+            }
+            if (bubblePosition.endsGroup && displayTime.isNotBlank()) {
+                Text(
+                    displayTime,
+                    modifier = Modifier.padding(start = 10.dp, end = 10.dp, top = 2.dp),
+                    color = Muted,
+                    fontSize = 10.sp,
+                    lineHeight = 13.sp,
+                )
             }
         }
     } else {
+        val timeColumnWidth = with(LocalDensity.current) { 36.sp.toDp() }.coerceAtLeast(36.dp)
         Row(
             modifier = Modifier.widthIn(max = IrcMessageMaxWidth).fillMaxWidth()
                 .padding(vertical = if (denseMessages) 0.dp else 1.dp),
@@ -2899,32 +2996,43 @@ private fun MessageRow(
         ) {
             Text(
                 displayTime,
-                modifier = Modifier.widthIn(min = 36.dp).alignBy(FirstBaseline),
+                modifier = Modifier.width(timeColumnWidth).alignBy(FirstBaseline),
                 color = Muted,
                 fontSize = 10.sp,
                 lineHeight = 13.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
-            deliveryMarker(message.deliveryState, Modifier.alignBy { it.measuredHeight })
-            MessageAuthor(
-                authorName = authorName,
-                label = if (message.isAction) authorName else "$authorName:",
-                modifier = Modifier.alignBy(FirstBaseline),
-                color = authorColor,
-                fontSize = 13.sp,
-                fontStyle = messageStyle,
-                onProfileClick = openAuthorProfile,
-            )
-            SelectionContainer(
-                modifier = Modifier.weight(1f).alignBy(FirstBaseline),
+            Box(
+                modifier = Modifier.alignBy(FirstBaseline).layout { measurable, constraints ->
+                    // Reserve enough space for the widest rendered nickname, without
+                    // letting a long name crowd out the message on narrow screens.
+                    val width = minOf(ircAuthorWidth.roundToPx(), constraints.maxWidth / 4)
+                    val placeable = measurable.measure(constraints.copy(minWidth = width, maxWidth = width))
+                    layout(width, placeable.height) { placeable.placeRelative(0, 0) }
+                },
+                contentAlignment = Alignment.TopEnd,
             ) {
-                Text(
-                    text = formattedMessage,
-                    color = Ink,
-                    fontSize = 13.sp,
-                    lineHeight = if (denseMessages) 16.sp else 17.sp,
+                MessageAuthor(
+                    authorName = authorName,
+                    label = ircAuthorLabel(authorName, message.isAction),
+                    modifier = Modifier,
+                    color = authorColor,
+                    fontSize = IrcAuthorFontSize,
                     fontStyle = messageStyle,
+                    onProfileClick = openAuthorProfile,
                 )
             }
+            SelectionContainer(
+                modifier = Modifier.weight(1f).alignBy(FirstBaseline),
+                content = body,
+            )
+            // The trailing column is reserved even on rows without a delivery status.
+            DeliveryStatusSlot(
+                status = deliveryStatus,
+                displayTime = displayTime,
+                modifier = Modifier.alignBy { it.measuredHeight / 2 + iconBaselineInset },
+            )
         }
     }
 }
@@ -2949,7 +3057,7 @@ private fun MessageAuthor(
         color = color,
         fontSize = fontSize,
         lineHeight = fontSize * 1.25f,
-        fontWeight = if (fontStyle == FontStyle.Italic) FontWeight.Normal else FontWeight.SemiBold,
+        fontWeight = messageAuthorWeight(fontStyle),
         fontStyle = fontStyle,
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
@@ -3078,22 +3186,45 @@ private fun SystemEventDetails(events: List<ChatSystemEvent>, modifier: Modifier
 }
 
 @Composable
-private fun deliveryMarker(state: String?, modifier: Modifier = Modifier) {
-    if (state == null) return
-    val (icon, description, color) = when (state) {
-        "queued" -> Triple(Icons.Filled.Schedule, "Queued", Muted)
-        "sending" -> Triple(Icons.Filled.Schedule, "Sending", Muted)
-        "sent" -> Triple(Icons.Filled.Check, "Sent", Accent)
-        "delivered" -> Triple(Icons.Filled.Check, "Delivered", Accent)
-        "failed", "rejected" -> Triple(Icons.Filled.ErrorOutline, "Delivery failed", ErrorText)
-        else -> return
+private fun DeliveryStatusSlot(
+    status: ChatDeliveryStatus?,
+    displayTime: String,
+    modifier: Modifier,
+) {
+    val slot = modifier.size(width = 24.dp, height = 16.dp)
+    if (status == null) {
+        Spacer(slot)
+        return
     }
-    Icon(
-        imageVector = icon,
-        contentDescription = description,
-        modifier = modifier.size(12.dp),
-        tint = color,
-    )
+    var showDetails by rememberSaveable { mutableStateOf(false) }
+    val (icon, color) = when (status) {
+        ChatDeliveryStatus.QUEUED, ChatDeliveryStatus.SENDING -> Icons.Filled.Schedule to Muted
+        ChatDeliveryStatus.SENT, ChatDeliveryStatus.DELIVERED -> Icons.Filled.Check to Accent
+        ChatDeliveryStatus.FAILED, ChatDeliveryStatus.REJECTED -> Icons.Filled.ErrorOutline to ErrorText
+    }
+    Box(
+        modifier = slot.clickable(
+            role = Role.Button,
+            onClickLabel = "Show delivery details",
+            onClick = { showDetails = true },
+        ).semantics { contentDescription = status.label },
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(13.dp), tint = color)
+    }
+    if (showDetails) {
+        AlertDialog(
+            onDismissRequest = { showDetails = false },
+            title = { Text(status.label) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(status.detail)
+                    if (displayTime.isNotBlank()) Text("Message time: $displayTime", color = Muted)
+                }
+            },
+            confirmButton = { TextButton(onClick = { showDetails = false }) { Text("Close") } },
+        )
+    }
 }
 
 private fun markdown(source: String, palette: StarlingPalette): AnnotatedString {

@@ -30,6 +30,9 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -64,8 +67,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 internal enum class SettingsSection(val label: String, val summary: String) {
-    APPEARANCE("Appearance", "Theme and chat display"),
-    NETWORK("Network", "Preview, node, and interface settings"),
+    APPEARANCE("Appearance", "Theme, chat display, and local preview"),
+    NETWORK("Network", "Reticulum node and connections"),
     MESSAGING("Messaging", "RRC rooms and LXMF direct messages"),
     IDENTITY("Identity", "Identity keys and nicknames"),
     OPEN_SOURCE("Open source", "Licenses and acknowledgements"),
@@ -129,6 +132,43 @@ private fun SettingsSwitch(checked: Boolean, enabled: Boolean = true) {
             Modifier.align(Alignment.CenterStart).offset(x = offset).size(26.dp)
                 .background(Color.White, CircleShape),
         )
+    }
+}
+
+@Composable
+private fun ColorThemePicker(selected: ThemePreference, onSelect: (ThemePreference) -> Unit) {
+    Text(
+        "Color theme",
+        modifier = Modifier.semantics { heading() },
+        color = Ink,
+        fontSize = 15.sp,
+        fontWeight = FontWeight.SemiBold,
+    )
+    Spacer(Modifier.height(8.dp))
+    SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+        ThemePreference.entries.forEachIndexed { index, option ->
+            SegmentedButton(
+                selected = selected == option,
+                onClick = { if (selected != option) onSelect(option) },
+                shape = SegmentedButtonDefaults.itemShape(index, ThemePreference.entries.size),
+                modifier = Modifier.heightIn(min = 48.dp),
+                colors = SegmentedButtonDefaults.colors(
+                    activeContainerColor = PaleAccent,
+                    activeContentColor = Ink,
+                    activeBorderColor = Accent,
+                    inactiveContainerColor = Paper,
+                    inactiveContentColor = Ink,
+                    inactiveBorderColor = Muted,
+                ),
+                icon = {},
+            ) {
+                Text(
+                    option.label,
+                    fontSize = 13.sp,
+                    fontWeight = if (selected == option) FontWeight.SemiBold else FontWeight.Normal,
+                )
+            }
+        }
     }
 }
 
@@ -423,26 +463,7 @@ internal fun SettingsPage(
                         modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Paper)
                             .border(1.dp, Line, RoundedCornerShape(14.dp)).padding(18.dp),
                     ) {
-                        Text("Color theme", color = Ink, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-                        Spacer(Modifier.height(8.dp))
-                        Column(Modifier.selectableGroup()) {
-                            ThemePreference.values().forEach { option ->
-                                Row(
-                                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).clip(RoundedCornerShape(8.dp))
-                                        .selectable(
-                                            selected = themePreference == option,
-                                            role = Role.RadioButton,
-                                        ) {
-                                            onDismissKeyboard()
-                                            onThemeChange(option)
-                                        },
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    RadioButton(selected = themePreference == option, onClick = null)
-                                    Text(option.label, color = Ink, fontSize = 13.sp)
-                                }
-                            }
-                        }
+                        ColorThemePicker(themePreference, onThemeChange)
                     Spacer(Modifier.height(8.dp))
                     Row(
                         modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
@@ -513,6 +534,30 @@ internal fun SettingsPage(
                         }
                     }
                 }
+                Row(
+                    modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Paper)
+                        .border(1.dp, Line, RoundedCornerShape(14.dp))
+                        .toggleable(value = previewMode, role = Role.Switch) {
+                            onDismissKeyboard()
+                            connectionInputError = null
+                            onPreviewModeChange(it)
+                        }
+                        .semantics(mergeDescendants = true) {}
+                        .padding(18.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Local preview", color = Ink, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                        Text(
+                            "Explore sample chats without going online. While on, live Reticulum connections stop and your live identity is hidden.",
+                            color = Muted,
+                            fontSize = 11.sp,
+                            lineHeight = 16.sp,
+                        )
+                    }
+                    SettingsSwitch(checked = previewMode)
+                }
             }
             if (selectedSection == SettingsSection.NETWORK) {
                 Column(
@@ -558,23 +603,6 @@ internal fun SettingsPage(
                         lineHeight = 18.sp,
                     )
 
-                    Row(
-                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
-                            .toggleable(value = previewMode, role = Role.Switch) {
-                                onDismissKeyboard()
-                                connectionInputError = null
-                                onPreviewModeChange(it)
-                            }
-                            .semantics(mergeDescendants = true) {},
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Column(Modifier.weight(1f)) {
-                            Text("Local preview", color = Ink, fontSize = 13.sp, fontWeight = FontWeight.Medium)
-                            Text("Isolated sample data; live identity and connections are hidden.", color = Muted, fontSize = 11.sp)
-                        }
-                        SettingsSwitch(checked = previewMode)
-                    }
-
                     if (previewMode) {
                         Text(
                             "Live interfaces, shared-instance keys, and RRC/LXMF addresses are hidden while preview is on.",
@@ -582,6 +610,9 @@ internal fun SettingsPage(
                             fontSize = 11.sp,
                             lineHeight = 16.sp,
                         )
+                        TextButton(onClick = { onSectionSelected(SettingsSection.APPEARANCE) }) {
+                            Text("Manage Local preview in Appearance", color = Accent)
+                        }
                     } else {
                         Text(
                             if (!supportsReticulumProtocol) {
