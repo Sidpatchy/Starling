@@ -1307,7 +1307,9 @@ private fun ChatContent(
                 horizontal = if (compact) 12.dp else 20.dp,
                 vertical = 8.dp,
             ),
-            verticalArrangement = Arrangement.spacedBy(if (denseMessages) 0.dp else 2.dp),
+            verticalArrangement = Arrangement.spacedBy(
+                if (denseMessages) 0.dp else if (bubbleStyle) 3.dp else 2.dp,
+            ),
         ) {
             itemsIndexed(messages, key = { _, message -> message.id }) { index, message ->
                 val author = roomMessageAuthor(message, members)
@@ -1408,7 +1410,9 @@ private fun DirectMessageContent(
                     horizontal = if (compact) 12.dp else 20.dp,
                     vertical = 8.dp,
                 ),
-                verticalArrangement = Arrangement.spacedBy(if (denseMessages) 0.dp else 2.dp),
+                verticalArrangement = Arrangement.spacedBy(
+                    if (denseMessages) 0.dp else if (bubbleStyle) 4.dp else 2.dp,
+                ),
             ) {
                 itemsIndexed(messages, key = { _, message -> message.id }) { index, message ->
                     TranscriptRow(dayLabels[index]) {
@@ -3043,6 +3047,7 @@ private fun MessageRow(
         )
     }
     if (bubbleStyle) {
+        val horizontalPadding = if (denseMessages) 10.dp else 12.dp
         Column(
             modifier = Modifier.fillMaxWidth().padding(top = when {
                 !bubblePosition.startsGroup -> if (denseMessages) 1.dp else 0.dp
@@ -3055,7 +3060,7 @@ private fun MessageRow(
                 MessageAuthor(
                     authorName = authorName,
                     label = authorName,
-                    modifier = Modifier.padding(start = 10.dp, bottom = 2.dp),
+                    modifier = Modifier.padding(start = horizontalPadding, bottom = 2.dp),
                     color = authorColor,
                     fontSize = 11.sp,
                     fontStyle = FontStyle.Normal,
@@ -3081,14 +3086,14 @@ private fun MessageRow(
                 SelectionContainer(
                     modifier = Modifier.alignBy(FirstBaseline).widthIn(max = 560.dp).clip(shape)
                         .background(if (message.isMine) PaleAccent else Paper)
-                        .padding(horizontal = 10.dp, vertical = if (denseMessages) 4.dp else 6.dp),
+                        .padding(horizontal = horizontalPadding, vertical = if (denseMessages) 4.dp else 8.dp),
                     content = body,
                 )
             }
             if (bubblePosition.endsGroup && displayTime.isNotBlank()) {
                 Text(
                     displayTime,
-                    modifier = Modifier.padding(start = 10.dp, end = 10.dp, top = 2.dp),
+                    modifier = Modifier.padding(start = horizontalPadding, end = horizontalPadding, top = 2.dp),
                     color = Muted,
                     fontSize = 10.sp,
                     lineHeight = 13.sp,
