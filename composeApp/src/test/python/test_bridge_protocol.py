@@ -283,6 +283,12 @@ class BridgeProtocolTest(unittest.TestCase):
             protocol.encode("/dev/ttyUSB0"), "915000000", "125000", "17", "7", "5",
         ]
 
+    def ios_start_fields(self, ble_peers=True):
+        fields = self.mixed_start_fields()
+        fields[3] = "5"
+        fields.insert(6, "1" if ble_peers else "0")
+        return fields
+
     def test_base64_fields_preserve_empty_strings_unicode_and_delimiters(self):
         for text, encoded in [("", ""), ("hello", "aGVsbG8="), ("🌍🌍", "8J+MjfCfjI0=")]:
             with self.subTest(text=text):
@@ -313,6 +319,17 @@ class BridgeProtocolTest(unittest.TestCase):
         key = "0123456789abcdef" * 2
         fields = ["START", "EXISTING_SHARED_INSTANCE", protocol.encode(key), "4", "0", "0"]
         self.assertEqual(protocol.parse_start_request(fields), ("existing_shared_instance", key, [], []))
+
+    def test_ios_start_request_parses_bluetooth_peers(self):
+        enabled = protocol.parse_start_request(self.ios_start_fields(), platform="iOS")
+        disabled = protocol.parse_start_request(self.ios_start_fields(ble_peers=False), platform="iOS")
+        self.assertTrue(enabled[4])
+        self.assertFalse(disabled[4])
+
+        invalid = self.ios_start_fields()
+        invalid[6] = "true"
+        with self.assertRaisesRegex(ValueError, "Invalid Bluetooth peers setting"):
+            protocol.parse_start_request(invalid, platform="iOS")
 
     def test_start_request_rejects_unknown_runtime_mode(self):
         fields = ["START", "SHARED", "", "4", "0", "0"]
@@ -412,20 +429,24 @@ class BridgeProtocolTest(unittest.TestCase):
 
     def test_ios_adapter_uses_shared_start_fields_and_preserves_reconfiguration_and_shutdown(self):
         rns, rrc, lxmf = self.fake_runtime_modules()
-        fields = self.mixed_start_fields()
-        mode, key, peers, radios = protocol.parse_start_request(fields)
+        fields = self.ios_start_fields()
+        mode, key, peers, radios, ble_peers = protocol.parse_start_request(fields, platform="iOS")
         command = "\t".join(["IOS_START", protocol.encode("/private/data 🌍")] + fields[1:])
         with patch.dict(sys.modules, {"starling_rns": rns, "starling_rrc": rrc, "starling_lxmf": lxmf}), \
                 patch.multiple(ios_runtime, _rns=None, _rrc=None, _lxmf=None, _last_self_event=None):
             self.assertTrue(ios_runtime.invoke(command).startswith("READY\tRUNNING\t"))
-            rns.start_node.assert_called_once_with("/private/data 🌍", mode, peers, key, radios, allow_reconfigure=True)
+            rns.start_node.assert_called_once_with(
+                "/private/data 🌍", mode, peers, key, radios, allow_reconfigure=True, ble_peers=ble_peers,
+            )
             self.assertEqual(ios_runtime.invoke("STOP"), "STOPPED")
             rns.disconnect_node.assert_called_once_with()
             rns.stop_node.assert_not_called()
 
     def test_ios_adapter_reports_invalid_start_requests_before_starting_runtime(self):
         rns, rrc, lxmf = self.fake_runtime_modules()
-        command = "\t".join(["IOS_START", protocol.encode("/private/data"), "EMBEDDED", "", "3", "0", "0"])
+        command = "\t".join([
+            "IOS_START", protocol.encode("/private/data"), "EMBEDDED", "", "4", "0", "0", "0",
+        ])
         with patch.dict(sys.modules, {"starling_rns": rns, "starling_rrc": rrc, "starling_lxmf": lxmf}):
             response = ios_runtime.invoke(command)
         self.assertEqual(response, "ERROR\t" + protocol.encode("Unsupported iOS bridge protocol version."))
@@ -467,7 +488,7 @@ class BridgeProtocolTest(unittest.TestCase):
         rns.start_node.side_effect = RuntimeError("radio initialization failed")
         rrc.disconnect.side_effect = RuntimeError("room cleanup failed")
         lxmf.stop.side_effect = RuntimeError("LXMF cleanup failed")
-        command = "\t".join(["IOS_START", protocol.encode("/private/data")] + self.mixed_start_fields()[1:])
+        command = "\t".join(["IOS_START", protocol.encode("/private/data")] + self.ios_start_fields()[1:])
         with patch.dict(sys.modules, {"starling_rns": rns, "starling_rrc": rrc, "starling_lxmf": lxmf}), \
                 patch.multiple(ios_runtime, _rns=None, _rrc=None, _lxmf=None, _last_self_event="stale"):
             response = ios_runtime.invoke(command)
