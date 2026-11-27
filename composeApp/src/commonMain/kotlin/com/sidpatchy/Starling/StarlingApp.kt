@@ -33,13 +33,14 @@ import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.tappableElement
+import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
@@ -93,7 +94,6 @@ import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -761,12 +761,13 @@ fun StarlingApp(
         reducedMotion = uiSettings.reduceMotion,
     ) {
         Surface(modifier = Modifier.fillMaxSize(), color = Canvas) {
-            val safeInsets = WindowInsets.safeDrawing
-            // On iOS the bottom bar owns the bottom inset so its surface reaches the home indicator.
+            val contentInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)
+            // Reserve space for Android's software buttons, not the gesture indicator.
+            // The tab bar handles its own bottom inset when visible.
             val rootInsets = if (LocalStarlingUiStyle.current == StarlingUiStyle.IOS) {
-                safeInsets.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)
+                contentInsets
             } else {
-                safeInsets
+                contentInsets.union(WindowInsets.tappableElement.only(WindowInsetsSides.Bottom))
             }
             BoxWithConstraints(
                 Modifier.fillMaxSize().windowInsetsPadding(rootInsets).imePadding().dismissKeyboardOnUpwardScroll(),
@@ -1281,19 +1282,10 @@ private fun ChatContent(
     onMemberClick: (ChatMember) -> Unit,
     onSend: (String) -> Unit,
 ) {
-    var systemExpansionScrollRequest by remember { mutableStateOf(0) }
-    val listState = rememberLazyListState()
-    val reducedMotion = LocalReducedMotion.current
     val dayLabels = rememberChatDayLabels(messages)
     val bubblePositions = rememberBubblePositions(messages, dayLabels, bubbleStyle)
     val ircAuthorWidth = rememberIrcAuthorWidth(messages, members, bubbleStyle) {
         roomMessageAuthor(it, members)
-    }
-    LaunchedEffect(systemExpansionScrollRequest) {
-        if (systemExpansionScrollRequest > 0) {
-            withFrameNanos { }
-            scrollToLatestMessage(listState, messages, reducedMotion)
-        }
     }
     Column(modifier.fillMaxSize()) {
         ChatHeader(
@@ -1310,22 +1302,13 @@ private fun ChatContent(
             ChatNoticeBanner(it)
         }
 
-        LaunchedEffect(room.id, messages.size) {
-            if (messages.isNotEmpty()) scrollToLatestMessage(listState, messages, reducedMotion)
-        }
-
-        LazyColumn(
-            modifier = Modifier.weight(1f).fillMaxWidth().preferredFrameRate(120f),
-            state = listState,
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(
-                horizontal = if (compact) 12.dp else 20.dp,
-                vertical = 8.dp,
-            ),
-            verticalArrangement = Arrangement.spacedBy(
-                if (denseMessages) 0.dp else if (bubbleStyle) 3.dp else 2.dp,
-            ),
-        ) {
-            itemsIndexed(messages, key = { _, message -> message.id }) { index, message ->
+        key(room.id, previewMode) {
+            ChatTranscript(
+                messages = messages,
+                compact = compact,
+                itemSpacing = if (denseMessages) 0.dp else if (bubbleStyle) 3.dp else 2.dp,
+                modifier = Modifier.weight(1f).fillMaxWidth().preferredFrameRate(120f),
+            ) { index, message ->
                 val author = roomMessageAuthor(message, members)
                 TranscriptRow(dayLabels[index]) {
                     MessageRow(
@@ -1336,9 +1319,6 @@ private fun ChatContent(
                         ircAuthorWidth = ircAuthorWidth,
                         denseMessages = denseMessages,
                         onMemberClick = { author?.let(onMemberClick) },
-                        onSystemExpansion = {
-                            if (!listState.canScrollForward) systemExpansionScrollRequest++
-                        },
                     )
                 }
             }
@@ -1366,19 +1346,10 @@ private fun DirectMessageContent(
     onMemberClick: () -> Unit,
     onSend: (String) -> Unit,
 ) {
-    var systemExpansionScrollRequest by remember { mutableStateOf(0) }
-    val listState = rememberLazyListState()
-    val reducedMotion = LocalReducedMotion.current
     val dayLabels = rememberChatDayLabels(messages)
     val bubblePositions = rememberBubblePositions(messages, dayLabels, bubbleStyle)
     val ircAuthorWidth = rememberIrcAuthorWidth(messages, member, bubbleStyle) {
         directMessageAuthor(it, member)
-    }
-    LaunchedEffect(systemExpansionScrollRequest) {
-        if (systemExpansionScrollRequest > 0 && messages.isNotEmpty()) {
-            withFrameNanos { }
-            scrollToLatestMessage(listState, messages, reducedMotion)
-        }
     }
     Column(Modifier.fillMaxSize().background(Canvas)) {
         Row(
@@ -1414,21 +1385,13 @@ private fun DirectMessageContent(
                 }
             }
         } else {
-            LaunchedEffect(messages.size) {
-                scrollToLatestMessage(listState, messages, reducedMotion)
-            }
-            LazyColumn(
-                modifier = Modifier.weight(1f).fillMaxWidth().preferredFrameRate(120f),
-                state = listState,
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(
-                    horizontal = if (compact) 12.dp else 20.dp,
-                    vertical = 8.dp,
-                ),
-                verticalArrangement = Arrangement.spacedBy(
-                    if (denseMessages) 0.dp else if (bubbleStyle) 4.dp else 2.dp,
-                ),
-            ) {
-                itemsIndexed(messages, key = { _, message -> message.id }) { index, message ->
+            key(member.id, previewMode) {
+                ChatTranscript(
+                    messages = messages,
+                    compact = compact,
+                    itemSpacing = if (denseMessages) 0.dp else if (bubbleStyle) 4.dp else 2.dp,
+                    modifier = Modifier.weight(1f).fillMaxWidth().preferredFrameRate(120f),
+                ) { index, message ->
                     TranscriptRow(dayLabels[index]) {
                         MessageRow(
                             message = message,
@@ -1438,9 +1401,6 @@ private fun DirectMessageContent(
                             ircAuthorWidth = ircAuthorWidth,
                             denseMessages = denseMessages,
                             onMemberClick = onMemberClick,
-                            onSystemExpansion = {
-                                if (!listState.canScrollForward) systemExpansionScrollRequest++
-                            },
                         )
                     }
                 }
@@ -3016,10 +2976,9 @@ private fun MessageRow(
     ircAuthorWidth: Dp,
     denseMessages: Boolean,
     onMemberClick: () -> Unit,
-    onSystemExpansion: () -> Unit = {},
 ) {
     if (message.isSystem) {
-        SystemMessageRow(message, denseMessages, bubbleStyle, onSystemExpansion)
+        SystemMessageRow(message, denseMessages, bubbleStyle)
         return
     }
     val authorName = member?.displayName ?: message.author
@@ -3177,7 +3136,6 @@ private fun SystemMessageRow(
     message: ChatMessage,
     denseMessages: Boolean,
     bubbleStyle: Boolean,
-    onSystemExpansion: () -> Unit,
 ) {
     var expanded by rememberSaveable(message.id) { mutableStateOf(false) }
     val timeZonePreference = LocalTimestampTimeZonePreference.current
@@ -3189,7 +3147,6 @@ private fun SystemMessageRow(
     val canExpand = message.systemEvents.size > 1 && !isStandaloneSystemMessage
     if (canExpand) {
         SystemEventGroup(message, displayTime, denseMessages, bubbleStyle, expanded) {
-            onSystemExpansion()
             expanded = !expanded
         }
         return
@@ -3622,18 +3579,4 @@ private fun hslColor(hue: Float, saturation: Float, lightness: Float): Color {
     }
     val offset = lightness - chroma / 2f
     return Color(red + offset, green + offset, blue + offset)
-}
-
-/** Scrolls the chat list to its latest message. Animates unless the system prefers reduced motion. */
-private suspend fun scrollToLatestMessage(
-    state: LazyListState,
-    messages: List<ChatMessage>,
-    reducedMotion: Boolean,
-) {
-    if (messages.isEmpty()) return
-    if (reducedMotion) {
-        state.scrollToItem(messages.lastIndex)
-    } else {
-        state.animateScrollToItem(messages.lastIndex)
-    }
 }

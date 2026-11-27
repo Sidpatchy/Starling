@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
@@ -86,7 +87,7 @@ internal fun WideNavigationLayout(
     showRail: Boolean,
     content: @Composable RowScope.() -> Unit,
 ) {
-    Row(Modifier.fillMaxSize().iosBottomSafeAreaPadding()) {
+    Row(Modifier.fillMaxSize()) {
         if (showRail) {
             NavigationRail(
                 modifier = Modifier.width(80.dp).fillMaxHeight(),
@@ -126,10 +127,8 @@ internal fun CompactNavigationLayout(
 ) {
     val reducedMotion = LocalReducedMotion.current
     val transition = updateTransition(showBottomBar, label = "Bottom navigation")
-    val barOwnsBottomInset = transition.currentState || transition.targetState
     Column(Modifier.fillMaxSize()) {
-        val contentModifier = Modifier.weight(1f).fillMaxWidth()
-        Box(if (barOwnsBottomInset) contentModifier else contentModifier.iosBottomSafeAreaPadding()) { content() }
+        Box(Modifier.weight(1f).fillMaxWidth()) { content() }
         transition.AnimatedVisibility(
             visible = { it },
             enter = if (reducedMotion) EnterTransition.None else expandVertically(expandFrom = Alignment.Bottom) + fadeIn(),
@@ -170,7 +169,7 @@ private fun BottomNavigationBar(selectedTab: MainTab, onTabSelected: (MainTab) -
         IosStyleBottomNavigationBar(selectedTab, onTabSelected)
         return
     }
-    Column {
+    Column(Modifier.windowInsetsPadding(WindowInsets.navigationBars.only(WindowInsetsSides.Bottom))) {
         HorizontalDivider(color = Line)
         NavigationBar(containerColor = Chrome, tonalElevation = 0.dp, windowInsets = WindowInsets(0, 0, 0, 0)) {
             MainTab.entries.forEach { tab ->
@@ -196,7 +195,10 @@ private fun BottomNavigationBar(selectedTab: MainTab, onTabSelected: (MainTab) -
 
 @Composable
 private fun IosStyleBottomNavigationBar(selectedTab: MainTab, onTabSelected: (MainTab) -> Unit) {
-    Column(Modifier.fillMaxWidth().background(Chrome).iosBottomSafeAreaPadding()) {
+    Column(
+        Modifier.fillMaxWidth().background(Chrome)
+            .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom)),
+    ) {
         HorizontalDivider(color = Line)
         Row(Modifier.fillMaxWidth().selectableGroup()) {
             MainTab.entries.forEach { tab ->
@@ -233,14 +235,6 @@ private fun IosStyleBottomNavigationBar(selectedTab: MainTab, onTabSelected: (Ma
         }
     }
 }
-
-@Composable
-private fun Modifier.iosBottomSafeAreaPadding(): Modifier =
-    if (LocalStarlingUiStyle.current == StarlingUiStyle.IOS) {
-        windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom))
-    } else {
-        this
-    }
 
 @Composable
 private fun MainTabLabel(tab: MainTab, selected: Boolean) {
