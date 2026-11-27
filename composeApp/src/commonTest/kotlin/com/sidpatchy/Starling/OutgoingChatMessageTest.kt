@@ -84,17 +84,20 @@ class OutgoingChatMessageTest {
         val repository = LocalPreviewChatRepository()
         val roomId = repository.rooms.value.first().id
         val messageCount = repository.messages(roomId).first().size
+        val originalDirectMessages = repository.directMessages("moss").first()
 
         repository.send(roomId, " \t\n ")
         repository.sendDirectMessage("moss", " \t\n ")
         assertEquals(messageCount, repository.messages(roomId).first().size)
-        assertTrue(repository.directMessages("moss").first().isEmpty())
+        assertEquals(originalDirectMessages, repository.directMessages("moss").first())
 
         repository.send(roomId, " /ME   waves 🌍 ")
         repository.sendDirectMessage("moss", " /ME   waves 🌍 ")
 
         val roomMessage = repository.messages(roomId).first().last()
-        val directMessage = repository.directMessages("moss").first().single()
+        val directMessages = repository.directMessages("moss").first()
+        assertEquals(originalDirectMessages, directMessages.dropLast(1))
+        val directMessage = directMessages.last()
         assertEquals("waves 🌍", roomMessage.text)
         assertEquals(roomMessage.text, directMessage.text)
         assertTrue(roomMessage.isAction)

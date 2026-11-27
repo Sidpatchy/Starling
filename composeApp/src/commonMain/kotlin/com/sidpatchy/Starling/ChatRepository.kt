@@ -170,6 +170,17 @@ interface ChatRepository {
     suspend fun sendDirectMessage(memberId: String, text: String)
 }
 
+internal fun previewMessage(id: String, sender: String, text: String, time: String, timestampMillis: Long) =
+    ChatMessage(
+        id = id,
+        author = sender,
+        text = text,
+        time = time,
+        isMine = sender == "you",
+        authorId = sender,
+        timestampMillis = timestampMillis,
+    )
+
 class LocalPreviewChatRepository : ChatRepository {
     private val allNetworks = MutableStateFlow(
         listOf(
@@ -184,9 +195,9 @@ class LocalPreviewChatRepository : ChatRepository {
 
     private val allRooms = MutableStateFlow(
         listOf(
-            ChatRoom("general", "testnet", "general", "A little room for everyone", 4),
-            ChatRoom("reticulum", "testnet", "reticulum", "Reticulum, RRC, and the mesh", 4),
-            ChatRoom("field-notes", "local-mesh", "field-notes", "Signals from out in the field", 3),
+            ChatRoom("general", "testnet", "general", previewChannelTopics.getValue("general"), 5),
+            ChatRoom("reticulum", "testnet", "reticulum", previewChannelTopics.getValue("reticulum"), 5),
+            ChatRoom("field-notes", "local-mesh", "field-notes", previewChannelTopics.getValue("field-notes"), 5),
         ),
     )
     private val _rooms = MutableStateFlow(allRooms.value)
@@ -205,12 +216,12 @@ class LocalPreviewChatRepository : ChatRepository {
     private val knownMembersById get() = _knownMembers.value.associateBy { it.id }
 
     private val membersByRoom = mapOf(
-        "general" to listOf("moss", "juniper", "birch", "you"),
-        "reticulum" to listOf("birch", "moss", "quill", "you"),
-        "field-notes" to listOf("juniper", "moss", "you"),
+        "general" to listOf("moss", "juniper", "birch", "quill", "you"),
+        "reticulum" to listOf("birch", "moss", "quill", "juniper", "you"),
+        "field-notes" to listOf("juniper", "moss", "birch", "quill", "you"),
     )
 
-    private val _contactMemberIds = MutableStateFlow<Set<String>>(emptySet())
+    private val _contactMemberIds = MutableStateFlow(setOf("moss", "juniper"))
     override val contactMemberIds: StateFlow<Set<String>> = _contactMemberIds.asStateFlow()
     private val _blockedMemberIds = MutableStateFlow<Set<String>>(emptySet())
     override val blockedMemberIds: StateFlow<Set<String>> = _blockedMemberIds.asStateFlow()
@@ -249,25 +260,12 @@ class LocalPreviewChatRepository : ChatRepository {
     override val nearbyPeers: StateFlow<List<NearbyPeer>> = _nearbyPeers.asStateFlow()
 
     private val allMessagesByRoom = MutableStateFlow(
-        mapOf(
-            "general" to listOf(
-                ChatMessage("g1", "moss", "Morning all. The local mesh is unusually lively today.", "09:38"),
-                ChatMessage("g2", "juniper", "I can see three new nodes from the hilltop.", "09:41"),
-                ChatMessage("g3", "you", "Nice! I’ll try to get Starling talking to a hub next.", "09:44", isMine = true),
-                ChatMessage("g4", "moss", "That would be lovely. Keeping the client simple is a good start.", "09:46"),
-            ),
-            "field-notes" to listOf(
-                ChatMessage("f1", "juniper", "Packet reception is much better near the north window.", "08:12"),
-                ChatMessage("f2", "moss", "Noted. I’ll bring the RNode over this afternoon.", "08:19"),
-            ),
-            "reticulum" to listOf(
-                ChatMessage("r1", "birch", "Has anyone tried the latest RRC hub build?", "10:02"),
-                ChatMessage("r2", "you", "I’m starting with the client UI, then I’ll tackle connectivity.", "10:05", isMine = true),
-            ),
-        ),
+        allRooms.value.associate { it.id to previewTranscripts.getValue("#${it.name}") },
     )
     private val messagesByRoom = MutableStateFlow(allMessagesByRoom.value)
-    private val directMessagesByMember = MutableStateFlow<Map<String, List<ChatMessage>>>(emptyMap())
+    private val directMessagesByMember = MutableStateFlow(
+        _contactMemberIds.value.associateWith { previewTranscripts.getValue(it) },
+    )
 
     private var nextId = 0
 

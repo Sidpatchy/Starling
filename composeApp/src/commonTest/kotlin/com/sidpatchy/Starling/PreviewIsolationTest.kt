@@ -14,6 +14,29 @@ import kotlin.test.assertTrue
 
 class PreviewIsolationTest {
     @Test
+    fun sampleTranscriptsHaveOrderedDatesAndKnownSenders() = runBlocking {
+        val preview = LocalPreviewChatRepository()
+        val channels = preview.rooms.value.map { room ->
+            val members = preview.members(room.id).first()
+            assertEquals(room.members, members.size)
+            preview.messages(room.id).first().also { messages ->
+                assertTrue(messages.all { message -> members.any { it.id == message.authorId } })
+            }
+        }
+        val directMessages = preview.contactMemberIds.value.map { preview.directMessages(it).first() }
+        val dateFormatter = chatDateFormatter(TimestampTimeZonePreference.UTC)
+        for (messages in channels + directMessages) {
+            val timestamps = messages.map { checkNotNull(it.timestampMillis) }
+            assertEquals(timestamps.sorted(), timestamps)
+            assertEquals(messages.size, messages.map { it.id }.toSet().size)
+            assertTrue(messages.all { it.time == formatUtcChatTimestamp(checkNotNull(it.timestampMillis)) })
+            assertTrue(messages.all { it.isMine == (it.author == "you") })
+            val dividers = chatMessageDayLabels(messages, today = "", formatDate = dateFormatter).filterNotNull()
+            assertTrue(dividers.size > 1)
+        }
+    }
+
+    @Test
     fun previewHidesLiveStateAndPersistsItsSelection() = runBlocking {
         val liveNetwork = ChatNetwork(
             id = "private-network",
@@ -52,7 +75,13 @@ class PreviewIsolationTest {
         assertFalse(repository.knownMembers.first().any { it.id == liveMember.id })
         assertTrue(repository.contactRequests.first().all { it.isPreview })
         assertFalse(repository.contactRequests.first().any { it.id == liveRequest.id })
-        assertTrue(repository.contactMemberIds.first().isEmpty())
+        val sampleContactIds = setOf("moss", "juniper")
+        assertEquals(sampleContactIds, repository.contactMemberIds.first())
+        for (id in sampleContactIds) {
+            val messages = repository.directMessages(id).first()
+            assertTrue(messages.any { it.authorId == id })
+            assertTrue(messages.any { it.isMine })
+        }
         assertNull(repository.localDeliveryAddress.first())
         assertNull(repository.localIdentityHash.first())
         assertEquals(ReticulumConnectionState.Disconnected, repository.connectionState.first())
@@ -92,11 +121,16 @@ class PreviewIsolationTest {
         assertEquals(emptyList(), repository.messages(previewRoom.id).first())
         assertTrue(repository.networks.first { it.none { network -> network.id == demoNetwork.id } }.none { it.id == demoNetwork.id })
         assertEquals(emptyList(), repository.directMessages("preview-contact").first())
+        for (id in sampleContactIds) {
+            assertEquals(emptyList(), repository.directMessages(id).first())
+        }
 
         repository.close()
-        assertEquals(false, ChatStateCodec.decode(store.value!!)?.previewMode)
-        assertFalse(ChatStateCodec.decode(store.value!!)!!.contacts.contains("preview-contact"))
-        assertFalse(ChatStateCodec.decode(store.value!!)!!.networks.any { it.id == demoNetwork.id })
+        val stored = ChatStateCodec.decode(store.value!!)!!
+        assertFalse(stored.previewMode)
+        assertEquals(setOf(liveMember.id), stored.contacts)
+        assertTrue(stored.directMessages.isEmpty())
+        assertFalse(stored.networks.any { it.id == demoNetwork.id })
 
         val restoredRepository = ReticulumChatRepository(LocalPreviewChatRepository(), FakeReticulumTransport(), store)
         assertFalse(restoredRepository.previewMode.value)
