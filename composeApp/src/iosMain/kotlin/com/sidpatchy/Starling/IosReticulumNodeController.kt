@@ -52,6 +52,7 @@ class IosReticulumNodeController(
     override val isSupported: Boolean = true
     override val supportsRNodeInterfaces: Boolean = true
     override val supportsBleRNodes: Boolean = true
+    override val supportsBlePeering: Boolean = true
     override val rnodeBlePicker: RNodeBlePicker = IosRNodeBlePicker(runtime)
     private val _resolvedBleRNode = MutableStateFlow<ResolvedBleRNode?>(null)
     override val resolvedBleRNode: StateFlow<ResolvedBleRNode?> = _resolvedBleRNode.asStateFlow()
@@ -235,9 +236,10 @@ class IosReticulumNodeController(
             encodeBridgeBase64("${runtime.dataDirectory}/reticulum"),
             config.mode.name,
             encodeBridgeBase64(config.existingInstanceRpcKeyHex.orEmpty()),
-            "4",
+            "5",
             config.tcpPeers.size.toString(),
             config.rnodeInterfaces.size.toString(),
+            if (config.blePeeringEnabled) "1" else "0",
         )
         config.tcpPeers.forEach { peer ->
             fields += encodeBridgeBase64(peer.host.trim())

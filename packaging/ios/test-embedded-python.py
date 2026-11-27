@@ -83,7 +83,7 @@ created = starling_ios_runtime.invoke("IDENTITY\t" + b64(data_dir) + "\t" + b64(
 if not created.startswith("MANAGED_IDENTITY\t"):
     raise RuntimeError(created)
 command = "\t".join([
-    "IOS_START", b64(data_dir), "EMBEDDED", b64(""), "4", "1", "0",
+    "IOS_START", b64(data_dir), "EMBEDDED", b64(""), "5", "1", "0", "0",
     b64("127.0.0.1"), port, b64(network_name), b64(passphrase),
 ])
 response = starling_ios_runtime.invoke(command)
@@ -154,7 +154,7 @@ def main():
             created = starling_ios_runtime.invoke("IDENTITY\t" + b64(data_dir) + "\t" + b64("IDENTITY_CREATE"))
             assert created.startswith("MANAGED_IDENTITY\t"), created
             command = "\t".join([
-                "IOS_START", b64(data_dir), "EMBEDDED", b64(""), "4", "1", "0",
+                "IOS_START", b64(data_dir), "EMBEDDED", b64(""), "5", "1", "0", "0",
                 b64("127.0.0.1"), str(listener.getsockname()[1]),
                 b64("starling-ios-ifac-test"), b64("ifac-test-passphrase"),
             ])
@@ -169,7 +169,7 @@ def main():
             assert starling_ios_runtime.invoke("STOP") == "STOPPED"
 
             reconnect_command = "\t".join([
-                "IOS_START", b64(data_dir), "EMBEDDED", b64(""), "4", "1", "0",
+                "IOS_START", b64(data_dir), "EMBEDDED", b64(""), "5", "1", "0", "0",
                 b64("127.0.0.1"), str(listener.getsockname()[1]),
                 b64("starling-ios-ifac-updated"), b64("updated-ifac-passphrase"),
             ])

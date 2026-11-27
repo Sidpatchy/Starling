@@ -26,7 +26,8 @@ cp -R "$TEMP_DIR/Python.xcframework" "$VENDOR_DIR/Python.xcframework"
 mkdir -p "$TEMP_DIR/python-base"
 python3 -m pip install --disable-pip-version-check --no-input --no-deps \
   --target "$TEMP_DIR/python-base" \
-  "rns==1.5.7" "lxmf==1.2.0" "pyserial==3.5"
+  "rns==1.5.7" "lxmf==1.2.0" "pyserial==3.5" \
+  "git+https://github.com/torlando-tech/ble-reticulum.git@63557acfe5c923dcdafeb7bc37508bf835f16514"
 
 cp "$ROOT/composeApp/src/main/python/starling_rns.py" "$TEMP_DIR/python-base/"
 cp "$ROOT/composeApp/src/main/python/starling_rrc.py" "$TEMP_DIR/python-base/"
@@ -35,8 +36,10 @@ cp "$ROOT/composeApp/src/main/python/starling_nearby.py" "$TEMP_DIR/python-base/
 cp "$ROOT/composeApp/src/main/python/starling_rns_service.py" "$TEMP_DIR/python-base/"
 cp "$ROOT/composeApp/src/main/python/starling_bridge_protocol.py" "$TEMP_DIR/python-base/"
 cp "$ROOT/composeApp/src/main/python/starling_identity.py" "$TEMP_DIR/python-base/"
+cp "$ROOT/composeApp/src/main/python/starling_ble_ios.py" "$TEMP_DIR/python-base/"
 cp "$ROOT/composeApp/src/main/python/starling_ios_runtime.py" "$TEMP_DIR/python-base/"
 mkdir -p "$TEMP_DIR/python-base/licenses"
+cp "$ROOT/licenses/BLE-Reticulum-LICENSE.txt" "$TEMP_DIR/python-base/licenses/"
 cp "$ROOT/licenses/Reticulum-LICENSE.txt" "$TEMP_DIR/python-base/licenses/"
 cp "$ROOT/licenses/LXMF-LICENSE.txt" "$TEMP_DIR/python-base/licenses/"
 cp "$ROOT/licenses/PySerial-LICENSE.txt" "$TEMP_DIR/python-base/licenses/"

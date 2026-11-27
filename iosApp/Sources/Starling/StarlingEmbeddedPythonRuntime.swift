@@ -10,6 +10,7 @@ final class StarlingEmbeddedPythonRuntime: NSObject, IosPythonRuntime {
     private let runtimeLock = NSRecursiveLock()
     private let rnodeBluetoothBridge = StarlingRNodeBluetoothBridge()
     private let rnodeBluetoothScanner = StarlingRNodeBluetoothScanner()
+    private let blePeerBridge = StarlingBLEPeerBridge.shared
     private var didInitialize = false
     private var startupError: String?
 
@@ -51,6 +52,7 @@ final class StarlingEmbeddedPythonRuntime: NSObject, IosPythonRuntime {
         runtimeLock.lock()
         defer { runtimeLock.unlock() }
         if !didInitialize {
+            blePeerBridge.registerCallbacks()
             startupError = StarlingPythonInitialize(pythonHome, pythonModules, executablePath)
             didInitialize = true
         }

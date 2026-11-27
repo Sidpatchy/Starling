@@ -76,12 +76,12 @@ def _emit_events(include_current=False):
 
 def _start(fields):
     global _rns, _rrc, _lxmf, _last_self_event
-    if len(fields) < 7:
+    if len(fields) < 8:
         raise ValueError("Incomplete iOS Reticulum start request.")
 
     data_dir = _decode(fields[1])
     start = ["START"] + fields[2:]
-    mode, rpc_key_hex, peers, radios = parse_start_request(start, platform="iOS")
+    mode, rpc_key_hex, peers, radios, ble_peers = parse_start_request(start, platform="iOS")
     radios = _prepare_rnode_interfaces(radios)
 
     import starling_lxmf
@@ -92,7 +92,8 @@ def _start(fields):
     _rrc = starling_rrc
     _lxmf = starling_lxmf
     try:
-        json.loads(_rns.start_node(data_dir, mode, peers, rpc_key_hex, radios, allow_reconfigure=True))
+        json.loads(_rns.start_node(data_dir, mode, peers, rpc_key_hex, radios,
+                                   allow_reconfigure=True, ble_peers=ble_peers))
 
         lxmf_error = None
         try:

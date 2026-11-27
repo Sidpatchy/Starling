@@ -5,7 +5,7 @@
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Starling uses the local network to connect to configured Reticulum peers and Wi-Fi RNodes.</string>
 	<key>NSBluetoothAlwaysUsageDescription</key>
-	<string>Starling uses Bluetooth to connect to a nearby RNode radio when you configure a BLE interface.</string>
+	<string>Starling uses Bluetooth to connect to a nearby RNode radio or exchange Reticulum traffic with nearby Starling peers when enabled.</string>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
 </dict>

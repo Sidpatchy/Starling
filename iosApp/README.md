@@ -28,6 +28,11 @@ and connects to that RNode only. BLE runs through CoreBluetooth and is proxied
 over loopback to the bundled RNS TCP RNode transport; approve any iOS Bluetooth pairing
 prompt the first time Starling connects. Direct USB serial is unavailable on iOS or Android.
 
+Bluetooth peers are implemented on iOS using `ble-reticulum` and the native
+CoreBluetooth bridge. This implementation has not yet been compiled or tested
+with BLE hardware. Peering works only while the app is foregrounded. There is
+no App Store or TestFlight release path for it.
+
 The unsigned release IPA workflow prepares the pinned Python support framework,
 builds the release Compose framework, asks xtool to generate an Xcode project,
 then uses Xcode to build against the installed iOS SDK before embedding Python's

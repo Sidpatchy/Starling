@@ -16,19 +16,24 @@ def parse_start_request(fields, platform="desktop"):
     """Return runtime mode, RPC key, TCP peers, and RNode interfaces for START."""
     if len(fields) < 6 or fields[0] != "START":
         raise ValueError("Invalid start request.")
-    if fields[3] != "4":
+    expected_version = "5" if platform == "iOS" else "4"
+    if fields[3] != expected_version:
         raise ValueError("Unsupported {} bridge protocol version.".format(platform))
     try:
         peer_count = int(fields[4])
         radio_count = int(fields[5])
     except ValueError as error:
         raise ValueError("Invalid interface count.") from error
-    if peer_count < 0 or radio_count < 0 or len(fields) != 6 + peer_count * 4 + radio_count * 6:
+    offset = 7 if platform == "iOS" else 6
+    if peer_count < 0 or radio_count < 0 or len(fields) != offset + peer_count * 4 + radio_count * 6:
         raise ValueError("Interface configuration data is incomplete.")
+    ble_peers = fields[6] == "1" if platform == "iOS" else False
+    if platform == "iOS" and fields[6] not in ("0", "1"):
+        raise ValueError("Invalid Bluetooth peers setting.")
 
     peers = []
     for index in range(peer_count):
-        offset = 6 + index * 4
+        offset = (7 if platform == "iOS" else 6) + index * 4
         peers.append({
             "host": decode(fields[offset]),
             "port": int(fields[offset + 1]),
@@ -37,7 +42,7 @@ def parse_start_request(fields, platform="desktop"):
         })
 
     radios = []
-    radio_offset = 6 + peer_count * 4
+    radio_offset = (7 if platform == "iOS" else 6) + peer_count * 4
     for index in range(radio_count):
         offset = radio_offset + index * 6
         radios.append({
@@ -55,7 +60,8 @@ def parse_start_request(fields, platform="desktop"):
         mode = "existing_shared_instance"
     else:
         raise ValueError("Unsupported Reticulum runtime mode.")
-    return mode, decode(fields[2]), peers, radios
+    result = (mode, decode(fields[2]), peers, radios)
+    return result + (ble_peers,) if platform == "iOS" else result
 
 
 def status_line(module):
