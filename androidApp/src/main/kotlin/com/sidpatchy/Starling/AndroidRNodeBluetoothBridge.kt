@@ -304,7 +304,9 @@ internal class AndroidRNodeBluetoothBridge(context: Context) {
                 if (displayName.isNullOrBlank()) {
                     runCatching { device.name }.getOrNull()?.takeIf(String::isNotBlank)?.let { label = it }
                 }
-                if (pairedByStarling && device.bondState != BluetoothDevice.BOND_BONDED) {
+                val isBonded = device.bondState == BluetoothDevice.BOND_BONDED ||
+                    adapter.bondedDevices.any { it.address.equals(address, ignoreCase = true) }
+                if (pairedByStarling && !isBonded) {
                     return stopWithError(RNodeBleText.pairingLost(label))
                 }
                 val connection = device.connectGatt(appContext, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
